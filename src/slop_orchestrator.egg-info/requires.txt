@@ -1,4 +1,0 @@
-google-generativeai
-pydantic
-liboqs-python
-pygit2

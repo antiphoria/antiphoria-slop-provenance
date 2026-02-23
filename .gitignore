@@ -9,3 +9,4 @@ __pycache__/
 keys/
 state.db
 .slop-orchestrator.lock
+*.egg-info/*.egg-info/

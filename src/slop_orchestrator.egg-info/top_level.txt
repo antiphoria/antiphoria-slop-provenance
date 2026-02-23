@@ -1,5 +1,0 @@
-adapters
-cli
-events
-models
-repository
