@@ -1,0 +1,14 @@
+pyproject.toml
+src/cli.py
+src/events.py
+src/models.py
+src/repository.py
+src/adapters/crypto_notary.py
+src/adapters/gemini_engine.py
+src/adapters/git_ledger.py
+src/slop_orchestrator.egg-info/PKG-INFO
+src/slop_orchestrator.egg-info/SOURCES.txt
+src/slop_orchestrator.egg-info/dependency_links.txt
+src/slop_orchestrator.egg-info/entry_points.txt
+src/slop_orchestrator.egg-info/requires.txt
+src/slop_orchestrator.egg-info/top_level.txt

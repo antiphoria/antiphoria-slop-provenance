@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: slop-orchestrator
+Version: 0.0.1
+Summary: Event-driven slop orchestration MVP.
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: google-generativeai
+Requires-Dist: pydantic
+Requires-Dist: liboqs-python
+Requires-Dist: pygit2

@@ -1,0 +1,2 @@
+[console_scripts]
+slop-cli = src.cli:main

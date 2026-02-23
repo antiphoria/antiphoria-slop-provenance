@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slop-orchestrator"
+version = "0.0.1"
+description = "Event-driven slop orchestration MVP."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "google-generativeai",
+    "pydantic",
+    "liboqs-python",
+    "pygit2",
+]
+
+[project.scripts]
+slop-cli = "src.cli:main"
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+include = '\.pyi?$'
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+no_implicit_optional = true
+show_error_codes = true
+pretty = true
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = [
+    "E203",
+    "W503",
+]
+select = [
+    "E",
+    "F",
+    "W",
+]
