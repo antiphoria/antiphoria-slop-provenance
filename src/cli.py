@@ -102,8 +102,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     generate_parser.add_argument(
         "--repo-path",
-        default=".",
-        help="Path to local git ledger repository (default: current directory).",
+        required=True,
+        help="Path to external local git ledger repository.",
     )
     generate_parser.add_argument(
         "--model-id",
@@ -121,8 +121,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     curate_parser.add_argument(
         "--repo-path",
-        default=".",
-        help="Path to local git ledger repository (default: current directory).",
+        required=True,
+        help="Path to local git ledger repository.",
     )
 
     return parser
@@ -160,6 +160,17 @@ def _verify_git_commit(repository_path: Path, commit_oid: str) -> str:
     return str(commit.id)
 
 
+def _validate_external_repo_path(repository_path: Path) -> None:
+    """Ensure ledger path is external to orchestrator source repository."""
+
+    orchestrator_root = Path(__file__).resolve().parents[1]
+    if repository_path.resolve() == orchestrator_root:
+        raise RuntimeError(
+            "The ledger repository must be external to the orchestrator repository. "
+            "Provide a separate path via --repo-path."
+        )
+
+
 async def _run_generate_command(args: argparse.Namespace) -> int:
     """Run the full async pipeline for the `generate` command.
 
@@ -172,7 +183,8 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
 
     event_bus = EventBus()
     repository = SQLiteRepository()
-    repository_path = Path(args.repo_path)
+    repository_path = Path(args.repo_path).resolve()
+    _validate_external_repo_path(repository_path)
     completion_future: asyncio.Future[StoryCommitted] = asyncio.get_running_loop().create_future()
 
     gemini_adapter = GeminiEngineAdapter(
@@ -257,15 +269,18 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
 
 
 def _extract_request_id_from_artifact_path(file_path: Path) -> UUID:
-    """Extract request id from `YYYYMMDDTHHMMSSZ_<uuid>.md` artifact filename."""
+    """Extract request id from curated artifact filename."""
 
-    match = re.match(r"^\d{8}T\d{6}Z_([0-9a-fA-F-]{36})\.md$", file_path.name)
-    if match is None:
-        raise RuntimeError(
-            "Invalid curated artifact filename format. Expected "
-            "'YYYYMMDDTHHMMSSZ_<request_id>.md'."
-        )
-    return UUID(match.group(1))
+    try:
+        return UUID(file_path.stem)
+    except ValueError:
+        match = re.match(r"^\d{8}T\d{6}Z_([0-9a-fA-F-]{36})\.md$", file_path.name)
+        if match is None:
+            raise RuntimeError(
+                "Invalid curated artifact filename format. Expected "
+                "'<request_id>.md' (preferred) or 'YYYYMMDDTHHMMSSZ_<request_id>.md'."
+            )
+        return UUID(match.group(1))
 
 
 def _extract_markdown_body(markdown_text: str) -> str:
@@ -312,7 +327,8 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
 
     event_bus = EventBus()
     repository = SQLiteRepository()
-    repository_path = Path(args.repo_path)
+    repository_path = Path(args.repo_path).resolve()
+    _validate_external_repo_path(repository_path)
     completion_future: asyncio.Future[StoryCommitted] = asyncio.get_running_loop().create_future()
 
     notary_adapter = CryptoNotaryAdapter(event_bus=event_bus)

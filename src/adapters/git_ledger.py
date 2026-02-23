@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import textwrap
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pygit2
@@ -62,6 +61,7 @@ class GitLedgerAdapter:
 
         commit_oid = await asyncio.to_thread(
             self._commit_markdown_sync,
+            str(event.request_id),
             relative_path,
             markdown_payload,
             commit_message,
@@ -100,8 +100,7 @@ class GitLedgerAdapter:
     def _build_relative_artifact_path(self, event: StorySigned) -> str:
         """Build deterministic repo-relative artifact markdown path."""
 
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        filename = f"{timestamp}_{event.request_id}.md"
+        filename = f"{event.request_id}.md"
         return f"{self._artifacts_directory}/{filename}"
 
     @staticmethod
@@ -196,13 +195,15 @@ class GitLedgerAdapter:
 
     def _commit_markdown_sync(
         self,
+        request_id: str,
         relative_path: str,
         markdown_payload: str,
         commit_message: str,
     ) -> str:
-        """Synchronously write blob/tree and create commit in local repo.
+        """Synchronously write blob/tree and create branch-isolated commit.
 
         Args:
+            request_id: Correlation id used to derive branch name.
             relative_path: Repository-relative markdown file path.
             markdown_payload: Markdown body to persist as git blob.
             commit_message: Commit message text.
@@ -210,23 +211,17 @@ class GitLedgerAdapter:
         Returns:
             Created commit object id as hex string.
         """
-        artifact_path = self._repository_path / Path(relative_path)
-        artifact_path.parent.mkdir(parents=True, exist_ok=True)
-        artifact_path.write_text(markdown_payload, encoding="utf-8")
+        branch_name = f"artifact/{request_id}"
+        ref_name = f"refs/heads/{branch_name}"
+        parent_commit = self._get_branch_head(ref_name)
 
-        index = self._repo.index
-        index.read()
-        index.add(Path(relative_path).as_posix())
-        index.write()
-        tree_id = index.write_tree()
+        tree_id = self._build_root_tree_oid(relative_path, markdown_payload)
 
         signature = self._resolve_commit_signature()
-        parents: list[pygit2.Oid] = []
-        if not self._repo.head_is_unborn:
-            parents = [self._repo.head.target]
+        parents: list[pygit2.Oid] = [parent_commit.id] if parent_commit else []
 
         commit_id = self._repo.create_commit(
-            "HEAD",
+            ref_name,
             signature,
             signature,
             commit_message,
@@ -234,3 +229,34 @@ class GitLedgerAdapter:
             parents,
         )
         return str(commit_id)
+
+    def _get_branch_head(self, ref_name: str) -> pygit2.Commit | None:
+        """Return current branch head commit for a given ref name."""
+
+        try:
+            reference = self._repo.lookup_reference(ref_name)
+        except KeyError:
+            return None
+        target = self._repo[reference.target]
+        if not isinstance(target, pygit2.Commit):
+            raise RuntimeError(f"Invalid branch head object for ref '{ref_name}'.")
+        return target
+
+    def _build_root_tree_oid(self, relative_path: str, markdown_payload: str) -> pygit2.Oid:
+        """Build a strict two-level ODB tree for artifacts/<request_id>.md."""
+
+        path_obj = Path(relative_path)
+        if path_obj.parent.as_posix() != self._artifacts_directory:
+            raise RuntimeError(
+                f"Invalid artifact path '{relative_path}'. Expected directory "
+                f"'{self._artifacts_directory}/'."
+            )
+
+        blob_oid = self._repo.create_blob(markdown_payload.encode("utf-8"))
+        artifacts_tb = self._repo.TreeBuilder()
+        artifacts_tb.insert(path_obj.name, blob_oid, pygit2.GIT_FILEMODE_BLOB)
+        artifacts_oid = artifacts_tb.write()
+
+        root_tb = self._repo.TreeBuilder()
+        root_tb.insert(self._artifacts_directory, artifacts_oid, pygit2.GIT_FILEMODE_TREE)
+        return root_tb.write()

@@ -10,3 +10,4 @@ keys/
 state.db
 .slop-orchestrator.lock
 *.egg-info/
+artifacts/
