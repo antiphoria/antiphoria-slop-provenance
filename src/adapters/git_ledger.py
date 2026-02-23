@@ -113,6 +113,22 @@ class GitLedgerAdapter:
             raise RuntimeError("Artifact signature cannot be empty.")
         return textwrap.wrap(condensed, width=line_width)
 
+    @staticmethod
+    def _yaml_folded_block(text: str, indent: int) -> str:
+        """Render text using YAML folded block scalar semantics."""
+
+        prefix = " " * indent
+        lines = text.splitlines() or [text]
+        return "\n".join(f"{prefix}{line}" for line in lines)
+
+    @staticmethod
+    def _yaml_literal_block(text: str, indent: int) -> str:
+        """Render text using YAML literal block scalar semantics."""
+
+        prefix = " " * indent
+        lines = text.splitlines() or [text]
+        return "\n".join(f"{prefix}{line}" for line in lines)
+
     def _render_markdown(self, event: StorySigned) -> str:
         """Render artifact markdown with strict frontmatter schema.
 
@@ -129,17 +145,31 @@ class GitLedgerAdapter:
         )
         signature_block_yaml = "\n".join(f"    {line}" for line in signature_lines)
         signature_block_footer = "\n".join(signature_lines)
+        prompt_block_yaml = self._yaml_folded_block(artifact.provenance.prompt, indent=4)
+
+        curation_block = ""
+        if artifact.curation is not None:
+            diff_block = self._yaml_literal_block(artifact.curation.unified_diff, indent=6)
+            curation_block = (
+                "  curation:\n"
+                f"    differenceScore: {artifact.curation.difference_score:.2f}\n"
+                "    unifiedDiff: |\n"
+                f"{diff_block}\n"
+            )
 
         return (
             "---\n"
             f'title: "{artifact.title}"\n'
             "provenance:\n"
             f'  source: "{artifact.provenance.source}"\n'
+            "  prompt: >\n"
+            f"{prompt_block_yaml}\n"
             f'  modelId: "{artifact.provenance.model_id}"\n'
             f'  artifactHash: "{artifact.provenance.artifact_hash}"\n'
             f'  cryptoAlgorithm: "{artifact.provenance.crypto_algorithm}"\n'
             "  cryptographicSignature: |\n"
             f"{signature_block_yaml}\n"
+            f"{curation_block}"
             f'  recordStatus: "{artifact.record_status}"\n'
             "---\n"
             f"{event.body}\n"

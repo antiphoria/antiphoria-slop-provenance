@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import difflib
 import os
+import re
 from pathlib import Path
+from uuid import UUID
 
 import pygit2
 
@@ -20,9 +23,11 @@ from src.events import (
     EventBus,
     EventHandlerError,
     StoryCommitted,
+    StoryCurated,
     StoryRequested,
     StorySigned,
 )
+from src.models import Curation
 from src.repository import SQLiteRepository
 
 
@@ -105,6 +110,20 @@ def build_parser() -> argparse.ArgumentParser:
         default="gemini-2.5-flash",
         help="Google AI Studio model identifier.",
     )
+    curate_parser = subparsers.add_parser(
+        "curate",
+        help="Re-sign and commit a curated artifact markdown file.",
+    )
+    curate_parser.add_argument(
+        "--file",
+        required=True,
+        help="Path to edited artifact markdown file.",
+    )
+    curate_parser.add_argument(
+        "--repo-path",
+        default=".",
+        help="Path to local git ledger repository (default: current directory).",
+    )
 
     return parser
 
@@ -174,6 +193,7 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
             event.request_id,
             "signed",
             event.artifact,
+            event.artifact.provenance.prompt,
             event.body,
             event.artifact.provenance.model_id,
         )
@@ -236,11 +256,165 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _extract_request_id_from_artifact_path(file_path: Path) -> UUID:
+    """Extract request id from `YYYYMMDDTHHMMSSZ_<uuid>.md` artifact filename."""
+
+    match = re.match(r"^\d{8}T\d{6}Z_([0-9a-fA-F-]{36})\.md$", file_path.name)
+    if match is None:
+        raise RuntimeError(
+            "Invalid curated artifact filename format. Expected "
+            "'YYYYMMDDTHHMMSSZ_<request_id>.md'."
+        )
+    return UUID(match.group(1))
+
+
+def _extract_markdown_body(markdown_text: str) -> str:
+    """Remove frontmatter and signature footer, returning raw artifact body."""
+
+    body = markdown_text
+    if body.startswith("---\n"):
+        second_delimiter_index = body.find("\n---\n", 4)
+        if second_delimiter_index == -1:
+            raise RuntimeError("Invalid markdown frontmatter block.")
+        body = body[second_delimiter_index + len("\n---\n") :]
+
+    footer_marker = "\n-----BEGIN ANTINOMIE-INSTITUT ARTIFACT SIGNATURE-----"
+    footer_index = body.find(footer_marker)
+    if footer_index != -1:
+        body = body[:footer_index]
+
+    stripped = body.strip()
+    if not stripped:
+        raise RuntimeError("Curated artifact body is empty after metadata stripping.")
+    return stripped
+
+
+def _build_curation_metadata(original_body: str, curated_body: str) -> Curation:
+    """Calculate difference score and unified diff for curation analytics."""
+
+    matcher = difflib.SequenceMatcher(None, original_body, curated_body)
+    difference_score = round((1.0 - matcher.ratio()) * 100.0, 2)
+    diff_lines = list(
+        difflib.unified_diff(
+            original_body.splitlines(),
+            curated_body.splitlines(),
+            fromfile="original",
+            tofile="curated",
+            lineterm="",
+        )
+    )
+    unified_diff = "\n".join(diff_lines) if diff_lines else "--- original\n+++ curated"
+    return Curation(differenceScore=difference_score, unifiedDiff=unified_diff)
+
+
+async def _run_curate_command(args: argparse.Namespace) -> int:
+    """Run curation pipeline for an edited markdown artifact file."""
+
+    event_bus = EventBus()
+    repository = SQLiteRepository()
+    repository_path = Path(args.repo_path)
+    completion_future: asyncio.Future[StoryCommitted] = asyncio.get_running_loop().create_future()
+
+    notary_adapter = CryptoNotaryAdapter(event_bus=event_bus)
+    ledger_adapter = GitLedgerAdapter(
+        event_bus=event_bus,
+        repository_path=repository_path,
+    )
+
+    artifact_path = Path(args.file).resolve()
+    if not artifact_path.exists():
+        raise RuntimeError(f"Curated file not found: '{artifact_path}'.")
+
+    request_id = _extract_request_id_from_artifact_path(artifact_path)
+    record = await asyncio.to_thread(repository.get_artifact_record, request_id)
+    if record is None:
+        raise RuntimeError(f"Artifact record not found for request_id={request_id}.")
+
+    markdown_text = artifact_path.read_text(encoding="utf-8")
+    curated_body = _extract_markdown_body(markdown_text)
+    curation_metadata = _build_curation_metadata(record.body, curated_body)
+
+    async def _record_signed(event: StorySigned) -> None:
+        """Persist curated body/hash/signature for existing request."""
+
+        await asyncio.to_thread(
+            repository.update_artifact_curation,
+            event.request_id,
+            event.body,
+            event.artifact.provenance.artifact_hash,
+            event.artifact.provenance.cryptographic_signature,
+        )
+
+    async def _record_committed(event: StoryCommitted) -> None:
+        """Persist committed lifecycle state and signal completion."""
+
+        try:
+            commit_id = await asyncio.to_thread(
+                _verify_git_commit,
+                repository_path,
+                event.commit_oid,
+            )
+            await asyncio.to_thread(
+                repository.update_artifact_status,
+                event.request_id,
+                "committed",
+                event.ledger_path,
+                commit_id,
+            )
+            if not completion_future.done():
+                completion_future.set_result(event)
+        except Exception as exc:
+            if not completion_future.done():
+                completion_future.set_exception(exc)
+            raise
+
+    async def _record_dispatch_error(event: EventHandlerError) -> None:
+        """Fail pipeline fast when any async handler raises."""
+
+        if completion_future.done():
+            return
+        completion_future.set_exception(
+            RuntimeError(
+                "Event handler failed: "
+                f"event={event.event_type} "
+                f"handler={event.handler_name} "
+                f"type={event.error_type} "
+                f"message={event.error_message}"
+            )
+        )
+
+    await event_bus.subscribe(StorySigned, _record_signed)
+    await event_bus.subscribe(StoryCommitted, _record_committed)
+    await event_bus.subscribe_errors(_record_dispatch_error)
+    await notary_adapter.start()
+    await ledger_adapter.start()
+
+    await event_bus.emit(
+        StoryCurated(
+            request_id=request_id,
+            curated_body=curated_body,
+            prompt=record.prompt,
+            curation_metadata=curation_metadata,
+            model_id=record.model_id,
+        )
+    )
+    committed_event = await asyncio.wait_for(completion_future, timeout=300.0)
+    print(
+        "Curation completed:",
+        f"request_id={request_id}",
+        f"commit={committed_event.commit_oid}",
+        f"path={committed_event.ledger_path}",
+    )
+    return 0
+
+
 async def _dispatch(args: argparse.Namespace) -> int:
     """Dispatch parsed CLI args to command handlers."""
 
     if args.command == "generate":
         return await _run_generate_command(args)
+    if args.command == "curate":
+        return await _run_curate_command(args)
     raise RuntimeError(f"Unsupported command: {args.command}")
 
 
@@ -250,7 +424,7 @@ def main() -> int:
     parser = build_parser()
     parsed_args = parser.parse_args()
     lock_base = Path.cwd()
-    if getattr(parsed_args, "command", None) == "generate":
+    if getattr(parsed_args, "command", None) in {"generate", "curate"}:
         lock_base = Path(parsed_args.repo_path).resolve()
     lock_path = lock_base / ".slop-orchestrator.lock"
     with OrchestratorLock(lock_path):

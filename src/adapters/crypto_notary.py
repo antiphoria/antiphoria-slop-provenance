@@ -11,11 +11,12 @@ import base64
 import binascii
 import hashlib
 from pathlib import Path
+from typing import Literal
 
 import oqs
 
-from src.events import EventBus, StoryGenerated, StorySigned
-from src.models import Artifact, Provenance
+from src.events import EventBus, StoryCurated, StoryGenerated, StorySigned
+from src.models import Artifact, Curation, Provenance
 
 _ML_DSA_ALGORITHM = "ML-DSA-44"
 _ENV_KEY_CANDIDATES = ("PQC_PRIVATE_KEY_PATH", "OQS_PRIVATE_KEY_PATH")
@@ -143,6 +144,7 @@ class CryptoNotaryAdapter:
         """Subscribe to generated-story events."""
 
         await self._event_bus.subscribe(StoryGenerated, self._on_story_generated)
+        await self._event_bus.subscribe(StoryCurated, self._on_story_curated)
 
     def _resolve_private_key(self) -> bytes:
         """Resolve and load private key bytes from configured path.
@@ -180,21 +182,13 @@ class CryptoNotaryAdapter:
             event: Generated story payload.
         """
 
-        artifact_hash = hashlib.sha256(event.body.encode("utf-8")).hexdigest()
-        signature_bytes = await asyncio.to_thread(
-            _sign_ml_dsa,
-            self._private_key,
-            artifact_hash.encode("utf-8"),
-        )
-        signature_b64 = base64.b64encode(signature_bytes).decode("ascii")
-
-        artifact = Artifact(
+        artifact = await self._build_signed_artifact(
             title=event.title,
-            provenance=Provenance(
-                modelId=event.model_id,
-                artifactHash=artifact_hash,
-                cryptographicSignature=signature_b64,
-            ),
+            body=event.body,
+            prompt=event.prompt,
+            model_id=event.model_id,
+            source="synthetic",
+            curation=None,
         )
 
         await self._event_bus.emit(
@@ -204,3 +198,79 @@ class CryptoNotaryAdapter:
                 body=event.body,
             )
         )
+
+    async def _on_story_curated(self, event: StoryCurated) -> None:
+        """Sign curated content hash and emit `StorySigned`.
+
+        Args:
+            event: Curated story payload.
+        """
+
+        artifact = await self._build_signed_artifact(
+            title=self._derive_title(event.curated_body),
+            body=event.curated_body,
+            prompt=event.prompt,
+            model_id=event.model_id,
+            source="hybrid",
+            curation=event.curation_metadata,
+        )
+        await self._event_bus.emit(
+            StorySigned(
+                request_id=event.request_id,
+                artifact=artifact,
+                body=event.curated_body,
+            )
+        )
+
+    async def _build_signed_artifact(
+        self,
+        title: str,
+        body: str,
+        prompt: str,
+        model_id: str,
+        source: Literal["synthetic", "hybrid"],
+        curation: Curation | None,
+    ) -> Artifact:
+        """Build a signed artifact from payload components.
+
+        Args:
+            title: Artifact title.
+            body: Artifact body content to hash/sign.
+            prompt: Original user prompt.
+            model_id: Source generation model id.
+            source: Provenance source type (`synthetic` or `hybrid`).
+            curation: Optional curation metadata for hybrid outputs.
+
+        Returns:
+            A fully signed artifact model.
+        """
+
+        artifact_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        signature_bytes = await asyncio.to_thread(
+            _sign_ml_dsa,
+            self._private_key,
+            artifact_hash.encode("utf-8"),
+        )
+        signature_b64 = base64.b64encode(signature_bytes).decode("ascii")
+        return Artifact(
+            title=title,
+            provenance=Provenance(
+                source=source,
+                prompt=prompt,
+                modelId=model_id,
+                artifactHash=artifact_hash,
+                cryptographicSignature=signature_b64,
+            ),
+            curation=curation,
+        )
+
+    @staticmethod
+    def _derive_title(body: str) -> str:
+        """Derive deterministic title from artifact body content."""
+
+        first_line = body.strip().splitlines()[0].strip()
+        candidate = first_line.strip("# ").strip()
+        if not candidate:
+            return "INCIDENT_UNTITLED"
+        normalized = "_".join(candidate.split())[:80]
+        return f"INCIDENT_{normalized.upper()}"

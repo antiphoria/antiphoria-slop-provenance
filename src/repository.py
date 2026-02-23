@@ -15,7 +15,14 @@ from uuid import UUID
 
 from src.models import Artifact
 
-ArtifactLifecycleStatus = Literal["requested", "generated", "signed", "committed", "failed"]
+ArtifactLifecycleStatus = Literal[
+    "requested",
+    "generated",
+    "signed",
+    "curated",
+    "committed",
+    "failed",
+]
 
 
 def _utc_now_iso() -> str:
@@ -32,6 +39,7 @@ class ArtifactRecord:
         request_id: Correlation ID for orchestration events.
         status: Current lifecycle phase.
         title: Artifact frontmatter title.
+        prompt: Original user prompt used for generation.
         body: Raw generated artifact body.
         model_id: Generator model identifier.
         artifact_hash: SHA-256 hash of body content.
@@ -45,6 +53,7 @@ class ArtifactRecord:
     request_id: str
     status: ArtifactLifecycleStatus
     title: str
+    prompt: str
     body: str
     model_id: str
     artifact_hash: str
@@ -85,6 +94,7 @@ class SQLiteRepository:
                     request_id TEXT PRIMARY KEY,
                     status TEXT NOT NULL,
                     title TEXT NOT NULL,
+                    prompt TEXT NOT NULL DEFAULT '',
                     body TEXT NOT NULL,
                     model_id TEXT NOT NULL,
                     artifact_hash TEXT NOT NULL,
@@ -102,12 +112,24 @@ class SQLiteRepository:
                 ON artifact_records(status);
                 """
             )
+            existing_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(artifact_records);")
+            }
+            if "prompt" not in existing_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE artifact_records
+                    ADD COLUMN prompt TEXT NOT NULL DEFAULT '';
+                    """
+                )
 
     def create_artifact_record(
         self,
         request_id: UUID,
         status: ArtifactLifecycleStatus,
         artifact: Artifact,
+        prompt: str,
         body: str,
         model_id: str,
     ) -> None:
@@ -117,6 +139,7 @@ class SQLiteRepository:
             request_id: Event correlation identifier.
             status: Initial artifact lifecycle status.
             artifact: Artifact frontmatter payload.
+            prompt: Original user prompt for this artifact.
             body: Raw generated body.
             model_id: Generation model identifier.
         """
@@ -126,15 +149,16 @@ class SQLiteRepository:
             connection.execute(
                 """
                 INSERT INTO artifact_records (
-                    request_id, status, title, body, model_id, artifact_hash,
+                    request_id, status, title, prompt, body, model_id, artifact_hash,
                     cryptographic_signature, ledger_path, commit_oid,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     str(request_id),
                     status,
                     artifact.title,
+                    prompt,
                     body,
                     model_id,
                     artifact.provenance.artifact_hash,
@@ -143,6 +167,51 @@ class SQLiteRepository:
                     None,
                     now,
                     now,
+                ),
+            )
+
+    def update_artifact_curation(
+        self,
+        request_id: UUID,
+        curated_body: str,
+        artifact_hash: str,
+        cryptographic_signature: str,
+    ) -> None:
+        """Update an existing record with curated content and signature.
+
+        Args:
+            request_id: Event correlation identifier.
+            curated_body: Human-curated artifact body.
+            artifact_hash: New SHA-256 hash for curated body.
+            cryptographic_signature: New ML-DSA signature.
+        """
+
+        now = _utc_now_iso()
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT request_id FROM artifact_records WHERE request_id = ?;",
+                (str(request_id),),
+            ).fetchone()
+            if existing is None:
+                raise RuntimeError(
+                    f"Artifact record not found for request_id={request_id}."
+                )
+            connection.execute(
+                """
+                UPDATE artifact_records
+                SET status = 'curated',
+                    body = ?,
+                    artifact_hash = ?,
+                    cryptographic_signature = ?,
+                    updated_at = ?
+                WHERE request_id = ?;
+                """,
+                (
+                    curated_body,
+                    artifact_hash,
+                    cryptographic_signature,
+                    now,
+                    str(request_id),
                 ),
             )
 
@@ -255,6 +324,7 @@ class SQLiteRepository:
             request_id=str(row["request_id"]),
             status=row["status"],
             title=row["title"],
+            prompt=row["prompt"],
             body=row["body"],
             model_id=row["model_id"],
             artifact_hash=row["artifact_hash"],

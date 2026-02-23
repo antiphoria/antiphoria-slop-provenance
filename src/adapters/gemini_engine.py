@@ -108,6 +108,7 @@ class GeminiEngineAdapter:
         await self._event_bus.emit(
             StoryGenerated(
                 request_id=event.request_id,
+                prompt=event.prompt,
                 title=title,
                 body=generated_text.strip(),
                 model_id=self._model_id,

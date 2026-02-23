@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.models import Artifact
+from src.models import Artifact, Curation
 
 EventT = TypeVar("EventT", bound=BaseModel)
 EventHandler = Callable[[EventT], Awaitable[None]]
@@ -48,6 +48,7 @@ class StoryGenerated(BaseModel):
 
     Attributes:
         request_id: Correlation ID from the original request.
+        prompt: Original user prompt that initiated generation.
         title: Artifact title inferred/provided by the generator.
         body: Raw generated story text.
         model_id: Source model identifier used by the adapter.
@@ -57,6 +58,7 @@ class StoryGenerated(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     request_id: UUID
+    prompt: str = Field(min_length=1)
     title: str = Field(min_length=1)
     body: str = Field(min_length=1)
     model_id: str = Field(min_length=1)
@@ -97,6 +99,26 @@ class StoryCommitted(BaseModel):
     ledger_path: str = Field(min_length=1)
     commit_oid: str = Field(min_length=1)
     committed_at: datetime = Field(default_factory=_utc_now)
+
+
+class StoryCurated(BaseModel):
+    """Event emitted when a human-curated artifact is submitted.
+
+    Attributes:
+        request_id: Correlation ID from the original generation request.
+        curated_body: Human-edited markdown body without metadata wrappers.
+        prompt: Original user prompt that birthed the artifact.
+        curation_metadata: Computed curation metadata containing score/diff.
+        model_id: Source model identifier for provenance continuity.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    request_id: UUID
+    curated_body: str = Field(min_length=1)
+    prompt: str = Field(min_length=1)
+    curation_metadata: Curation
+    model_id: str = Field(min_length=1)
 
 
 class EventHandlerError(BaseModel):
