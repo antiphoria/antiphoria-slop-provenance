@@ -124,6 +124,15 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Path to local git ledger repository.",
     )
+    verify_parser = subparsers.add_parser(
+        "verify",
+        help="Verify Eternity v1 artifact signature and payload integrity.",
+    )
+    verify_parser.add_argument(
+        "--file",
+        required=True,
+        help="Path to artifact markdown file to verify.",
+    )
 
     return parser
 
@@ -205,7 +214,7 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
             event.request_id,
             "signed",
             event.artifact,
-            event.artifact.provenance.prompt,
+            event.artifact.provenance.generation_context.prompt,
             event.body,
             event.artifact.provenance.model_id,
         )
@@ -353,12 +362,14 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
     async def _record_signed(event: StorySigned) -> None:
         """Persist curated body/hash/signature for existing request."""
 
+        if event.artifact.signature is None:
+            raise RuntimeError("Signed artifact is missing signature block.")
         await asyncio.to_thread(
             repository.update_artifact_curation,
             event.request_id,
             event.body,
-            event.artifact.provenance.artifact_hash,
-            event.artifact.provenance.cryptographic_signature,
+            event.artifact.signature.artifact_hash,
+            event.artifact.signature.cryptographic_signature,
         )
 
     async def _record_committed(event: StoryCommitted) -> None:
@@ -424,6 +435,27 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_verify_command(args: argparse.Namespace) -> int:
+    """Run strict verification for an Eternity v1 artifact file."""
+
+    adapter = CryptoNotaryAdapter(
+        event_bus=EventBus(),
+        require_private_key=False,
+    )
+    artifact_path = Path(args.file).resolve()
+    try:
+        artifact_id = adapter.read_artifact_id(artifact_path)
+        ok = adapter.verify_artifact(artifact_path)
+        if not ok:
+            print("[FAIL] CORRUPT ARTIFACT: Invalid ML-DSA signature")
+            return 1
+        print(f"[OK] SIGNATURE VERIFIED: {artifact_id} (Eternity v1)")
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        print(f"[FAIL] CORRUPT ARTIFACT: {exc}")
+        return 1
+
+
 async def _dispatch(args: argparse.Namespace) -> int:
     """Dispatch parsed CLI args to command handlers."""
 
@@ -431,6 +463,8 @@ async def _dispatch(args: argparse.Namespace) -> int:
         return await _run_generate_command(args)
     if args.command == "curate":
         return await _run_curate_command(args)
+    if args.command == "verify":
+        return await _run_verify_command(args)
     raise RuntimeError(f"Unsupported command: {args.command}")
 
 

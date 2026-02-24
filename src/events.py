@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.models import Artifact, Curation
+from src.models import Artifact, Curation, EmbeddedWatermark, UsageMetrics
 
 EventT = TypeVar("EventT", bound=BaseModel)
 EventHandler = Callable[[EventT], Awaitable[None]]
@@ -52,6 +52,14 @@ class StoryGenerated(BaseModel):
         title: Artifact title inferred/provided by the generator.
         body: Raw generated story text.
         model_id: Source model identifier used by the adapter.
+        system_instruction: Active system instruction for generation.
+        temperature: Temperature used for generation.
+        top_p: Top-p value used for generation.
+        top_k: Top-k value used for generation.
+        content_type: MIME type for generated payload.
+        license: License applied to the generated payload.
+        usage_metrics: Model token usage metrics if available.
+        embedded_watermark: Declared embedded watermark status if available.
         generated_at: UTC timestamp for event creation.
     """
 
@@ -62,6 +70,14 @@ class StoryGenerated(BaseModel):
     title: str = Field(min_length=1)
     body: str = Field(min_length=1)
     model_id: str = Field(min_length=1)
+    system_instruction: str = Field(min_length=1)
+    temperature: float = Field(ge=0.0, le=2.0)
+    top_p: float = Field(ge=0.0, le=1.0)
+    top_k: int = Field(ge=0)
+    content_type: str = Field(min_length=1)
+    license: str = Field(min_length=1)
+    usage_metrics: UsageMetrics | None = None
+    embedded_watermark: EmbeddedWatermark | None = None
     generated_at: datetime = Field(default_factory=_utc_now)
 
 

@@ -13,6 +13,7 @@ dependencies = [
     "pydantic",
     "liboqs-python",
     "pygit2",
+    "PyYAML",
 ]
 
 [project.scripts]

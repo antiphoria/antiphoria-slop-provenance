@@ -139,37 +139,92 @@ class GitLedgerAdapter:
         """
 
         artifact = event.artifact
+        if artifact.signature is None:
+            raise RuntimeError("Signed artifact envelope is missing signature block.")
         signature_lines = self._wrap_signature_lines(
-            artifact.provenance.cryptographic_signature
+            artifact.signature.cryptographic_signature
         )
         signature_block_yaml = "\n".join(f"    {line}" for line in signature_lines)
         signature_block_footer = "\n".join(signature_lines)
-        prompt_block_yaml = self._yaml_folded_block(artifact.provenance.prompt, indent=4)
+        prompt_block_yaml = self._yaml_folded_block(
+            artifact.provenance.generation_context.prompt,
+            indent=6,
+        )
+        system_instruction_yaml = self._yaml_folded_block(
+            artifact.provenance.generation_context.system_instruction,
+            indent=6,
+        )
 
         curation_block = ""
         if artifact.curation is not None:
             diff_block = self._yaml_literal_block(artifact.curation.unified_diff, indent=6)
             curation_block = (
-                "  curation:\n"
-                f"    differenceScore: {artifact.curation.difference_score:.2f}\n"
-                "    unifiedDiff: |\n"
+                "curation:\n"
+                f"  differenceScore: {artifact.curation.difference_score:.2f}\n"
+                "  unifiedDiff: |\n"
                 f"{diff_block}\n"
+            )
+        else:
+            curation_block = "curation: null\n"
+
+        usage_block = ""
+        if artifact.provenance.usage_metrics is not None:
+            usage = artifact.provenance.usage_metrics
+            usage_block = (
+                "  usageMetrics:\n"
+                f"    promptTokens: {usage.prompt_tokens}\n"
+                f"    completionTokens: {usage.completion_tokens}\n"
+                f"    totalTokens: {usage.total_tokens}\n"
+            )
+
+        watermark_block = ""
+        if artifact.provenance.embedded_watermark is not None:
+            watermark = artifact.provenance.embedded_watermark
+            watermark_block = (
+                "  embeddedWatermark:\n"
+                f'    provider: "{watermark.provider}"\n'
+                f'    status: "{watermark.status}"\n'
+            )
+
+        public_key_uri_line = ""
+        if artifact.signature.verification_anchor.public_key_uri is not None:
+            public_key_uri_line = (
+                f'    publicKeyUri: "{artifact.signature.verification_anchor.public_key_uri}"\n'
             )
 
         return (
             "---\n"
+            f'schemaVersion: "{artifact.schema_version}"\n'
+            f'id: "{artifact.id}"\n'
             f'title: "{artifact.title}"\n'
+            f'timestamp: "{artifact.timestamp.isoformat()}"\n'
+            f'contentType: "{artifact.content_type}"\n'
+            f'license: "{artifact.license}"\n'
             "provenance:\n"
             f'  source: "{artifact.provenance.source}"\n'
-            "  prompt: >\n"
-            f"{prompt_block_yaml}\n"
+            f'  engineVersion: "{artifact.provenance.engine_version}"\n'
             f'  modelId: "{artifact.provenance.model_id}"\n'
-            f'  artifactHash: "{artifact.provenance.artifact_hash}"\n'
-            f'  cryptoAlgorithm: "{artifact.provenance.crypto_algorithm}"\n'
+            "  generationContext:\n"
+            "    systemInstruction: >\n"
+            f"{system_instruction_yaml}\n"
+            "    prompt: >\n"
+            f"{prompt_block_yaml}\n"
+            "    hyperparameters:\n"
+            f"      temperature: {artifact.provenance.generation_context.hyperparameters.temperature}\n"
+            f"      topP: {artifact.provenance.generation_context.hyperparameters.top_p}\n"
+            f"      topK: {artifact.provenance.generation_context.hyperparameters.top_k}\n"
+            f"{usage_block}"
+            f"{watermark_block}"
+            f"{curation_block}"
+            "signature:\n"
+            f'  cryptoAlgorithm: "{artifact.signature.crypto_algorithm}"\n'
+            f'  artifactHash: "{artifact.signature.artifact_hash}"\n'
+            "  verificationAnchor:\n"
+            f'    signerFingerprint: "{artifact.signature.verification_anchor.signer_fingerprint}"\n'
+            f"{public_key_uri_line}"
             "  cryptographicSignature: |\n"
             f"{signature_block_yaml}\n"
-            f"{curation_block}"
-            f'  recordStatus: "{artifact.record_status}"\n'
+            f'recordStatus: "{artifact.record_status}"\n'
             "---\n"
             f"{event.body}\n"
             "-----BEGIN ANTINOMIE-INSTITUT ARTIFACT SIGNATURE-----\n"

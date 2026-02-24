@@ -12,8 +12,15 @@ from pathlib import Path
 import google.generativeai as genai
 
 from src.events import EventBus, StoryGenerated, StoryRequested
+from src.models import EmbeddedWatermark, UsageMetrics
 
 _DEFAULT_MODEL_ID = "gemini-2.5-flash"
+_DEFAULT_SYSTEM_INSTRUCTION = "You are a brutalist AI archivist."
+_DEFAULT_TEMPERATURE = 0.7
+_DEFAULT_TOP_P = 0.95
+_DEFAULT_TOP_K = 40
+_DEFAULT_CONTENT_TYPE = "text/markdown"
+_DEFAULT_LICENSE = "Antinomie-Hybrid-Proprietary"
 
 
 def _read_env_value(env_key: str, env_path: Path) -> str:
@@ -112,6 +119,21 @@ class GeminiEngineAdapter:
                 title=title,
                 body=generated_text.strip(),
                 model_id=self._model_id,
+                system_instruction=_DEFAULT_SYSTEM_INSTRUCTION,
+                temperature=_DEFAULT_TEMPERATURE,
+                top_p=_DEFAULT_TOP_P,
+                top_k=_DEFAULT_TOP_K,
+                content_type=_DEFAULT_CONTENT_TYPE,
+                license=_DEFAULT_LICENSE,
+                usage_metrics=UsageMetrics(
+                    promptTokens=len(event.prompt.split()),
+                    completionTokens=len(generated_text.split()),
+                    totalTokens=len(event.prompt.split()) + len(generated_text.split()),
+                ),
+                embedded_watermark=EmbeddedWatermark(
+                    provider="SynthID",
+                    status="unknown",
+                ),
             )
         )
 

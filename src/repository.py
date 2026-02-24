@@ -144,6 +144,9 @@ class SQLiteRepository:
             model_id: Generation model identifier.
         """
 
+        if artifact.signature is None:
+            raise RuntimeError("Artifact signature block is missing for persistence.")
+
         now = _utc_now_iso()
         with self._connect() as connection:
             connection.execute(
@@ -161,8 +164,8 @@ class SQLiteRepository:
                     prompt,
                     body,
                     model_id,
-                    artifact.provenance.artifact_hash,
-                    artifact.provenance.cryptographic_signature,
+                    artifact.signature.artifact_hash,
+                    artifact.signature.cryptographic_signature,
                     None,
                     None,
                     now,

@@ -1,40 +1,44 @@
-"""Post-quantum signing adapter for artifact notarization.
-
-This adapter consumes `StoryGenerated`, signs payload hashes using ML-DSA,
-and emits `StorySigned` with strict frontmatter metadata.
-"""
+"""Post-quantum notary adapter for Eternity v1 signed envelopes."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
 import binascii
-import hashlib
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 import oqs
+import yaml
 
 from src.events import EventBus, StoryCurated, StoryGenerated, StorySigned
-from src.models import Artifact, Curation, Provenance
+from src.models import (
+    Artifact,
+    CRYPTO_ALGORITHM_ML_DSA_44,
+    Curation,
+    EmbeddedWatermark,
+    GenerationContext,
+    Hyperparameters,
+    Provenance,
+    SignatureBlock,
+    UsageMetrics,
+    VerificationAnchor,
+    build_envelope_signing_target,
+    canonical_json_bytes,
+    sha256_hex,
+)
 
 _ML_DSA_ALGORITHM = "ML-DSA-44"
 _ENV_KEY_CANDIDATES = ("PQC_PRIVATE_KEY_PATH", "OQS_PRIVATE_KEY_PATH")
+_PUBLIC_ENV_KEY_CANDIDATES = ("PQC_PUBLIC_KEY_PATH", "OQS_PUBLIC_KEY_PATH")
+_DEFAULT_ENGINE_VERSION = "slop-orchestrator-v1.0.0"
+_DEFAULT_CONTENT_TYPE = "text/markdown"
+_DEFAULT_LICENSE = "Antinomie-Hybrid-Proprietary"
 
 
 def _read_env_value(env_key: str, env_path: Path) -> str:
-    """Read a key from process environment or local `.env` file.
-
-    Args:
-        env_key: Environment variable name to resolve.
-        env_path: Absolute path to the `.env` file.
-
-    Returns:
-        The resolved value.
-
-    Raises:
-        RuntimeError: If the value cannot be resolved.
-    """
+    """Read a key from process environment or local `.env` file."""
 
     from os import getenv
 
@@ -63,17 +67,7 @@ def _read_env_value(env_key: str, env_path: Path) -> str:
 
 
 def _load_private_key_bytes(private_key_path: Path) -> bytes:
-    """Load secret key bytes from `.pem` or raw-bytes key files.
-
-    Args:
-        private_key_path: Absolute or project-relative key file path.
-
-    Returns:
-        Raw secret key bytes expected by liboqs.
-
-    Raises:
-        RuntimeError: If file is missing or malformed.
-    """
+    """Load secret key bytes from `.pem` or raw-bytes key files."""
 
     if not private_key_path.exists():
         raise RuntimeError(f"PQC private key file not found: '{private_key_path}'.")
@@ -82,7 +76,6 @@ def _load_private_key_bytes(private_key_path: Path) -> bytes:
     if not raw_bytes:
         raise RuntimeError(f"PQC private key file is empty: '{private_key_path}'.")
 
-    # Accept PEM-like wrappers when key material is base64 encoded.
     try:
         text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError:
@@ -111,50 +104,36 @@ def _load_private_key_bytes(private_key_path: Path) -> bytes:
 
 
 def _sign_ml_dsa(secret_key: bytes, message: bytes) -> bytes:
-    """Sign a message with ML-DSA using liboqs.
-
-    Args:
-        secret_key: Persistent ML-DSA secret key bytes.
-        message: Message bytes to sign.
-
-    Returns:
-        Signature bytes.
-    """
+    """Sign a message with ML-DSA using liboqs."""
 
     with oqs.Signature(_ML_DSA_ALGORITHM, secret_key=secret_key) as signer:
         return signer.sign(message)
 
 
 class CryptoNotaryAdapter:
-    """ML-DSA event adapter that notarizes generated stories."""
+    """ML-DSA event adapter that notarizes generated or curated stories."""
 
-    def __init__(self, event_bus: EventBus, env_path: Path | None = None) -> None:
-        """Initialize notary adapter and load persistent private key.
-
-        Args:
-            event_bus: Event bus used for subscriptions and emissions.
-            env_path: Optional absolute path to the `.env` file.
-        """
-
+    def __init__(
+        self,
+        event_bus: EventBus,
+        env_path: Path | None = None,
+        require_private_key: bool = True,
+    ) -> None:
         self._event_bus = event_bus
         self._env_path = env_path or Path(".env")
-        self._private_key = self._resolve_private_key()
+        self._private_key: bytes | None = None
+        if require_private_key:
+            self._private_key = self._resolve_private_key()
+        self._signer_fingerprint = self._resolve_signer_fingerprint()
 
     async def start(self) -> None:
-        """Subscribe to generated-story events."""
+        """Subscribe to generation and curation events."""
 
         await self._event_bus.subscribe(StoryGenerated, self._on_story_generated)
         await self._event_bus.subscribe(StoryCurated, self._on_story_curated)
 
     def _resolve_private_key(self) -> bytes:
-        """Resolve and load private key bytes from configured path.
-
-        Returns:
-            Raw private key bytes.
-
-        Raises:
-            RuntimeError: If no private key path configuration exists.
-        """
+        """Resolve and load private key bytes from configured path."""
 
         private_key_path_value: str | None = None
         for env_key in _ENV_KEY_CANDIDATES:
@@ -175,22 +154,55 @@ class CryptoNotaryAdapter:
             key_path = (self._env_path.parent / key_path).resolve()
         return _load_private_key_bytes(key_path)
 
-    async def _on_story_generated(self, event: StoryGenerated) -> None:
-        """Sign generated content hash and emit `StorySigned`.
+    def _resolve_signer_fingerprint(self) -> str:
+        """Resolve signer fingerprint from env or key hash fallback."""
 
-        Args:
-            event: Generated story payload.
-        """
+        try:
+            return _read_env_value("SIGNER_FINGERPRINT", self._env_path)
+        except RuntimeError:
+            if self._private_key is None:
+                return "unknown"
+            return sha256_hex(self._private_key)[:32]
+
+    def _resolve_public_key(self) -> bytes:
+        """Resolve and load ML-DSA public key bytes from configured path."""
+
+        public_key_path_value: str | None = None
+        for env_key in _PUBLIC_ENV_KEY_CANDIDATES:
+            try:
+                public_key_path_value = _read_env_value(env_key, self._env_path)
+                break
+            except RuntimeError:
+                continue
+        if public_key_path_value is None:
+            expected = ", ".join(_PUBLIC_ENV_KEY_CANDIDATES)
+            raise RuntimeError(
+                f"Missing public key path config. Define one of: {expected}."
+            )
+        key_path = Path(public_key_path_value)
+        if not key_path.is_absolute():
+            key_path = (self._env_path.parent / key_path).resolve()
+        return _load_private_key_bytes(key_path)
+
+    async def _on_story_generated(self, event: StoryGenerated) -> None:
+        """Sign generated content and emit a signed envelope event."""
 
         artifact = await self._build_signed_artifact(
             title=event.title,
+            source="synthetic",
+            model_id=event.model_id,
             body=event.body,
             prompt=event.prompt,
-            model_id=event.model_id,
-            source="synthetic",
+            system_instruction=event.system_instruction,
+            temperature=event.temperature,
+            top_p=event.top_p,
+            top_k=event.top_k,
+            usage_metrics=event.usage_metrics,
+            embedded_watermark=event.embedded_watermark,
+            content_type=event.content_type,
+            license=event.license,
             curation=None,
         )
-
         await self._event_bus.emit(
             StorySigned(
                 request_id=event.request_id,
@@ -200,18 +212,22 @@ class CryptoNotaryAdapter:
         )
 
     async def _on_story_curated(self, event: StoryCurated) -> None:
-        """Sign curated content hash and emit `StorySigned`.
-
-        Args:
-            event: Curated story payload.
-        """
+        """Sign curated content and emit a signed envelope event."""
 
         artifact = await self._build_signed_artifact(
             title=self._derive_title(event.curated_body),
+            source="hybrid",
+            model_id=event.model_id,
             body=event.curated_body,
             prompt=event.prompt,
-            model_id=event.model_id,
-            source="hybrid",
+            system_instruction="Human curation pass.",
+            temperature=0.0,
+            top_p=1.0,
+            top_k=1,
+            usage_metrics=None,
+            embedded_watermark=None,
+            content_type=_DEFAULT_CONTENT_TYPE,
+            license=_DEFAULT_LICENSE,
             curation=event.curation_metadata,
         )
         await self._event_bus.emit(
@@ -225,44 +241,152 @@ class CryptoNotaryAdapter:
     async def _build_signed_artifact(
         self,
         title: str,
+        source: Literal["synthetic", "hybrid"],
+        model_id: str,
         body: str,
         prompt: str,
-        model_id: str,
-        source: Literal["synthetic", "hybrid"],
+        system_instruction: str,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+        usage_metrics: UsageMetrics | None,
+        embedded_watermark: EmbeddedWatermark | None,
+        content_type: str,
+        license: str,
         curation: Curation | None,
     ) -> Artifact:
-        """Build a signed artifact from payload components.
+        """Construct unsigned envelope, sign canonical target, attach signature."""
 
-        Args:
-            title: Artifact title.
-            body: Artifact body content to hash/sign.
-            prompt: Original user prompt.
-            model_id: Source generation model id.
-            source: Provenance source type (`synthetic` or `hybrid`).
-            curation: Optional curation metadata for hybrid outputs.
-
-        Returns:
-            A fully signed artifact model.
-        """
-
-        artifact_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
-        signature_bytes = await asyncio.to_thread(
-            _sign_ml_dsa,
-            self._private_key,
-            artifact_hash.encode("utf-8"),
-        )
-        signature_b64 = base64.b64encode(signature_bytes).decode("ascii")
-        return Artifact(
+        if self._private_key is None:
+            raise RuntimeError("Private key is required for signing operations.")
+        payload_hash = sha256_hex(body.encode("utf-8"))
+        unsigned_envelope = Artifact(
             title=title,
+            timestamp=datetime.now(timezone.utc),
+            contentType=content_type,
+            license=license,
             provenance=Provenance(
                 source=source,
-                prompt=prompt,
+                engineVersion=_DEFAULT_ENGINE_VERSION,
                 modelId=model_id,
-                artifactHash=artifact_hash,
-                cryptographicSignature=signature_b64,
+                generationContext=GenerationContext(
+                    systemInstruction=system_instruction,
+                    prompt=prompt,
+                    hyperparameters=Hyperparameters(
+                        temperature=temperature,
+                        topP=top_p,
+                        topK=top_k,
+                    ),
+                ),
+                usageMetrics=usage_metrics,
+                embeddedWatermark=embedded_watermark,
             ),
             curation=curation,
         )
+        signing_target = build_envelope_signing_target(
+            envelope=unsigned_envelope,
+            payload_sha256_hex=payload_hash,
+            manifest_sha256_hex=None,
+            prev_hash=None,
+        )
+        signing_hash = sha256_hex(canonical_json_bytes(signing_target))
+        signature_bytes = await asyncio.to_thread(
+            _sign_ml_dsa,
+            self._private_key,
+            signing_hash.encode("utf-8"),
+        )
+        signature = SignatureBlock(
+            cryptoAlgorithm=CRYPTO_ALGORITHM_ML_DSA_44,
+            artifactHash=payload_hash,
+            cryptographicSignature=base64.b64encode(signature_bytes).decode("ascii"),
+            verificationAnchor=VerificationAnchor(
+                signerFingerprint=self._signer_fingerprint,
+            ),
+        )
+        return unsigned_envelope.model_copy(update={"signature": signature})
+
+    def verify_artifact(self, file_path: Path) -> bool:
+        """Verify an Eternity v1 artifact against canonical signing target.
+
+        Args:
+            file_path: Markdown artifact file path.
+
+        Returns:
+            True when signature verification succeeds, otherwise False.
+        """
+
+        envelope, payload = self._parse_envelope_and_payload(file_path)
+        if envelope.signature is None:
+            raise RuntimeError("Artifact envelope is missing signature block.")
+
+        payload_hash = sha256_hex(payload.encode("utf-8"))
+        if payload_hash != envelope.signature.artifact_hash:
+            raise RuntimeError("Payload hash mismatch against signed artifactHash.")
+
+        signing_target = build_envelope_signing_target(
+            envelope=envelope,
+            payload_sha256_hex=payload_hash,
+            manifest_sha256_hex=None,
+            prev_hash=None,
+        )
+        signing_hash = sha256_hex(canonical_json_bytes(signing_target))
+        try:
+            # YAML block scalars preserve line breaks; normalize to strict base64.
+            normalized_signature = "".join(
+                envelope.signature.cryptographic_signature.split()
+            )
+            signature_bytes = base64.b64decode(
+                normalized_signature,
+                validate=True,
+            )
+        except binascii.Error as exc:
+            raise RuntimeError("Invalid base64 signature payload in artifact.") from exc
+
+        public_key = self._resolve_public_key()
+        with oqs.Signature(_ML_DSA_ALGORITHM) as verifier:
+            is_valid = verifier.verify(
+                signing_hash.encode("utf-8"),
+                signature_bytes,
+                public_key,
+            )
+        return bool(is_valid)
+
+    def read_artifact_id(self, file_path: Path) -> str:
+        """Read artifact UUID from Eternity envelope."""
+
+        envelope, _ = self._parse_envelope_and_payload(file_path)
+        return str(envelope.id)
+
+    def _parse_envelope_and_payload(self, file_path: Path) -> tuple[Artifact, str]:
+        """Parse markdown file into Eternity envelope and raw payload body."""
+
+        if not file_path.exists():
+            raise RuntimeError(f"Artifact file not found: '{file_path}'.")
+        text = file_path.read_text(encoding="utf-8")
+        if not text.startswith("---\n"):
+            raise RuntimeError("Artifact file is missing YAML frontmatter delimiter.")
+
+        delimiter_index = text.find("\n---\n", 4)
+        if delimiter_index == -1:
+            raise RuntimeError("Artifact file has malformed YAML frontmatter.")
+        frontmatter_text = text[4:delimiter_index]
+        payload_text = text[delimiter_index + len("\n---\n") :]
+        footer_marker = "\n-----BEGIN ANTINOMIE-INSTITUT ARTIFACT SIGNATURE-----"
+        footer_index = payload_text.find(footer_marker)
+        if footer_index != -1:
+            payload_text = payload_text[:footer_index]
+        payload = payload_text.strip()
+        if not payload:
+            raise RuntimeError("Artifact payload is empty after metadata stripping.")
+
+        loaded = yaml.safe_load(frontmatter_text)
+        if not isinstance(loaded, dict):
+            raise RuntimeError("Frontmatter YAML did not decode to an object.")
+        try:
+            envelope = Artifact.model_validate(loaded)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"Failed to parse Eternity envelope: {exc}") from exc
+        return envelope, payload
 
     @staticmethod
     def _derive_title(body: str) -> str:
