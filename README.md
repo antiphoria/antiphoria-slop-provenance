@@ -30,6 +30,9 @@ TRANSPARENCY_LOG_PUBLISH_URL=https://example.org/transparency/append
 RFC3161_TSA_URL=https://freetsa.org/tsr
 RFC3161_CA_CERT_PATH=./keys/tsa-ca.pem
 SIGNING_KEY_VERSION=v1
+ORCHESTRATOR_TRANSPORT=local
+KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+ENABLE_C2PA=false
 ```
 
 Only the key and API entries are strictly required for generation/signature flow. TSA and transparency publish URL are optional but recommended for long-term external auditability.
@@ -42,10 +45,22 @@ Only the key and API entries are strictly required for generation/signature flow
 slop-cli generate --prompt "A short brutalist micro-story." --repo-path ../my-ledger
 ```
 
+Kafka dispatch mode:
+
+```bash
+slop-cli generate --prompt "A short brutalist micro-story." --repo-path ../my-ledger --transport kafka
+```
+
 ### Curate and re-certify
 
 ```bash
 slop-cli curate --file ../my-ledger/artifacts/<request_id>.md --repo-path ../my-ledger
+```
+
+Kafka dispatch mode:
+
+```bash
+slop-cli curate --file ../my-ledger/artifacts/<request_id>.md --repo-path ../my-ledger --transport kafka
 ```
 
 ### Signature verification
@@ -70,6 +85,76 @@ slop-cli timestamp --file ../my-ledger/artifacts/<request_id>.md --repo-path ../
 
 ```bash
 slop-cli audit --file ../my-ledger/artifacts/<request_id>.md --repo-path ../my-ledger --tsa-ca-cert-path ./keys/tsa-ca.pem --report-file ./audit_report.json
+```
+
+## Distributed runtime (Kafka + microservices)
+
+Start the local distributed stack:
+
+```bash
+docker compose up --build
+```
+
+or via Make:
+
+```bash
+make up
+```
+
+Create topics explicitly (optional when auto-create is disabled):
+
+```bash
+slop-bootstrap-topics --bootstrap-servers localhost:9092
+```
+
+Run workers directly (without Docker):
+
+```bash
+slop-generator-service
+slop-notary-service
+slop-ledger-service
+slop-provenance-service
+slop-telemetry-service
+```
+
+Replay failed dead-letter events:
+
+```bash
+slop-replay-dlq --topic story.signed --max-messages 50
+```
+
+Run an end-to-end Kafka smoke test (requires running workers):
+
+```bash
+slop-smoke-kafka --bootstrap-topics --ledger-repo-path ./ledger --timeout-sec 180
+```
+
+## C2PA implementation note
+
+When `ENABLE_C2PA=true`, the pipeline emits deterministic `.c2pa` sidecar payloads and
+binds their hash into the signed target. The current sidecar payload is JSON-based and
+intended for MVP dual-write compatibility. Full validator-grade C2PA/JUMBF production
+compatibility requires integrating `c2patool` or C2PA SDK bindings in a later hardening pass.
+
+## Developer shortcuts
+
+```bash
+make install
+make test
+make compile
+make topics
+make replay
+make smoke
+make metrics
+make down
+```
+
+Worker services write per-service metric snapshots into `.metrics/` by default.
+You can print a consolidated report with:
+
+```bash
+slop-metrics --metrics-dir ./.metrics
+slop-metrics --metrics-dir ./.metrics --json
 ```
 
 ## Repository Policies

@@ -18,6 +18,7 @@ import pygit2
 from src.adapters.crypto_notary import CryptoNotaryAdapter
 from src.adapters.gemini_engine import GeminiEngineAdapter
 from src.adapters.git_ledger import GitLedgerAdapter
+from src.adapters.kafka_event_bus import KafkaEventBus
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.provenance_telemetry import ProvenanceTelemetryAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
@@ -34,13 +35,15 @@ from src.events import (
     StoryTimestamped,
 )
 from src.models import sha256_hex
+from src.parsing import parse_artifact_markdown
+from src.ports import ProvenanceServicePort
 from src.repository import SQLiteRepository
 from src.services.curation_service import (
     build_curation_metadata,
     extract_markdown_body,
     extract_request_id_from_artifact_path,
 )
-from src.services.provenance_service import ProvenanceService, parse_artifact_markdown
+from src.services.provenance_service import ProvenanceService
 from src.services.verification_service import VerificationService
 
 
@@ -96,6 +99,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="gemini-2.5-flash",
         help="Google AI Studio model identifier.",
     )
+    generate_parser.add_argument(
+        "--transport",
+        choices=("local", "kafka"),
+        default=os.getenv("ORCHESTRATOR_TRANSPORT", "local"),
+        help="Execution transport mode.",
+    )
 
     curate_parser = subparsers.add_parser(
         "curate",
@@ -103,6 +112,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     curate_parser.add_argument("--file", required=True, help="Edited artifact file path.")
     curate_parser.add_argument("--repo-path", required=True, help="Ledger repo path.")
+    curate_parser.add_argument(
+        "--transport",
+        choices=("local", "kafka"),
+        default=os.getenv("ORCHESTRATOR_TRANSPORT", "local"),
+        help="Execution transport mode.",
+    )
 
     verify_parser = subparsers.add_parser(
         "verify",
@@ -230,6 +245,10 @@ def _build_provenance_services(
         transparency_log_adapter=transparency_log_adapter,
         tsa_adapter=tsa_adapter,
         key_registry=key_registry,
+        artifact_verifier=CryptoNotaryAdapter(
+            event_bus=EventBus(),
+            require_private_key=False,
+        ),
     )
     return provenance_service, verification_service
 
@@ -245,7 +264,7 @@ def _resolve_tsa_ca_cert_path(explicit_path: str | None) -> Path | None:
 
 async def _anchor_and_timestamp_committed_artifact(
     event_bus: EventBus,
-    provenance_service: ProvenanceService,
+    provenance_service: ProvenanceServicePort,
     repository_path: Path,
     committed_event: StoryCommitted,
 ) -> None:
@@ -303,6 +322,23 @@ async def _anchor_and_timestamp_committed_artifact(
 
 async def _run_generate_command(args: argparse.Namespace) -> int:
     """Run full async pipeline for `generate`."""
+
+    if args.transport == "kafka":
+        bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+        kafka_bus = KafkaEventBus(
+            bootstrap_servers=bootstrap_servers,
+            consumer_group="cli-gateway",
+        )
+        await kafka_bus.start()
+        request_event = StoryRequested(prompt=args.prompt)
+        await kafka_bus.emit(request_event)
+        await kafka_bus.stop()
+        print(
+            "Request queued:",
+            f"request_id={request_event.request_id}",
+            "transport=kafka",
+        )
+        return 0
 
     event_bus = EventBus()
     repository = SQLiteRepository()
@@ -392,11 +428,43 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
         f"commit={committed_event.commit_oid}",
         f"path={committed_event.ledger_path}",
     )
+    await event_bus.drain()
     return 0
 
 
 async def _run_curate_command(args: argparse.Namespace) -> int:
     """Run curation pipeline for an edited markdown artifact file."""
+
+    if args.transport == "kafka":
+        repository = SQLiteRepository()
+        artifact_path = Path(args.file).resolve()
+        if not artifact_path.exists():
+            raise RuntimeError(f"Curated file not found: '{artifact_path}'.")
+        request_id = extract_request_id_from_artifact_path(artifact_path)
+        record = await asyncio.to_thread(repository.get_artifact_record, request_id)
+        if record is None:
+            raise RuntimeError(f"Artifact record not found for request_id={request_id}.")
+        markdown_text = artifact_path.read_text(encoding="utf-8")
+        curated_body = extract_markdown_body(markdown_text)
+        curation_metadata = build_curation_metadata(record.body, curated_body)
+        bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+        kafka_bus = KafkaEventBus(
+            bootstrap_servers=bootstrap_servers,
+            consumer_group="cli-gateway",
+        )
+        await kafka_bus.start()
+        await kafka_bus.emit(
+            StoryCurated(
+                request_id=request_id,
+                curated_body=curated_body,
+                prompt=record.prompt,
+                curation_metadata=curation_metadata,
+                model_id=record.model_id,
+            )
+        )
+        await kafka_bus.stop()
+        print("Curation request queued:", f"request_id={request_id}", "transport=kafka")
+        return 0
 
     event_bus = EventBus()
     repository = SQLiteRepository()
@@ -501,6 +569,7 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
         f"commit={committed_event.commit_oid}",
         f"path={committed_event.ledger_path}",
     )
+    await event_bus.drain()
     return 0
 
 
@@ -558,6 +627,7 @@ async def _run_anchor_command(args: argparse.Namespace) -> int:
         f"entry_hash={outcome.entry_hash}",
         f"log={outcome.log_path}",
     )
+    await event_bus.drain()
     return 0
 
 
@@ -606,6 +676,7 @@ async def _run_timestamp_command(args: argparse.Namespace) -> int:
         f"verified={outcome.verification.ok}",
         f"message={outcome.verification.message}",
     )
+    await event_bus.drain()
     return 0 if outcome.verification.ok else 1
 
 
@@ -652,6 +723,7 @@ async def _run_audit_command(args: argparse.Namespace) -> int:
             report_path=None if args.report_file is None else str(report_path),
         )
     )
+    await event_bus.drain()
     return 0 if passed else 1
 
 

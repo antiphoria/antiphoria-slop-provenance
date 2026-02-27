@@ -11,7 +11,7 @@ from pathlib import Path
 
 import google.generativeai as genai
 
-from src.events import EventBus, StoryGenerated, StoryRequested
+from src.events import EventBusPort, StoryGenerated, StoryRequested
 from src.models import EmbeddedWatermark, UsageMetrics
 
 _DEFAULT_MODEL_ID = "gemini-2.5-flash"
@@ -73,7 +73,7 @@ class GeminiEngineAdapter:
 
     def __init__(
         self,
-        event_bus: EventBus,
+        event_bus: EventBusPort,
         model_id: str = _DEFAULT_MODEL_ID,
         env_path: Path | None = None,
     ) -> None:

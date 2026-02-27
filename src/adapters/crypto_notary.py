@@ -5,14 +5,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 import oqs
-import yaml
 
-from src.events import EventBus, StoryCurated, StoryGenerated, StorySigned
+from src.adapters.c2pa_manifest import build_c2pa_sidecar_manifest
+from src.events import EventBusPort, StoryCurated, StoryGenerated, StorySigned
 from src.models import (
     Artifact,
     CRYPTO_ALGORITHM_ML_DSA_44,
@@ -28,6 +29,7 @@ from src.models import (
     canonical_json_bytes,
     sha256_hex,
 )
+from src.parsing import parse_artifact_markdown
 
 _ML_DSA_ALGORITHM = "ML-DSA-44"
 _ENV_KEY_CANDIDATES = ("PQC_PRIVATE_KEY_PATH", "OQS_PRIVATE_KEY_PATH")
@@ -66,15 +68,15 @@ def _read_env_value(env_key: str, env_path: Path) -> str:
     raise RuntimeError(f"Missing required environment variable '{env_key}'.")
 
 
-def _load_private_key_bytes(private_key_path: Path) -> bytes:
-    """Load secret key bytes from `.pem` or raw-bytes key files."""
+def _load_key_bytes(key_path: Path) -> bytes:
+    """Load key bytes from `.pem` or raw-bytes key files."""
 
-    if not private_key_path.exists():
-        raise RuntimeError(f"PQC private key file not found: '{private_key_path}'.")
+    if not key_path.exists():
+        raise RuntimeError(f"PQC key file not found: '{key_path}'.")
 
-    raw_bytes = private_key_path.read_bytes()
+    raw_bytes = key_path.read_bytes()
     if not raw_bytes:
-        raise RuntimeError(f"PQC private key file is empty: '{private_key_path}'.")
+        raise RuntimeError(f"PQC key file is empty: '{key_path}'.")
 
     try:
         text = raw_bytes.decode("utf-8")
@@ -91,13 +93,13 @@ def _load_private_key_bytes(private_key_path: Path) -> bytes:
         encoded = "".join(encoded_lines)
         if not encoded:
             raise RuntimeError(
-                f"PQC PEM key file is missing encoded payload: '{private_key_path}'."
+                f"PQC PEM key file is missing encoded payload: '{key_path}'."
             )
         try:
             return base64.b64decode(encoded, validate=True)
         except binascii.Error as exc:
             raise RuntimeError(
-                f"PQC PEM key payload is invalid base64: '{private_key_path}'."
+                f"PQC PEM key payload is invalid base64: '{key_path}'."
             ) from exc
 
     return raw_bytes
@@ -115,7 +117,7 @@ class CryptoNotaryAdapter:
 
     def __init__(
         self,
-        event_bus: EventBus,
+        event_bus: EventBusPort,
         env_path: Path | None = None,
         require_private_key: bool = True,
     ) -> None:
@@ -125,6 +127,7 @@ class CryptoNotaryAdapter:
         if require_private_key:
             self._private_key = self._resolve_private_key()
         self._signer_fingerprint = self._resolve_signer_fingerprint()
+        self._enable_c2pa = os.getenv("ENABLE_C2PA", "false").lower() == "true"
 
     async def start(self) -> None:
         """Subscribe to generation and curation events."""
@@ -152,7 +155,7 @@ class CryptoNotaryAdapter:
         key_path = Path(private_key_path_value)
         if not key_path.is_absolute():
             key_path = (self._env_path.parent / key_path).resolve()
-        return _load_private_key_bytes(key_path)
+        return _load_key_bytes(key_path)
 
     def _resolve_signer_fingerprint(self) -> str:
         """Resolve signer fingerprint from env or key hash fallback."""
@@ -182,7 +185,7 @@ class CryptoNotaryAdapter:
         key_path = Path(public_key_path_value)
         if not key_path.is_absolute():
             key_path = (self._env_path.parent / key_path).resolve()
-        return _load_private_key_bytes(key_path)
+        return _load_key_bytes(key_path)
 
     async def _on_story_generated(self, event: StoryGenerated) -> None:
         """Sign generated content and emit a signed envelope event."""
@@ -208,6 +211,7 @@ class CryptoNotaryAdapter:
                 request_id=event.request_id,
                 artifact=artifact,
                 body=event.body,
+                c2pa_manifest_hash=self._c2pa_manifest_hash(artifact, event.body),
             )
         )
 
@@ -235,6 +239,10 @@ class CryptoNotaryAdapter:
                 request_id=event.request_id,
                 artifact=artifact,
                 body=event.curated_body,
+                c2pa_manifest_hash=self._c2pa_manifest_hash(
+                    artifact,
+                    event.curated_body,
+                ),
             )
         )
 
@@ -283,10 +291,14 @@ class CryptoNotaryAdapter:
             ),
             curation=curation,
         )
+        c2pa_manifest_hash = None
+        if self._enable_c2pa:
+            c2pa_manifest = build_c2pa_sidecar_manifest(unsigned_envelope, body)
+            c2pa_manifest_hash = c2pa_manifest.manifest_hash
         signing_target = build_envelope_signing_target(
             envelope=unsigned_envelope,
             payload_sha256_hex=payload_hash,
-            manifest_sha256_hex=None,
+            manifest_sha256_hex=c2pa_manifest_hash,
             prev_hash=None,
         )
         signing_hash = sha256_hex(canonical_json_bytes(signing_target))
@@ -305,6 +317,13 @@ class CryptoNotaryAdapter:
         )
         return unsigned_envelope.model_copy(update={"signature": signature})
 
+    def _c2pa_manifest_hash(self, artifact: Artifact, body: str) -> str | None:
+        """Return C2PA sidecar hash when C2PA dual-write is enabled."""
+
+        if not self._enable_c2pa:
+            return None
+        return build_c2pa_sidecar_manifest(artifact, body).manifest_hash
+
     def verify_artifact(self, file_path: Path) -> bool:
         """Verify an Eternity v1 artifact against canonical signing target.
 
@@ -315,33 +334,40 @@ class CryptoNotaryAdapter:
             True when signature verification succeeds, otherwise False.
         """
 
-        envelope, payload = self._parse_envelope_and_payload(file_path)
+        envelope, payload = parse_artifact_markdown(file_path)
+        return self.verify_artifact_payload(
+            envelope=envelope,
+            payload=payload,
+            manifest_hash=self._resolve_manifest_hash_for_artifact(file_path),
+        )
+
+    def verify_artifact_payload(
+        self,
+        envelope: Artifact,
+        payload: str,
+        manifest_hash: str | None,
+    ) -> bool:
+        """Verify a pre-parsed artifact payload against envelope signature."""
+
         if envelope.signature is None:
             raise RuntimeError("Artifact envelope is missing signature block.")
-
         payload_hash = sha256_hex(payload.encode("utf-8"))
         if payload_hash != envelope.signature.artifact_hash:
             raise RuntimeError("Payload hash mismatch against signed artifactHash.")
-
         signing_target = build_envelope_signing_target(
             envelope=envelope,
             payload_sha256_hex=payload_hash,
-            manifest_sha256_hex=None,
+            manifest_sha256_hex=manifest_hash,
             prev_hash=None,
         )
         signing_hash = sha256_hex(canonical_json_bytes(signing_target))
         try:
-            # YAML block scalars preserve line breaks; normalize to strict base64.
             normalized_signature = "".join(
                 envelope.signature.cryptographic_signature.split()
             )
-            signature_bytes = base64.b64decode(
-                normalized_signature,
-                validate=True,
-            )
+            signature_bytes = base64.b64decode(normalized_signature, validate=True)
         except binascii.Error as exc:
             raise RuntimeError("Invalid base64 signature payload in artifact.") from exc
-
         public_key = self._resolve_public_key()
         with oqs.Signature(_ML_DSA_ALGORITHM) as verifier:
             is_valid = verifier.verify(
@@ -351,42 +377,19 @@ class CryptoNotaryAdapter:
             )
         return bool(is_valid)
 
+    def _resolve_manifest_hash_for_artifact(self, file_path: Path) -> str | None:
+        """Resolve C2PA sidecar hash when a sibling .c2pa file exists."""
+
+        sidecar_path = file_path.with_suffix(".c2pa")
+        if not sidecar_path.exists():
+            return None
+        return sha256_hex(sidecar_path.read_bytes())
+
     def read_artifact_id(self, file_path: Path) -> str:
         """Read artifact UUID from Eternity envelope."""
 
-        envelope, _ = self._parse_envelope_and_payload(file_path)
+        envelope, _ = parse_artifact_markdown(file_path)
         return str(envelope.id)
-
-    def _parse_envelope_and_payload(self, file_path: Path) -> tuple[Artifact, str]:
-        """Parse markdown file into Eternity envelope and raw payload body."""
-
-        if not file_path.exists():
-            raise RuntimeError(f"Artifact file not found: '{file_path}'.")
-        text = file_path.read_text(encoding="utf-8")
-        if not text.startswith("---\n"):
-            raise RuntimeError("Artifact file is missing YAML frontmatter delimiter.")
-
-        delimiter_index = text.find("\n---\n", 4)
-        if delimiter_index == -1:
-            raise RuntimeError("Artifact file has malformed YAML frontmatter.")
-        frontmatter_text = text[4:delimiter_index]
-        payload_text = text[delimiter_index + len("\n---\n") :]
-        footer_marker = "\n-----BEGIN ANTINOMIE-INSTITUT ARTIFACT SIGNATURE-----"
-        footer_index = payload_text.find(footer_marker)
-        if footer_index != -1:
-            payload_text = payload_text[:footer_index]
-        payload = payload_text.strip()
-        if not payload:
-            raise RuntimeError("Artifact payload is empty after metadata stripping.")
-
-        loaded = yaml.safe_load(frontmatter_text)
-        if not isinstance(loaded, dict):
-            raise RuntimeError("Frontmatter YAML did not decode to an object.")
-        try:
-            envelope = Artifact.model_validate(loaded)
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"Failed to parse Eternity envelope: {exc}") from exc
-        return envelope, payload
 
     @staticmethod
     def _derive_title(body: str) -> str:

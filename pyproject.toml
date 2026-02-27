@@ -14,10 +14,20 @@ dependencies = [
     "liboqs-python",
     "pygit2",
     "PyYAML",
+    "aiokafka",
 ]
 
 [project.scripts]
 slop-cli = "src.cli:main"
+slop-generator-service = "src.runtime.generator_service:main"
+slop-notary-service = "src.runtime.notary_service:main"
+slop-ledger-service = "src.runtime.ledger_service:main"
+slop-provenance-service = "src.runtime.provenance_service:main"
+slop-telemetry-service = "src.runtime.telemetry_service:main"
+slop-replay-dlq = "src.runtime.replay_dlq:main"
+slop-bootstrap-topics = "src.runtime.bootstrap_topics:main"
+slop-smoke-kafka = "src.runtime.smoke_kafka_pipeline:main"
+slop-metrics = "src.runtime.metrics_report:main"
 
 [tool.black]
 line-length = 88

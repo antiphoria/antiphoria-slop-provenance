@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 
-from src.events import EventBus, StoryAnchored, StoryAudited, StoryTimestamped
+from src.events import EventBusPort, StoryAnchored, StoryAudited, StoryTimestamped
 from src.repository import SQLiteRepository
 
 
 class ProvenanceTelemetryAdapter:
     """Persist provenance lifecycle events in a structured telemetry log."""
 
-    def __init__(self, event_bus: EventBus, repository: SQLiteRepository) -> None:
+    def __init__(self, event_bus: EventBusPort, repository: SQLiteRepository) -> None:
         self._event_bus = event_bus
         self._repository = repository
 

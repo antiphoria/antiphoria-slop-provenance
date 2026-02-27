@@ -5,17 +5,15 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
-from src.events import EventBus
-from src.adapters.crypto_notary import CryptoNotaryAdapter
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
 from src.adapters.transparency_log import TransparencyLogAdapter
-from src.models import sha256_hex
+from src.models import Artifact, sha256_hex
+from src.parsing import parse_artifact_markdown
 from src.repository import SQLiteRepository
 from src.services.curation_service import extract_request_id_from_artifact_path
-from src.services.provenance_service import parse_artifact_markdown
 
 
 @dataclass(frozen=True)
@@ -41,6 +39,18 @@ class AuditReport:
         return asdict(self)
 
 
+class ArtifactVerifierPort(Protocol):
+    """Port for artifact signature verification."""
+
+    def verify_artifact_payload(
+        self,
+        envelope: Artifact,
+        payload: str,
+        manifest_hash: str | None,
+    ) -> bool:
+        """Verify one parsed envelope+payload pair."""
+
+
 class VerificationService:
     """Orchestrates envelope, signature, anchor, timestamp, and key checks."""
 
@@ -50,11 +60,13 @@ class VerificationService:
         transparency_log_adapter: TransparencyLogAdapter,
         tsa_adapter: RFC3161TSAAdapter | None,
         key_registry: KeyRegistryAdapter,
+        artifact_verifier: ArtifactVerifierPort,
     ) -> None:
         self._repository = repository
         self._transparency_log_adapter = transparency_log_adapter
         self._tsa_adapter = tsa_adapter
         self._key_registry = key_registry
+        self._artifact_verifier = artifact_verifier
 
     def audit_artifact(
         self,
@@ -93,10 +105,15 @@ class VerificationService:
                     envelope.signature.verification_anchor.signer_fingerprint
                 )
                 key_status = key_status_lookup or "unregistered"
-            signature_valid = CryptoNotaryAdapter(
-                event_bus=EventBus(),
-                require_private_key=False,
-            ).verify_artifact(artifact_path)
+            manifest_hash = None
+            sidecar_path = artifact_path.with_suffix(".c2pa")
+            if sidecar_path.exists():
+                manifest_hash = sha256_hex(sidecar_path.read_bytes())
+            signature_valid = self._artifact_verifier.verify_artifact_payload(
+                envelope=envelope,
+                payload=payload,
+                manifest_hash=manifest_hash,
+            )
             anchor_matches = self._transparency_log_adapter.find_entries_by_artifact_hash(
                 digest_hex
             )

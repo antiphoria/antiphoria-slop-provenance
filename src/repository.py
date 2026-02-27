@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter, TimestampVerification
 from src.models import Artifact
@@ -189,6 +189,15 @@ class SQLiteRepository:
                     artifact_id TEXT,
                     payload_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
+                );
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS processed_messages (
+                    message_id TEXT PRIMARY KEY,
+                    consumer_name TEXT NOT NULL,
+                    processed_at TEXT NOT NULL
                 );
                 """
             )
@@ -558,8 +567,6 @@ class SQLiteRepository:
     ) -> str:
         """Persist one machine-readable audit report."""
 
-        from uuid import uuid4
-
         audit_id = str(uuid4())
         created_at = _utc_now_iso()
         with self._connect() as connection:
@@ -641,6 +648,24 @@ class SQLiteRepository:
                 "DELETE FROM artifact_records WHERE request_id = ?;",
                 (str(request_id),),
             )
+
+    def try_mark_message_processed(self, message_id: str, consumer_name: str) -> bool:
+        """Try to mark one message id as processed.
+
+        Returns:
+            True when inserted for the first time, False if already processed.
+        """
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO processed_messages (
+                    message_id, consumer_name, processed_at
+                ) VALUES (?, ?, ?);
+                """,
+                (message_id, consumer_name, _utc_now_iso()),
+            )
+            return cursor.rowcount == 1
 
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> ArtifactRecord:

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Awaitable, Callable, TypeVar, cast
+from typing import Awaitable, Callable, Protocol, TypeVar, cast
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -39,6 +39,7 @@ class StoryRequested(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     request_id: UUID = Field(default_factory=uuid4)
+    event_version: str = Field(default="v1")
     prompt: str = Field(min_length=1)
     requested_at: datetime = Field(default_factory=_utc_now)
 
@@ -66,6 +67,7 @@ class StoryGenerated(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     request_id: UUID
+    event_version: str = Field(default="v1")
     prompt: str = Field(min_length=1)
     title: str = Field(min_length=1)
     body: str = Field(min_length=1)
@@ -94,8 +96,11 @@ class StorySigned(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     request_id: UUID
+    event_version: str = Field(default="v1")
     artifact: Artifact
     body: str = Field(min_length=1)
+    c2pa_manifest_hash: str | None = None
+    c2pa_manifest_bytes_ref: str | None = None
     signed_at: datetime = Field(default_factory=_utc_now)
 
 
@@ -112,6 +117,7 @@ class StoryCommitted(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     request_id: UUID
+    event_version: str = Field(default="v1")
     ledger_path: str = Field(min_length=1)
     commit_oid: str = Field(min_length=1)
     committed_at: datetime = Field(default_factory=_utc_now)
@@ -133,6 +139,7 @@ class StoryAnchored(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     request_id: UUID | None = None
+    event_version: str = Field(default="v1")
     artifact_id: UUID
     artifact_hash: str = Field(min_length=64, max_length=64)
     transparency_entry_id: str = Field(min_length=1)
@@ -158,6 +165,7 @@ class StoryTimestamped(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     request_id: UUID | None = None
+    event_version: str = Field(default="v1")
     artifact_id: UUID
     artifact_hash: str = Field(min_length=64, max_length=64)
     tsa_url: str = Field(min_length=1)
@@ -181,6 +189,7 @@ class StoryAudited(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     request_id: UUID | None = None
+    event_version: str = Field(default="v1")
     artifact_id: UUID | None = None
     audit_passed: bool
     report_path: str | None = None
@@ -201,6 +210,7 @@ class StoryCurated(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     request_id: UUID
+    event_version: str = Field(default="v1")
     curated_body: str = Field(min_length=1)
     prompt: str = Field(min_length=1)
     curation_metadata: Curation
@@ -221,13 +231,41 @@ class EventHandlerError(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     event_type: str = Field(min_length=1)
+    event_version: str = Field(default="v1")
     handler_name: str = Field(min_length=1)
     error_type: str = Field(min_length=1)
     error_message: str = Field(min_length=1)
     occurred_at: datetime = Field(default_factory=_utc_now)
 
 
-class EventBus:
+class EventBusPort(Protocol):
+    """Abstract event bus port used by adapters and services."""
+
+    async def subscribe(
+        self,
+        event_type: type[EventT],
+        handler: EventHandler[EventT],
+    ) -> None:
+        """Register an async handler for an event type."""
+
+    async def unsubscribe(
+        self,
+        event_type: type[EventT],
+        handler: EventHandler[EventT],
+    ) -> None:
+        """Remove a previously registered event handler."""
+
+    async def subscribe_errors(self, handler: ErrorHandler) -> None:
+        """Register an async handler for event-dispatch errors."""
+
+    async def unsubscribe_errors(self, handler: ErrorHandler) -> None:
+        """Remove a previously registered event-dispatch error handler."""
+
+    async def emit(self, event: EventT) -> None:
+        """Dispatch one typed event instance to subscribers."""
+
+
+class InMemoryEventBus:
     """Typed asynchronous pub/sub event bus.
 
     Subscribers register an async handler for a specific event model class.
@@ -362,3 +400,14 @@ class EventBus:
                 await error_handler(payload)
             except Exception:
                 continue
+
+    async def drain(self) -> None:
+        """Wait until all currently scheduled handler tasks complete."""
+
+        tasks = tuple(self._tasks)
+        if not tasks:
+            return
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+EventBus = InMemoryEventBus

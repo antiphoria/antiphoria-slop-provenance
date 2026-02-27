@@ -7,12 +7,14 @@ and commits artifacts to a local repository through pygit2.
 from __future__ import annotations
 
 import asyncio
+import os
 import textwrap
 from pathlib import Path
 
 import pygit2
 
-from src.events import EventBus, StoryCommitted, StorySigned
+from src.adapters.c2pa_manifest import build_c2pa_sidecar_manifest
+from src.events import EventBusPort, StoryCommitted, StorySigned
 
 
 class GitLedgerAdapter:
@@ -20,7 +22,7 @@ class GitLedgerAdapter:
 
     def __init__(
         self,
-        event_bus: EventBus,
+        event_bus: EventBusPort,
         repository_path: Path | None = None,
         artifacts_directory: str = "artifacts",
     ) -> None:
@@ -39,6 +41,7 @@ class GitLedgerAdapter:
         self._artifacts_directory = artifacts_directory.strip("/\\")
         self._repository_path = (repository_path or Path.cwd()).resolve()
         self._repo = self._open_repository(self._repository_path)
+        self._enable_c2pa = os.getenv("ENABLE_C2PA", "false").lower() == "true"
 
     async def start(self) -> None:
         """Subscribe to signed-story events."""
@@ -54,6 +57,12 @@ class GitLedgerAdapter:
 
         markdown_payload = self._render_markdown(event)
         relative_path = self._build_relative_artifact_path(event)
+        c2pa_sidecar_payload: bytes | None = None
+        if self._enable_c2pa and event.c2pa_manifest_hash is not None:
+            c2pa_artifact = build_c2pa_sidecar_manifest(event.artifact, event.body)
+            if c2pa_artifact.manifest_hash != event.c2pa_manifest_hash:
+                raise RuntimeError("C2PA manifest hash mismatch while writing sidecar.")
+            c2pa_sidecar_payload = c2pa_artifact.manifest_bytes
         commit_message = (
             f"ledger: notarize {event.artifact.title} "
             f"({event.request_id})"
@@ -64,6 +73,7 @@ class GitLedgerAdapter:
             str(event.request_id),
             relative_path,
             markdown_payload,
+            c2pa_sidecar_payload,
             commit_message,
         )
         await self._event_bus.emit(
@@ -253,6 +263,7 @@ class GitLedgerAdapter:
         request_id: str,
         relative_path: str,
         markdown_payload: str,
+        c2pa_sidecar_payload: bytes | None,
         commit_message: str,
     ) -> str:
         """Synchronously write blob/tree and create branch-isolated commit.
@@ -270,10 +281,16 @@ class GitLedgerAdapter:
         ref_name = f"refs/heads/{branch_name}"
         parent_commit = self._get_branch_head(ref_name)
 
-        tree_id = self._build_root_tree_oid(relative_path, markdown_payload)
+        tree_id = self._build_root_tree_oid(
+            relative_path=relative_path,
+            markdown_payload=markdown_payload,
+            c2pa_sidecar_payload=c2pa_sidecar_payload,
+        )
 
         signature = self._resolve_commit_signature()
         parents: list[pygit2.Oid] = [parent_commit.id] if parent_commit else []
+        if parent_commit is not None and parent_commit.tree_id == tree_id:
+            return str(parent_commit.id)
 
         commit_id = self._repo.create_commit(
             ref_name,
@@ -297,7 +314,12 @@ class GitLedgerAdapter:
             raise RuntimeError(f"Invalid branch head object for ref '{ref_name}'.")
         return target
 
-    def _build_root_tree_oid(self, relative_path: str, markdown_payload: str) -> pygit2.Oid:
+    def _build_root_tree_oid(
+        self,
+        relative_path: str,
+        markdown_payload: str,
+        c2pa_sidecar_payload: bytes | None,
+    ) -> pygit2.Oid:
         """Build a strict two-level ODB tree for artifacts/<request_id>.md."""
 
         path_obj = Path(relative_path)
@@ -310,6 +332,10 @@ class GitLedgerAdapter:
         blob_oid = self._repo.create_blob(markdown_payload.encode("utf-8"))
         artifacts_tb = self._repo.TreeBuilder()
         artifacts_tb.insert(path_obj.name, blob_oid, pygit2.GIT_FILEMODE_BLOB)
+        if c2pa_sidecar_payload is not None:
+            sidecar_blob_oid = self._repo.create_blob(c2pa_sidecar_payload)
+            sidecar_name = f"{path_obj.stem}.c2pa"
+            artifacts_tb.insert(sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB)
         artifacts_oid = artifacts_tb.write()
 
         root_tb = self._repo.TreeBuilder()
