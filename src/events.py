@@ -117,6 +117,76 @@ class StoryCommitted(BaseModel):
     committed_at: datetime = Field(default_factory=_utc_now)
 
 
+class StoryAnchored(BaseModel):
+    """Event emitted when an artifact hash is anchored.
+
+    Attributes:
+        request_id: Correlation ID from the generation/curation flow if known.
+        artifact_id: Artifact UUID from frontmatter envelope.
+        artifact_hash: SHA-256 payload digest that was anchored.
+        transparency_entry_id: Append-only transparency entry identifier.
+        transparency_entry_hash: Hash of the transparency entry payload.
+        log_path: Local transparency log file path.
+        anchored_at: UTC timestamp for event creation.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    request_id: UUID | None = None
+    artifact_id: UUID
+    artifact_hash: str = Field(min_length=64, max_length=64)
+    transparency_entry_id: str = Field(min_length=1)
+    transparency_entry_hash: str = Field(min_length=64, max_length=64)
+    log_path: str = Field(min_length=1)
+    anchored_at: datetime = Field(default_factory=_utc_now)
+
+
+class StoryTimestamped(BaseModel):
+    """Event emitted when RFC3161 timestamping is completed.
+
+    Attributes:
+        request_id: Correlation ID from the generation/curation flow if known.
+        artifact_id: Artifact UUID from frontmatter envelope.
+        artifact_hash: SHA-256 payload digest used for RFC3161 query.
+        tsa_url: RFC3161 TSA endpoint URL.
+        digest_algorithm: Digest algorithm used for timestamp query.
+        verification_status: Timestamp verification status (`verified` or `failed`).
+        verification_message: Human-readable verification details.
+        timestamped_at: UTC timestamp for event creation.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    request_id: UUID | None = None
+    artifact_id: UUID
+    artifact_hash: str = Field(min_length=64, max_length=64)
+    tsa_url: str = Field(min_length=1)
+    digest_algorithm: str = Field(min_length=1)
+    verification_status: str = Field(min_length=1)
+    verification_message: str = Field(min_length=1)
+    timestamped_at: datetime = Field(default_factory=_utc_now)
+
+
+class StoryAudited(BaseModel):
+    """Event emitted after generating a machine-readable audit report.
+
+    Attributes:
+        request_id: Correlation ID from the generation/curation flow if known.
+        artifact_id: Artifact UUID from frontmatter envelope when resolved.
+        audit_passed: True when full-chain checks pass, otherwise False.
+        report_path: Filesystem path for emitted audit report when persisted.
+        audited_at: UTC timestamp for event creation.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    request_id: UUID | None = None
+    artifact_id: UUID | None = None
+    audit_passed: bool
+    report_path: str | None = None
+    audited_at: datetime = Field(default_factory=_utc_now)
+
+
 class StoryCurated(BaseModel):
     """Event emitted when a human-curated artifact is submitted.
 

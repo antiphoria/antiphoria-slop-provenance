@@ -6,6 +6,7 @@ persists generated/signed artifact lifecycle records in `state.db`.
 
 from __future__ import annotations
 
+import base64
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
+from src.adapters.rfc3161_tsa import RFC3161TSAAdapter, TimestampVerification
 from src.models import Artifact
 
 ArtifactLifecycleStatus = Literal[
@@ -123,6 +125,73 @@ class SQLiteRepository:
                     ADD COLUMN prompt TEXT NOT NULL DEFAULT '';
                     """
                 )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS transparency_log_records (
+                    entry_id TEXT PRIMARY KEY,
+                    artifact_hash TEXT NOT NULL,
+                    artifact_id TEXT NOT NULL,
+                    request_id TEXT,
+                    source_file TEXT NOT NULL,
+                    log_path TEXT NOT NULL,
+                    previous_entry_hash TEXT,
+                    entry_hash TEXT NOT NULL,
+                    published_at TEXT NOT NULL,
+                    remote_receipt TEXT
+                );
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS timestamp_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    artifact_hash TEXT NOT NULL,
+                    artifact_id TEXT NOT NULL,
+                    request_id TEXT,
+                    tsa_url TEXT NOT NULL,
+                    token_base64 TEXT NOT NULL,
+                    digest_algorithm TEXT NOT NULL,
+                    verification_status TEXT NOT NULL,
+                    verification_message TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS key_registry (
+                    fingerprint TEXT PRIMARY KEY,
+                    key_version TEXT,
+                    status TEXT NOT NULL,
+                    metadata_json TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS audit_reports (
+                    audit_id TEXT PRIMARY KEY,
+                    artifact_id TEXT NOT NULL,
+                    request_id TEXT,
+                    report_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS provenance_event_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_type TEXT NOT NULL,
+                    request_id TEXT,
+                    artifact_id TEXT,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                """
+            )
 
     def create_artifact_record(
         self,
@@ -305,6 +374,260 @@ class SQLiteRepository:
                 """,
                 (status, ledger_path, commit_oid, now, str(request_id)),
             )
+
+    def create_transparency_log_record(
+        self,
+        entry_id: str,
+        artifact_hash: str,
+        artifact_id: str,
+        request_id: str | None,
+        source_file: str,
+        log_path: str,
+        previous_entry_hash: str | None,
+        entry_hash: str,
+        published_at: str,
+        remote_receipt: str | None,
+    ) -> None:
+        """Persist one transparency log publication record."""
+
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO transparency_log_records (
+                    entry_id, artifact_hash, artifact_id, request_id, source_file, log_path,
+                    previous_entry_hash, entry_hash, published_at, remote_receipt
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    entry_id,
+                    artifact_hash,
+                    artifact_id,
+                    request_id,
+                    source_file,
+                    log_path,
+                    previous_entry_hash,
+                    entry_hash,
+                    published_at,
+                    remote_receipt,
+                ),
+            )
+
+    def create_timestamp_record(
+        self,
+        artifact_hash: str,
+        artifact_id: str,
+        request_id: str | None,
+        tsa_url: str,
+        token_base64: str,
+        digest_algorithm: str,
+        verification_status: str,
+        verification_message: str,
+    ) -> str:
+        """Persist one RFC3161 token record and return creation timestamp."""
+
+        created_at = _utc_now_iso()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO timestamp_records (
+                    artifact_hash, artifact_id, request_id, tsa_url, token_base64,
+                    digest_algorithm, verification_status, verification_message, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    artifact_hash,
+                    artifact_id,
+                    request_id,
+                    tsa_url,
+                    token_base64,
+                    digest_algorithm,
+                    verification_status,
+                    verification_message,
+                    created_at,
+                ),
+            )
+        return created_at
+
+    def get_latest_timestamp_record(self, artifact_hash: str) -> sqlite3.Row | None:
+        """Return latest timestamp record for one artifact hash."""
+
+        with self._connect() as connection:
+            return connection.execute(
+                """
+                SELECT *
+                FROM timestamp_records
+                WHERE artifact_hash = ?
+                ORDER BY id DESC
+                LIMIT 1;
+                """,
+                (artifact_hash,),
+            ).fetchone()
+
+    def verify_latest_timestamp_record(
+        self,
+        artifact_hash: str,
+        tsa_adapter: RFC3161TSAAdapter,
+        tsa_ca_cert_path: Path | None,
+    ) -> TimestampVerification:
+        """Verify latest timestamp token against current artifact hash."""
+
+        record = self.get_latest_timestamp_record(artifact_hash)
+        if record is None:
+            return TimestampVerification(
+                ok=False,
+                message=f"No timestamp token found for artifact_hash={artifact_hash}.",
+            )
+        token_b64 = str(record["token_base64"])
+        token_bytes = base64.b64decode(token_b64.encode("ascii"))
+        return tsa_adapter.verify_timestamp_token(
+            digest_hex=artifact_hash,
+            token_bytes=token_bytes,
+            tsa_ca_cert_path=tsa_ca_cert_path,
+            digest_algorithm=str(record["digest_algorithm"]),
+        )
+
+    def upsert_key_registry_entry(
+        self,
+        fingerprint: str,
+        key_version: str | None,
+        status: str,
+        metadata_json: str | None,
+    ) -> None:
+        """Create or update key registry entry."""
+
+        now = _utc_now_iso()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO key_registry (
+                    fingerprint, key_version, status, metadata_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(fingerprint) DO UPDATE SET
+                    key_version = excluded.key_version,
+                    status = excluded.status,
+                    metadata_json = excluded.metadata_json,
+                    updated_at = excluded.updated_at;
+                """,
+                (fingerprint, key_version, status, metadata_json, now, now),
+            )
+
+    def update_key_registry_status(self, fingerprint: str, status: str) -> None:
+        """Update lifecycle status for one key fingerprint."""
+
+        now = _utc_now_iso()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE key_registry
+                SET status = ?, updated_at = ?
+                WHERE fingerprint = ?;
+                """,
+                (status, now, fingerprint),
+            )
+
+    def get_key_registry_entry(self, fingerprint: str) -> dict[str, str] | None:
+        """Get key registry entry by signer fingerprint."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT fingerprint, key_version, status, metadata_json, created_at, updated_at
+                FROM key_registry
+                WHERE fingerprint = ?;
+                """,
+                (fingerprint,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "fingerprint": str(row["fingerprint"]),
+            "key_version": "" if row["key_version"] is None else str(row["key_version"]),
+            "status": str(row["status"]),
+            "metadata_json": (
+                "" if row["metadata_json"] is None else str(row["metadata_json"])
+            ),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+        }
+
+    def create_audit_report(
+        self,
+        artifact_id: str,
+        request_id: str | None,
+        report_json: str,
+    ) -> str:
+        """Persist one machine-readable audit report."""
+
+        from uuid import uuid4
+
+        audit_id = str(uuid4())
+        created_at = _utc_now_iso()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO audit_reports (
+                    audit_id, artifact_id, request_id, report_json, created_at
+                ) VALUES (?, ?, ?, ?, ?);
+                """,
+                (audit_id, artifact_id, request_id, report_json, created_at),
+            )
+        return audit_id
+
+    def create_provenance_event_log(
+        self,
+        event_type: str,
+        request_id: str | None,
+        artifact_id: str | None,
+        payload_json: str,
+    ) -> None:
+        """Persist one provenance lifecycle event payload."""
+
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO provenance_event_log (
+                    event_type, request_id, artifact_id, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?);
+                """,
+                (event_type, request_id, artifact_id, payload_json, _utc_now_iso()),
+            )
+
+    def list_provenance_event_logs(
+        self,
+        limit: int = 50,
+        event_type: str | None = None,
+    ) -> list[dict[str, str | int | None]]:
+        """List recent provenance lifecycle events with optional type filter."""
+
+        if limit <= 0:
+            raise RuntimeError("event log limit must be a positive integer.")
+        query = (
+            "SELECT id, event_type, request_id, artifact_id, payload_json, created_at "
+            "FROM provenance_event_log"
+        )
+        params: tuple[object, ...] = ()
+        if event_type is not None:
+            query += " WHERE event_type = ?"
+            params = (event_type,)
+        query += " ORDER BY id DESC LIMIT ?;"
+        params = (*params, limit)
+        with self._connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+        return [
+            {
+                "id": int(row["id"]),
+                "event_type": str(row["event_type"]),
+                "request_id": (
+                    None if row["request_id"] is None else str(row["request_id"])
+                ),
+                "artifact_id": (
+                    None if row["artifact_id"] is None else str(row["artifact_id"])
+                ),
+                "payload_json": str(row["payload_json"]),
+                "created_at": str(row["created_at"]),
+            }
+            for row in rows
+        ]
 
     def delete_artifact_record(self, request_id: UUID) -> None:
         """Delete one lifecycle record.
