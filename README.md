@@ -2,6 +2,8 @@
 
 Event-driven provenance engine for short-story generation, cryptographic certification, and long-term auditability.
 
+> **Privacy warning:** All prompts are cryptographically sealed into artifacts. Do not include PII, confidential data, or trade secrets in your prompts—they cannot be un-published once signed and committed.
+
 ## What it does
 
 - Generates stories from prompts using Gemini.
@@ -19,7 +21,19 @@ pip install -e .
 
 ## Environment
 
-Create `.env` in the project root:
+Copy the example environment file and fill in your values. **Never commit `.env`**—it contains secrets.
+
+**Unix / macOS / Git Bash:**
+```bash
+cp .env.example .env
+```
+
+**PowerShell:**
+```powershell
+Copy-Item .env.example .env
+```
+
+Edit `.env` and set at least:
 
 ```dotenv
 GOOGLE_API_KEY=...
@@ -142,6 +156,7 @@ compatibility requires integrating `c2patool` or C2PA SDK bindings in a later ha
 make install
 make test
 make compile
+make requirements   # Regenerate requirements.txt from requirements.in (for Docker)
 make topics
 make replay
 make smoke

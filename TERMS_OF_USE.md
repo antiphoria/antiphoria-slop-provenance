@@ -25,3 +25,7 @@ You are solely responsible for the truthfulness and legal consequences of any pr
 ## 6. Content licensing
 
 Content licensing and distribution decisions are governed by `CONTENT_LICENSE_POLICY.md` and your own legal obligations.
+
+## 7. Prompt and artifact immutability
+
+**All prompts are cryptographically sealed into the public artifacts.** Once an artifact is signed, committed to the ledger, and published, the prompt and generated content become part of an immutable hash chain. Do not include Personally Identifiable Information (PII), confidential data, trade secrets, or proprietary source code in your prompts. Such data cannot be un-published without breaking the provenance chain.

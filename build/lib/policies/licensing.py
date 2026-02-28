@@ -38,12 +38,3 @@ DEFAULT_CONTENT_POLICIES: tuple[ContentLicensePolicy, ...] = (
         description="Fully synthetic outputs default to CC0 dedication.",
     ),
 )
-
-
-def get_license_id(provenance_class: ProvenanceClass) -> str:
-    """Return the default license_id for a provenance class per CONTENT_LICENSE_POLICY."""
-
-    for policy in DEFAULT_CONTENT_POLICIES:
-        if policy.provenance_class == provenance_class:
-            return policy.license_id
-    raise ValueError(f"Unknown provenance class: {provenance_class!r}")

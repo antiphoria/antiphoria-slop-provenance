@@ -9,12 +9,12 @@ description = "Event-driven slop orchestration MVP."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "google-generativeai",
-    "pydantic",
-    "liboqs-python",
-    "pygit2",
-    "PyYAML",
-    "aiokafka",
+    "google-generativeai>=0.4.0,<0.9.0",
+    "pydantic>=2.5.0,<3.0.0",
+    "liboqs-python>=0.14.0",
+    "pygit2>=1.14.0,<2.0.0",
+    "PyYAML>=6.0",
+    "aiokafka>=0.10.0",
 ]
 
 [project.scripts]

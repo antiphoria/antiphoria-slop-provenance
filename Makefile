@@ -1,7 +1,12 @@
-.PHONY: install test compile up down logs topics workers replay migrate smoke metrics
+.PHONY: install test compile up down logs topics workers replay migrate smoke metrics requirements
 
 install:
 	pip install -e .
+
+# Regenerate requirements.txt from requirements.in (for deterministic Docker builds)
+requirements:
+	pip install pip-tools
+	pip-compile requirements.in -o requirements.txt
 
 test:
 	python -m unittest discover -s tests

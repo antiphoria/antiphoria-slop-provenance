@@ -13,7 +13,6 @@ import google.generativeai as genai
 
 from src.events import EventBusPort, StoryGenerated, StoryRequested
 from src.models import EmbeddedWatermark, UsageMetrics
-from src.policies.licensing import get_license_id
 
 _DEFAULT_MODEL_ID = "gemini-2.5-flash"
 _DEFAULT_SYSTEM_INSTRUCTION = "You are a brutalist AI archivist."
@@ -21,6 +20,7 @@ _DEFAULT_TEMPERATURE = 0.7
 _DEFAULT_TOP_P = 0.95
 _DEFAULT_TOP_K = 40
 _DEFAULT_CONTENT_TYPE = "text/markdown"
+_DEFAULT_LICENSE = "Antinomie-Hybrid-Proprietary"
 
 
 def _read_env_value(env_key: str, env_path: Path) -> str:
@@ -124,7 +124,7 @@ class GeminiEngineAdapter:
                 top_p=_DEFAULT_TOP_P,
                 top_k=_DEFAULT_TOP_K,
                 content_type=_DEFAULT_CONTENT_TYPE,
-                license=get_license_id("synthetic"),
+                license=_DEFAULT_LICENSE,
                 usage_metrics=UsageMetrics(
                     promptTokens=len(event.prompt.split()),
                     completionTokens=len(generated_text.split()),

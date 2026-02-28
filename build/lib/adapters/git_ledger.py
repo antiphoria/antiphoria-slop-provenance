@@ -16,28 +16,6 @@ import pygit2
 from src.adapters.c2pa_manifest import build_c2pa_sidecar_manifest
 from src.events import EventBusPort, StoryCommitted, StorySigned
 
-_DEFAULT_LEDGER_AUTHOR_NAME = "Slop Orchestrator"
-_DEFAULT_LEDGER_AUTHOR_EMAIL = "bot@antinomie.local"
-
-
-def _read_env_optional(env_key: str, env_path: Path) -> str | None:
-    """Read optional env var from process or .env file. Returns None if unset."""
-
-    value = os.getenv(env_key)
-    if value and value.strip():
-        return value.strip().strip("'\"")
-    if not env_path.exists():
-        return None
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, val = line.split("=", 1)
-        if key.strip() == env_key:
-            parsed = val.strip().strip("'\"")
-            return parsed if parsed else None
-    return None
-
 
 class GitLedgerAdapter:
     """Event-driven git ledger publisher for signed artifacts."""
@@ -47,7 +25,6 @@ class GitLedgerAdapter:
         event_bus: EventBusPort,
         repository_path: Path | None = None,
         artifacts_directory: str = "artifacts",
-        env_path: Path | None = None,
     ) -> None:
         """Initialize adapter and validate local git repository path.
 
@@ -55,7 +32,6 @@ class GitLedgerAdapter:
             event_bus: Shared asynchronous event bus instance.
             repository_path: Optional local git repository path.
             artifacts_directory: Relative directory for markdown artifacts.
-            env_path: Optional path to .env for LEDGER_AUTHOR_NAME/EMAIL overrides.
 
         Raises:
             RuntimeError: If repository path is invalid or not a git repository.
@@ -64,7 +40,6 @@ class GitLedgerAdapter:
         self._event_bus = event_bus
         self._artifacts_directory = artifacts_directory.strip("/\\")
         self._repository_path = (repository_path or Path.cwd()).resolve()
-        self._env_path = env_path or Path(".env")
         self._repo = self._open_repository(self._repository_path)
         self._enable_c2pa = os.getenv("ENABLE_C2PA", "false").lower() == "true"
 
@@ -270,22 +245,17 @@ class GitLedgerAdapter:
         )
 
     def _resolve_commit_signature(self) -> pygit2.Signature:
-        """Resolve git author/committer signature.
+        """Resolve git author/committer signature from repository config."""
 
-        Priority: LEDGER_AUTHOR_NAME/EMAIL (env or .env) > git config > default bot.
-        Use env overrides to avoid burning personal PII into the public ledger.
-        """
-
-        name = _read_env_optional("LEDGER_AUTHOR_NAME", self._env_path)
-        email = _read_env_optional("LEDGER_AUTHOR_EMAIL", self._env_path)
-        if name and email:
-            return pygit2.Signature(name, email)
         try:
-            name = name or self._repo.config["user.name"]
-            email = email or self._repo.config["user.email"]
-        except KeyError:
-            name = name or _DEFAULT_LEDGER_AUTHOR_NAME
-            email = email or _DEFAULT_LEDGER_AUTHOR_EMAIL
+            name = self._repo.config["user.name"]
+            email = self._repo.config["user.email"]
+        except KeyError as exc:
+            raise RuntimeError(
+                "Git user identity is missing. Configure 'user.name' and "
+                "'user.email' for the ledger repository."
+            ) from exc
+
         return pygit2.Signature(name, email)
 
     def _commit_markdown_sync(

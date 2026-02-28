@@ -5,16 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
-from typing import Annotated, Any, Literal, TypeAlias
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 CRYPTO_ALGORITHM_ML_DSA_44 = "CRYSTALS-Dilithium (NIST ML-DSA-44)"
 """Canonical algorithm label required in frontmatter."""
-
-PolicyLicenseId: TypeAlias = Literal["ARR", "CC-BY-4.0", "CC0-1.0"]
-"""Canonical license IDs from CONTENT_LICENSE_POLICY. Use | str for custom escape hatch."""
 
 
 class StrictModel(BaseModel):
@@ -110,10 +107,7 @@ class Artifact(StrictModel):
     title: str = Field(min_length=1)
     timestamp: datetime
     content_type: str = Field(alias="contentType", min_length=1)
-    license: Annotated[
-        PolicyLicenseId | str,
-        Field(min_length=1),
-    ]
+    license: str = Field(min_length=1)
     provenance: Provenance
     curation: Curation | None = None
     signature: SignatureBlock | None = None

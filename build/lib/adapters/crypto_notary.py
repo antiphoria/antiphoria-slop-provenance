@@ -14,7 +14,6 @@ import oqs
 
 from src.adapters.c2pa_manifest import build_c2pa_sidecar_manifest
 from src.events import EventBusPort, StoryCurated, StoryGenerated, StorySigned
-from src.policies.licensing import get_license_id
 from src.models import (
     Artifact,
     CRYPTO_ALGORITHM_ML_DSA_44,
@@ -37,6 +36,7 @@ _ENV_KEY_CANDIDATES = ("PQC_PRIVATE_KEY_PATH", "OQS_PRIVATE_KEY_PATH")
 _PUBLIC_ENV_KEY_CANDIDATES = ("PQC_PUBLIC_KEY_PATH", "OQS_PUBLIC_KEY_PATH")
 _DEFAULT_ENGINE_VERSION = "slop-orchestrator-v1.0.0"
 _DEFAULT_CONTENT_TYPE = "text/markdown"
+_DEFAULT_LICENSE = "Antinomie-Hybrid-Proprietary"
 
 
 def _read_env_value(env_key: str, env_path: Path) -> str:
@@ -231,7 +231,7 @@ class CryptoNotaryAdapter:
             usage_metrics=None,
             embedded_watermark=None,
             content_type=_DEFAULT_CONTENT_TYPE,
-            license=get_license_id("hybrid"),
+            license=_DEFAULT_LICENSE,
             curation=event.curation_metadata,
         )
         await self._event_bus.emit(

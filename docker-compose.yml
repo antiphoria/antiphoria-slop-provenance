@@ -13,7 +13,7 @@ services:
       - ALLOW_PLAINTEXT_LISTENER=yes
       - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
     ports:
-      - "9092:9092"
+      - "127.0.0.1:9092:9092"
 
   generator-service:
     build: .
@@ -34,6 +34,8 @@ services:
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - ORCHESTRATOR_TRANSPORT=kafka
+    volumes:
+      - ./keys:/app/keys:ro
     depends_on:
       - kafka
 
