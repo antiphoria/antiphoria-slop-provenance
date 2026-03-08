@@ -550,7 +550,9 @@ class SQLiteRepository:
             return None
         return {
             "fingerprint": str(row["fingerprint"]),
-            "key_version": "" if row["key_version"] is None else str(row["key_version"]),
+            "key_version": ""
+            if row["key_version"] is None
+            else str(row["key_version"]),
             "status": str(row["status"]),
             "metadata_json": (
                 "" if row["metadata_json"] is None else str(row["metadata_json"])

@@ -117,7 +117,9 @@ class Artifact(StrictModel):
     provenance: Provenance
     curation: Curation | None = None
     signature: SignatureBlock | None = None
-    record_status: Literal["unverified"] = Field(alias="recordStatus", default="unverified")
+    record_status: Literal["unverified"] = Field(
+        alias="recordStatus", default="unverified"
+    )
 
     def to_frontmatter_dict(self) -> dict[str, object]:
         """Return frontmatter dictionary with alias keys."""

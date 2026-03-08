@@ -15,6 +15,7 @@ import pygit2
 
 from src.adapters.c2pa_manifest import build_c2pa_sidecar_manifest
 from src.events import EventBusPort, StoryCommitted, StorySigned
+from src.secrets_guard import assert_secret_free
 
 _DEFAULT_LEDGER_AUTHOR_NAME = "Slop Orchestrator"
 _DEFAULT_LEDGER_AUTHOR_EMAIL = "bot@antinomie.local"
@@ -80,6 +81,7 @@ class GitLedgerAdapter:
             event: Signed story payload emitted by the notary.
         """
 
+        self._assert_publishable_content_is_secret_free(event)
         markdown_payload = self._render_markdown(event)
         relative_path = self._build_relative_artifact_path(event)
         c2pa_sidecar_payload: bytes | None = None
@@ -89,8 +91,7 @@ class GitLedgerAdapter:
                 raise RuntimeError("C2PA manifest hash mismatch while writing sidecar.")
             c2pa_sidecar_payload = c2pa_artifact.manifest_bytes
         commit_message = (
-            f"ledger: notarize {event.artifact.title} "
-            f"({event.request_id})"
+            f"ledger: notarize {event.artifact.title} " f"({event.request_id})"
         )
 
         commit_oid = await asyncio.to_thread(
@@ -108,6 +109,20 @@ class GitLedgerAdapter:
                 commit_oid=commit_oid,
             )
         )
+
+    @staticmethod
+    def _assert_publishable_content_is_secret_free(event: StorySigned) -> None:
+        """Block publication if prompt/body contains secret-like material."""
+
+        try:
+            generation_context = event.artifact.provenance.generation_context
+            assert_secret_free("generation prompt", generation_context.prompt)
+            assert_secret_free(
+                "system instruction", generation_context.system_instruction
+            )
+            assert_secret_free("artifact body", event.body)
+        except RuntimeError as exc:
+            raise RuntimeError(f"{exc} request_id={event.request_id}") from exc
 
     def _open_repository(self, repository_path: Path) -> pygit2.Repository:
         """Open and validate the target git repository.
@@ -192,7 +207,9 @@ class GitLedgerAdapter:
 
         curation_block = ""
         if artifact.curation is not None:
-            diff_block = self._yaml_literal_block(artifact.curation.unified_diff, indent=6)
+            diff_block = self._yaml_literal_block(
+                artifact.curation.unified_diff, indent=6
+            )
             curation_block = (
                 "curation:\n"
                 f"  differenceScore: {artifact.curation.difference_score:.2f}\n"
@@ -223,9 +240,7 @@ class GitLedgerAdapter:
 
         public_key_uri_line = ""
         if artifact.signature.verification_anchor.public_key_uri is not None:
-            public_key_uri_line = (
-                f'    publicKeyUri: "{artifact.signature.verification_anchor.public_key_uri}"\n'
-            )
+            public_key_uri_line = f'    publicKeyUri: "{artifact.signature.verification_anchor.public_key_uri}"\n'
 
         return (
             "---\n"
@@ -365,9 +380,13 @@ class GitLedgerAdapter:
         if c2pa_sidecar_payload is not None:
             sidecar_blob_oid = self._repo.create_blob(c2pa_sidecar_payload)
             sidecar_name = f"{path_obj.stem}.c2pa"
-            artifacts_tb.insert(sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB)
+            artifacts_tb.insert(
+                sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB
+            )
         artifacts_oid = artifacts_tb.write()
 
         root_tb = self._repo.TreeBuilder()
-        root_tb.insert(self._artifacts_directory, artifacts_oid, pygit2.GIT_FILEMODE_TREE)
+        root_tb.insert(
+            self._artifacts_directory, artifacts_oid, pygit2.GIT_FILEMODE_TREE
+        )
         return root_tb.write()

@@ -5,7 +5,11 @@ from __future__ import annotations
 import asyncio
 
 from src.adapters.crypto_notary import CryptoNotaryAdapter
-from src.runtime.service_runtime import build_kafka_bus, configure_logging, run_until_cancelled
+from src.runtime.service_runtime import (
+    build_kafka_bus,
+    configure_logging,
+    run_until_cancelled,
+)
 
 
 async def _run() -> None:

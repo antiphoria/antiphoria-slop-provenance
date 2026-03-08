@@ -11,7 +11,11 @@ from src.adapters.provenance_worker import ProvenanceWorkerAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
 from src.adapters.transparency_log import TransparencyLogAdapter
 from src.repository import SQLiteRepository
-from src.runtime.service_runtime import build_kafka_bus, configure_logging, run_until_cancelled
+from src.runtime.service_runtime import (
+    build_kafka_bus,
+    configure_logging,
+    run_until_cancelled,
+)
 from src.services.provenance_service import ProvenanceService
 
 
@@ -36,7 +40,9 @@ async def _run() -> None:
         key_registry=KeyRegistryAdapter(repository=repository),
     )
     tsa_ca_cert_raw = os.getenv("RFC3161_CA_CERT_PATH")
-    tsa_ca_cert_path = None if tsa_ca_cert_raw is None else Path(tsa_ca_cert_raw).resolve()
+    tsa_ca_cert_path = (
+        None if tsa_ca_cert_raw is None else Path(tsa_ca_cert_raw).resolve()
+    )
     worker = ProvenanceWorkerAdapter(
         event_bus=bus,
         provenance_service=service,

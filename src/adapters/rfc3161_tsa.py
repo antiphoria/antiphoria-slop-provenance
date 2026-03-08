@@ -120,7 +120,9 @@ class RFC3161TSAAdapter:
             )
         if process.returncode != 0:
             stderr = process.stderr.strip() or process.stdout.strip()
-            return TimestampVerification(ok=False, message=stderr or "OpenSSL verify failed.")
+            return TimestampVerification(
+                ok=False, message=stderr or "OpenSSL verify failed."
+            )
         return TimestampVerification(ok=True, message="RFC3161 verification succeeded.")
 
     def _build_query_file(

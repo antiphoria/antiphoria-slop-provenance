@@ -38,6 +38,7 @@ from src.models import sha256_hex
 from src.parsing import parse_artifact_markdown
 from src.ports import ProvenanceServicePort
 from src.repository import SQLiteRepository
+from src.secrets_guard import assert_secret_free
 from src.services.curation_service import (
     build_curation_metadata,
     extract_markdown_body,
@@ -66,7 +67,10 @@ class OrchestratorLock:
                 "Another orchestrator instance is already running "
                 f"(lock: '{self._lock_path}')."
             ) from exc
-        assert self._fd is not None
+        if self._fd is None:
+            raise RuntimeError(
+                f"Failed to create orchestrator lock file: '{self._lock_path}'."
+            )
         os.write(self._fd, str(os.getpid()).encode("ascii"))
         return self
 
@@ -110,7 +114,9 @@ def build_parser() -> argparse.ArgumentParser:
         "curate",
         help="Re-sign and commit a curated artifact markdown file.",
     )
-    curate_parser.add_argument("--file", required=True, help="Edited artifact file path.")
+    curate_parser.add_argument(
+        "--file", required=True, help="Edited artifact file path."
+    )
     curate_parser.add_argument("--repo-path", required=True, help="Ledger repo path.")
     curate_parser.add_argument(
         "--transport",
@@ -137,7 +143,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Request and verify RFC3161 timestamp token.",
     )
     timestamp_parser.add_argument("--file", required=True, help="Artifact file path.")
-    timestamp_parser.add_argument("--repo-path", required=True, help="Ledger repo path.")
+    timestamp_parser.add_argument(
+        "--repo-path", required=True, help="Ledger repo path."
+    )
     timestamp_parser.add_argument(
         "--tsa-url",
         default=None,
@@ -323,6 +331,8 @@ async def _anchor_and_timestamp_committed_artifact(
 async def _run_generate_command(args: argparse.Namespace) -> int:
     """Run full async pipeline for `generate`."""
 
+    assert_secret_free("cli generate prompt", args.prompt)
+
     if args.transport == "kafka":
         bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
         kafka_bus = KafkaEventBus(
@@ -342,15 +352,21 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
 
     event_bus = EventBus()
     repository = SQLiteRepository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
+    telemetry_adapter = ProvenanceTelemetryAdapter(
+        event_bus=event_bus, repository=repository
+    )
     repository_path = Path(args.repo_path).resolve()
     _validate_external_repo_path(repository_path)
     provenance_service, _ = _build_provenance_services(repository, repository_path)
-    completion_future: asyncio.Future[StoryCommitted] = asyncio.get_running_loop().create_future()
+    completion_future: asyncio.Future[StoryCommitted] = (
+        asyncio.get_running_loop().create_future()
+    )
 
     gemini_adapter = GeminiEngineAdapter(event_bus=event_bus, model_id=args.model_id)
     notary_adapter = CryptoNotaryAdapter(event_bus=event_bus)
-    ledger_adapter = GitLedgerAdapter(event_bus=event_bus, repository_path=repository_path)
+    ledger_adapter = GitLedgerAdapter(
+        event_bus=event_bus, repository_path=repository_path
+    )
 
     async def _record_signed(event: StorySigned) -> None:
         if event.artifact.signature is None:
@@ -443,9 +459,13 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
         request_id = extract_request_id_from_artifact_path(artifact_path)
         record = await asyncio.to_thread(repository.get_artifact_record, request_id)
         if record is None:
-            raise RuntimeError(f"Artifact record not found for request_id={request_id}.")
+            raise RuntimeError(
+                f"Artifact record not found for request_id={request_id}."
+            )
         markdown_text = artifact_path.read_text(encoding="utf-8")
         curated_body = extract_markdown_body(markdown_text)
+        assert_secret_free("curation prompt", record.prompt)
+        assert_secret_free("curation body", curated_body)
         curation_metadata = build_curation_metadata(record.body, curated_body)
         bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
         kafka_bus = KafkaEventBus(
@@ -468,14 +488,20 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
 
     event_bus = EventBus()
     repository = SQLiteRepository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
+    telemetry_adapter = ProvenanceTelemetryAdapter(
+        event_bus=event_bus, repository=repository
+    )
     repository_path = Path(args.repo_path).resolve()
     _validate_external_repo_path(repository_path)
     provenance_service, _ = _build_provenance_services(repository, repository_path)
-    completion_future: asyncio.Future[StoryCommitted] = asyncio.get_running_loop().create_future()
+    completion_future: asyncio.Future[StoryCommitted] = (
+        asyncio.get_running_loop().create_future()
+    )
 
     notary_adapter = CryptoNotaryAdapter(event_bus=event_bus)
-    ledger_adapter = GitLedgerAdapter(event_bus=event_bus, repository_path=repository_path)
+    ledger_adapter = GitLedgerAdapter(
+        event_bus=event_bus, repository_path=repository_path
+    )
 
     artifact_path = Path(args.file).resolve()
     if not artifact_path.exists():
@@ -488,6 +514,8 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
 
     markdown_text = artifact_path.read_text(encoding="utf-8")
     curated_body = extract_markdown_body(markdown_text)
+    assert_secret_free("curation prompt", record.prompt)
+    assert_secret_free("curation body", curated_body)
     curation_metadata = build_curation_metadata(record.body, curated_body)
 
     async def _record_signed(event: StorySigned) -> None:
@@ -596,7 +624,9 @@ async def _run_anchor_command(args: argparse.Namespace) -> int:
 
     event_bus = EventBus()
     repository = SQLiteRepository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
+    telemetry_adapter = ProvenanceTelemetryAdapter(
+        event_bus=event_bus, repository=repository
+    )
     await telemetry_adapter.start()
     repository_path = Path(args.repo_path).resolve()
     provenance_service, _ = _build_provenance_services(repository, repository_path)
@@ -636,7 +666,9 @@ async def _run_timestamp_command(args: argparse.Namespace) -> int:
 
     event_bus = EventBus()
     repository = SQLiteRepository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
+    telemetry_adapter = ProvenanceTelemetryAdapter(
+        event_bus=event_bus, repository=repository
+    )
     await telemetry_adapter.start()
     repository_path = Path(args.repo_path).resolve()
     provenance_service, _ = _build_provenance_services(
@@ -685,7 +717,9 @@ async def _run_audit_command(args: argparse.Namespace) -> int:
 
     event_bus = EventBus()
     repository = SQLiteRepository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
+    telemetry_adapter = ProvenanceTelemetryAdapter(
+        event_bus=event_bus, repository=repository
+    )
     await telemetry_adapter.start()
     repository_path = Path(args.repo_path).resolve()
     _, verification_service = _build_provenance_services(repository, repository_path)
@@ -715,9 +749,7 @@ async def _run_audit_command(args: argparse.Namespace) -> int:
     artifact_uuid = None if not report.artifact_id else UUID(report.artifact_id)
     await event_bus.emit(
         StoryAudited(
-            request_id=(
-                None if report.request_id is None else UUID(report.request_id)
-            ),
+            request_id=(None if report.request_id is None else UUID(report.request_id)),
             artifact_id=artifact_uuid,
             audit_passed=passed,
             report_path=None if args.report_file is None else str(report_path),

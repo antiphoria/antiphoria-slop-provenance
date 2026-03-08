@@ -24,11 +24,13 @@ pip install -e .
 Copy the example environment file and fill in your values. **Never commit `.env`**—it contains secrets.
 
 **Unix / macOS / Git Bash:**
+
 ```bash
 cp .env.example .env
 ```
 
 **PowerShell:**
+
 ```powershell
 Copy-Item .env.example .env
 ```
@@ -154,6 +156,8 @@ compatibility requires integrating `c2patool` or C2PA SDK bindings in a later ha
 
 ```bash
 make install
+make hooks
+make lint
 make test
 make compile
 make requirements   # Regenerate requirements.txt from requirements.in (for Docker)
@@ -163,6 +167,9 @@ make smoke
 make metrics
 make down
 ```
+
+`make hooks` installs the local pre-commit guardrails (Ruff + secret scan + hygiene checks).
+Any high-confidence secret detection blocks the commit.
 
 Worker services write per-service metric snapshots into `.metrics/` by default.
 You can print a consolidated report with:

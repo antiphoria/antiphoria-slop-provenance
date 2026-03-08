@@ -1,7 +1,14 @@
-.PHONY: install test compile up down logs topics workers replay migrate smoke metrics requirements
+.PHONY: install hooks lint test compile up down logs topics workers replay migrate smoke metrics requirements
 
 install:
 	pip install -e .
+
+hooks:
+	python -m pip install pre-commit
+	pre-commit install --install-hooks
+
+lint:
+	pre-commit run --all-files
 
 # Regenerate requirements.txt from requirements.in (for deterministic Docker builds)
 requirements:

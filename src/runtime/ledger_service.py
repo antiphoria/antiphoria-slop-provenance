@@ -7,7 +7,11 @@ import os
 from pathlib import Path
 
 from src.adapters.git_ledger import GitLedgerAdapter
-from src.runtime.service_runtime import build_kafka_bus, configure_logging, run_until_cancelled
+from src.runtime.service_runtime import (
+    build_kafka_bus,
+    configure_logging,
+    run_until_cancelled,
+)
 
 
 async def _run() -> None:

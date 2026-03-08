@@ -31,7 +31,9 @@ async def _replay(args: argparse.Namespace) -> int:
         async for message in consumer:
             payload = json.loads(message.value.decode("utf-8"))
             original_value = payload["value"].encode("utf-8")
-            await producer.send_and_wait(args.topic, value=original_value, key=message.key)
+            await producer.send_and_wait(
+                args.topic, value=original_value, key=message.key
+            )
             replayed += 1
             if replayed >= args.max_messages:
                 break
@@ -44,7 +46,9 @@ async def _replay(args: argparse.Namespace) -> int:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="slop-replay-dlq")
-    parser.add_argument("--topic", required=True, help="Base topic name to replay into.")
+    parser.add_argument(
+        "--topic", required=True, help="Base topic name to replay into."
+    )
     parser.add_argument(
         "--max-messages",
         type=int,

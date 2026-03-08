@@ -80,7 +80,9 @@ class ProvenanceService:
         if envelope.signature is None:
             raise RuntimeError("Artifact envelope is missing signature block.")
         if artifact_hash != envelope.signature.artifact_hash:
-            raise RuntimeError("Artifact hash mismatch for transparency anchor request.")
+            raise RuntimeError(
+                "Artifact hash mismatch for transparency anchor request."
+            )
 
         entry = self._transparency_log_adapter.append_entry(
             artifact_hash=artifact_hash,

@@ -6,7 +6,11 @@ import asyncio
 import os
 
 from src.adapters.gemini_engine import GeminiEngineAdapter
-from src.runtime.service_runtime import build_kafka_bus, configure_logging, run_until_cancelled
+from src.runtime.service_runtime import (
+    build_kafka_bus,
+    configure_logging,
+    run_until_cancelled,
+)
 
 
 async def _run() -> None:

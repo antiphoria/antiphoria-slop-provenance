@@ -100,7 +100,9 @@ class VerificationService:
             else:
                 payload_hash_match = digest_hex == envelope.signature.artifact_hash
                 if not payload_hash_match:
-                    errors.append("Payload hash mismatch against signature artifactHash.")
+                    errors.append(
+                        "Payload hash mismatch against signature artifactHash."
+                    )
                 key_status_lookup = self._key_registry.get_status(
                     envelope.signature.verification_anchor.signer_fingerprint
                 )
@@ -114,8 +116,8 @@ class VerificationService:
                 payload=payload,
                 manifest_hash=manifest_hash,
             )
-            anchor_matches = self._transparency_log_adapter.find_entries_by_artifact_hash(
-                digest_hex
+            anchor_matches = (
+                self._transparency_log_adapter.find_entries_by_artifact_hash(digest_hex)
             )
             transparency_anchor_found = len(anchor_matches) > 0
             if not transparency_anchor_found:

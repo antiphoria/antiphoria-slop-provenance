@@ -265,7 +265,11 @@ class KafkaEventBus(EventBusPort):
             await self._commit_message_offset(consumer, message)
         except Exception as exc:  # noqa: BLE001
             retry_count = self._extract_retry_count(message.headers)
-            handoff_succeeded, handoff_target, handoff_error = await self._attempt_handoff(
+            (
+                handoff_succeeded,
+                handoff_target,
+                handoff_error,
+            ) = await self._attempt_handoff(
                 base_topic=base_topic,
                 message=message,
                 retry_count=retry_count,
@@ -273,7 +277,9 @@ class KafkaEventBus(EventBusPort):
             )
             if handoff_succeeded:
                 metric_name = (
-                    "events_retried_total" if handoff_target == "retry" else "events_dlq_total"
+                    "events_retried_total"
+                    if handoff_target == "retry"
+                    else "events_dlq_total"
                 )
                 self._increment_metric(metric_name, base_topic)
             else:

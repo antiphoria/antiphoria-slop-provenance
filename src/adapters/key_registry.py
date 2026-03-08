@@ -34,7 +34,9 @@ class KeyRegistryAdapter:
     ) -> None:
         """Update status for a known key fingerprint."""
 
-        self._repository.update_key_registry_status(fingerprint=fingerprint, status=status)
+        self._repository.update_key_registry_status(
+            fingerprint=fingerprint, status=status
+        )
 
     def get_status(self, fingerprint: str) -> str | None:
         """Return status for one fingerprint when present."""

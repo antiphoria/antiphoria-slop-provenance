@@ -96,7 +96,9 @@ class TransparencyLogAdapter:
             remote_receipt=remote_receipt,
         )
 
-    def find_entries_by_artifact_hash(self, artifact_hash: str) -> list[TransparencyLogEntry]:
+    def find_entries_by_artifact_hash(
+        self, artifact_hash: str
+    ) -> list[TransparencyLogEntry]:
         """Return all log entries that match an artifact hash."""
 
         if not self._log_path.exists():

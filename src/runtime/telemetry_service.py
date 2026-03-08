@@ -6,7 +6,11 @@ import asyncio
 
 from src.adapters.provenance_telemetry import ProvenanceTelemetryAdapter
 from src.repository import SQLiteRepository
-from src.runtime.service_runtime import build_kafka_bus, configure_logging, run_until_cancelled
+from src.runtime.service_runtime import (
+    build_kafka_bus,
+    configure_logging,
+    run_until_cancelled,
+)
 
 
 async def _run() -> None:
