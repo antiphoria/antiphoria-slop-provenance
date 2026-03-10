@@ -10,25 +10,25 @@ def read_env_optional(
     env_key: str,
     env_path: Path | None = None,
 ) -> str | None:
-    """Read optional value from process env first, then local `.env` file."""
+    """Read optional value from local `.env`, then process env."""
+
+    resolved_env_path = env_path or Path(".env")
+    if resolved_env_path.exists():
+        env_text = resolved_env_path.read_text(encoding="utf-8")
+        for raw_line in env_text.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, raw_value = line.split("=", 1)
+            if key.strip() != env_key:
+                continue
+            parsed = raw_value.strip().strip("'\"")
+            return parsed if parsed else None
 
     value = os.getenv(env_key)
     if value is not None and value.strip():
         return value.strip().strip("'\"")
 
-    resolved_env_path = env_path or Path(".env")
-    if not resolved_env_path.exists():
-        return None
-
-    for raw_line in resolved_env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, raw_value = line.split("=", 1)
-        if key.strip() != env_key:
-            continue
-        parsed = raw_value.strip().strip("'\"")
-        return parsed if parsed else None
     return None
 
 

@@ -37,4 +37,5 @@ Operational policy for ML-DSA signing keys used by the provenance engine.
 - For validator-grade C2PA, use a dedicated X.509 signing certificate chain and private key.
 - Keep C2PA cert-chain/key material separate from ML-DSA keys and rotate independently.
 - Validate EKU/KU and trust-chain requirements before enabling `C2PA_MODE=sdk`.
+- Treat `ENABLE_C2PA=true` with `C2PA_MODE=sdk` as fail-closed operational mode.
 - Store C2PA signer material in secure secret storage (KMS/HSM or equivalent) for production.

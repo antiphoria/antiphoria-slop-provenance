@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import timezone
 from pathlib import Path
 from typing import Any, Literal, Protocol
+from xml.sax.saxutils import escape as _xml_escape
 
 from src.env_config import (
     read_env_choice,
@@ -28,7 +29,16 @@ _C2PA_ALGORITHM_VALUES: tuple[str, ...] = (
 )
 _DEFAULT_C2PA_MODE = "mvp"
 _DEFAULT_C2PA_ALGORITHM = "ES256"
+_SDK_BRIDGE_SCHEMA_VERSION = "slop-orchestrator.c2pa.bridge.v1"
+_SDK_BRIDGE_FORMAT = "text/xml"
+_SDK_CARRIER_FORMAT = "image/jpeg"
+_SDK_MARKDOWN_ASSERTION_LABEL = "org.antiphoria.markdown"
+_SDK_MINIMAL_JPEG_BYTES = bytes.fromhex(
+    "FFD8FFDB004300030202020202030202020303030304060404040404080606050609080A0A090809090A0C0F0C0A0B0E0B09090D110D0E0F101011100A0C12131210130F101010FFC9000B080001000101011100FFCC000600101005FFDA0008010100003F00D2CF20FFD9"
+)
 _DEFAULT_FORMAT_CANDIDATES: tuple[str, ...] = (
+    "text/markdown",
+    "text/xml",
     "text/plain",
     "application/octet-stream",
 )
@@ -62,6 +72,14 @@ class C2PASdkSettings:
     algorithm: str
     tsa_url: str | None
     asset_format_override: str | None
+
+
+@dataclass(frozen=True)
+class C2PASdkBridgePayload:
+    """Deterministic XML payload used as SDK signing source."""
+
+    payload_bytes: bytes
+    payload_format: str
 
 
 class C2PAManifestProvider(Protocol):
@@ -121,57 +139,43 @@ class SdkC2PAManifestProvider:
 
     def build(self, envelope: Artifact, body: str) -> C2PAManifestArtifact:
         c2pa = _load_c2pa_module()
-        manifest_definition = self._manifest_definition(envelope, body)
-        payload_bytes = body.encode("utf-8")
-        candidate_formats = _candidate_asset_formats(
-            content_type=envelope.content_type,
-            format_override=self._settings.asset_format_override,
+        manifest_definition = self._manifest_definition(
+            envelope=envelope,
+            body=body,
+            bridge_format=_SDK_BRIDGE_FORMAT,
+            asset_format=_SDK_CARRIER_FORMAT,
         )
-        supported = _read_supported_formats(c2pa)
-        if supported:
-            filtered = [
-                fmt for fmt in candidate_formats if fmt.lower() in supported
-            ]
-            if filtered:
-                candidate_formats = filtered
-        last_error: Exception | None = None
-        for asset_format in candidate_formats:
+        try:
+            builder = c2pa.Builder.from_json(manifest_definition)
             try:
-                builder = c2pa.Builder.from_json(manifest_definition)
+                builder.set_no_embed()
+                signer = self._build_signer(c2pa)
                 try:
-                    builder.set_no_embed()
-                    signer = self._build_signer(c2pa)
-                    try:
-                        manifest_bytes = builder.sign(
-                            signer=signer,
-                            format=asset_format,
-                            source=io.BytesIO(payload_bytes),
-                            dest=io.BytesIO(),
-                        )
-                    finally:
-                        signer.close()
+                    manifest_bytes = builder.sign(
+                        signer=signer,
+                        format=_SDK_CARRIER_FORMAT,
+                        source=io.BytesIO(_SDK_MINIMAL_JPEG_BYTES),
+                        dest=io.BytesIO(),
+                    )
                 finally:
-                    builder.close()
-                return C2PAManifestArtifact(
-                    manifest_bytes=manifest_bytes,
-                    manifest_hash=sha256_hex(manifest_bytes),
-                )
-            except Exception as exc:  # noqa: BLE001
-                last_error = exc
-                continue
-        if last_error is not None:
+                    signer.close()
+            finally:
+                builder.close()
+        except Exception as exc:  # noqa: BLE001
             raise RuntimeError(
-                "C2PA SDK sidecar build failed for all candidate formats. "
-                f"candidates={candidate_formats}"
-            ) from last_error
-        raise RuntimeError(
-            "C2PA SDK sidecar build failed without an error payload."
+                f"C2PA SDK sidecar build failed while signing JPEG carrier: {exc!r}"
+            ) from exc
+        return C2PAManifestArtifact(
+            manifest_bytes=manifest_bytes,
+            manifest_hash=sha256_hex(manifest_bytes),
         )
 
     def _manifest_definition(
         self,
         envelope: Artifact,
         body: str,
+        bridge_format: str,
+        asset_format: str,
     ) -> dict[str, Any]:
         """Build C2PA manifest JSON definition consumed by c2pa-python."""
 
@@ -179,7 +183,7 @@ class SdkC2PAManifestProvider:
         return {
             "claim_generator": envelope.provenance.engine_version,
             "title": envelope.title,
-            "format": envelope.content_type,
+            "format": asset_format,
             "assertions": [
                 {
                     "label": "c2pa.actions",
@@ -188,7 +192,8 @@ class SdkC2PAManifestProvider:
                             {
                                 "action": "c2pa.created",
                                 "digitalSourceType": (
-                                    "http://cv.iptc.org/newscodes/digitalsourcetype/"
+                                    "http://cv.iptc.org/newscodes/"
+                                    "digitalsourcetype/"
                                     "trainedAlgorithmicMedia"
                                 ),
                                 "when": (
@@ -205,7 +210,16 @@ class SdkC2PAManifestProvider:
                     "data": {
                         "artifactId": str(envelope.id),
                         "contentType": envelope.content_type,
+                        "bridgeFormat": bridge_format,
                         "payloadHash": payload_hash,
+                    },
+                },
+                {
+                    "label": _SDK_MARKDOWN_ASSERTION_LABEL,
+                    "data": {
+                        "content": body,
+                        "payloadHash": payload_hash,
+                        "contentType": envelope.content_type,
                     },
                 },
                 {
@@ -225,8 +239,8 @@ class SdkC2PAManifestProvider:
 
         signer_info = c2pa.C2paSignerInfo(
             alg=getattr(c2pa.C2paSigningAlg, self._settings.algorithm),
-            sign_cert=self._settings.cert_chain_pem,
-            private_key=self._settings.private_key_pem,
+            sign_cert=self._settings.cert_chain_pem.encode("utf-8"),
+            private_key=self._settings.private_key_pem.encode("utf-8"),
             ta_url=self._settings.tsa_url or "",
         )
         return c2pa.Signer.from_info(signer_info)
@@ -272,13 +286,64 @@ def build_c2pa_sidecar_manifest(
     return provider.build(envelope, body)
 
 
+def build_c2pa_validation_payload(
+    envelope: Artifact,
+    body: str,
+    env_path: Path | None = None,
+    mode: C2PAMode | None = None,
+) -> tuple[bytes, str]:
+    """Build payload bytes used for C2PA semantic verification."""
+
+    resolved_mode = resolve_c2pa_mode(env_path=env_path, explicit_mode=mode)
+    if resolved_mode == "sdk":
+        _ = (envelope, body)
+        return _SDK_MINIMAL_JPEG_BYTES, _SDK_CARRIER_FORMAT
+    return body.encode("utf-8"), envelope.content_type
+
+
+def build_sdk_bridge_payload(
+    envelope: Artifact,
+    body: str,
+) -> C2PASdkBridgePayload:
+    """Build deterministic XML bridge payload from markdown artifact data."""
+
+    payload_hash = sha256_hex(body.encode("utf-8"))
+    bridge_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<slopOrchestratorBridge>"
+        f"<bridgeSchemaVersion>{_SDK_BRIDGE_SCHEMA_VERSION}</bridgeSchemaVersion>"
+        f"<artifactId>{_xml_escape(str(envelope.id))}</artifactId>"
+        f"<artifactSchemaVersion>{_xml_escape(envelope.schema_version)}</artifactSchemaVersion>"
+        f"<artifactContentType>{_xml_escape(envelope.content_type)}</artifactContentType>"
+        f"<artifactTitle>{_xml_escape(envelope.title)}</artifactTitle>"
+        f"<artifactTimestamp>{_xml_escape(envelope.timestamp.isoformat())}</artifactTimestamp>"
+        f"<payloadSha256>{payload_hash}</payloadSha256>"
+        "<provenance>"
+        f"<source>{_xml_escape(envelope.provenance.source)}</source>"
+        f"<engineVersion>{_xml_escape(envelope.provenance.engine_version)}</engineVersion>"
+        f"<modelId>{_xml_escape(envelope.provenance.model_id)}</modelId>"
+        "</provenance>"
+        "</slopOrchestratorBridge>"
+    )
+    return C2PASdkBridgePayload(
+        payload_bytes=bridge_xml.encode("utf-8"),
+        payload_format=_SDK_BRIDGE_FORMAT,
+    )
+
+
 def validate_c2pa_sidecar(
     payload_bytes: bytes,
     manifest_bytes: bytes,
     content_type: str,
+    payload_format: str | None = None,
     env_path: Path | None = None,
+    body_for_mvp: str | None = None,
 ) -> C2PAManifestValidation:
     """Validate one sidecar manifest against one payload."""
+
+    mvp_result = _validate_mvp_manifest(manifest_bytes, body_for_mvp)
+    if mvp_result is not None:
+        return mvp_result
 
     try:
         c2pa = _load_c2pa_module()
@@ -288,8 +353,54 @@ def validate_c2pa_sidecar(
             validation_state=None,
             errors=[str(exc)],
         )
+    if payload_format == _SDK_CARRIER_FORMAT:
+        try:
+            reader = c2pa.Reader(
+                _SDK_CARRIER_FORMAT,
+                io.BytesIO(_SDK_MINIMAL_JPEG_BYTES),
+                manifest_data=manifest_bytes,
+            )
+            try:
+                validation_state = reader.get_validation_state()
+                validation_results = reader.get_validation_results() or {}
+                manifest_store_json = reader.json()
+            finally:
+                reader.close()
+        except Exception as exc:  # noqa: BLE001
+            return C2PAManifestValidation(
+                valid=False,
+                validation_state=None,
+                errors=[str(exc)],
+            )
+        errors = _extract_validation_errors(validation_results)
+        state_ok = (validation_state or "").lower() == "valid"
+        if not state_ok or errors:
+            return C2PAManifestValidation(
+                valid=False,
+                validation_state=validation_state,
+                errors=errors
+                or [
+                    f"C2PA validation failed with state "
+                    f"'{validation_state}'."
+                ],
+            )
+        markdown_assertion_errors = _validate_sdk_markdown_assertion(
+            manifest_store_json=manifest_store_json,
+            body=body_for_mvp,
+        )
+        if markdown_assertion_errors:
+            return C2PAManifestValidation(
+                valid=False,
+                validation_state="invalid",
+                errors=markdown_assertion_errors,
+            )
+        return C2PAManifestValidation(
+            valid=True,
+            validation_state=validation_state,
+            errors=[],
+        )
     candidate_formats = _candidate_asset_formats(
-        content_type=content_type,
+        content_type=payload_format or content_type,
         format_override=read_env_optional(
             "C2PA_SDK_ASSET_FORMAT",
             env_path=env_path,
@@ -316,7 +427,8 @@ def validate_c2pa_sidecar(
             finally:
                 reader.close()
             errors = _extract_validation_errors(validation_results)
-            if validation_state == "valid" and not errors:
+            state_ok = (validation_state or "").lower() == "valid"
+            if state_ok and not errors:
                 return C2PAManifestValidation(
                     valid=True,
                     validation_state=validation_state,
@@ -354,6 +466,121 @@ def validate_c2pa_sidecar(
     )
 
 
+def _validate_mvp_manifest(
+    manifest_bytes: bytes,
+    body: str | None,
+) -> C2PAManifestValidation | None:
+    """Validate MVP JSON manifest if applicable. Returns None if not MVP format."""
+
+    if body is None:
+        return None
+    try:
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(manifest, dict):
+        return None
+    assertions = manifest.get("assertions")
+    if not isinstance(assertions, dict):
+        return None
+    asset = assertions.get("c2pa.asset")
+    if not isinstance(asset, dict):
+        return None
+    expected_hash = asset.get("payloadHash")
+    if not isinstance(expected_hash, str):
+        return None
+    actual_hash = sha256_hex(body.encode("utf-8"))
+    if actual_hash != expected_hash:
+        return C2PAManifestValidation(
+            valid=False,
+            validation_state="invalid",
+            errors=[f"MVP payload hash mismatch: expected {expected_hash}, got {actual_hash}"],
+        )
+    return C2PAManifestValidation(
+        valid=True,
+        validation_state="valid",
+        errors=[],
+    )
+
+
+def _validate_sdk_markdown_assertion(
+    manifest_store_json: str,
+    body: str | None,
+) -> list[str]:
+    """Validate custom SDK markdown assertion against canonical payload."""
+
+    if body is None:
+        return [
+            "SDK C2PA validation requires artifact body for "
+            "org.antiphoria.markdown checks."
+        ]
+    try:
+        manifest_store = json.loads(manifest_store_json)
+    except json.JSONDecodeError as exc:
+        return [f"Failed to parse C2PA manifest JSON: {exc}"]
+    assertion_data = _read_assertion_data(
+        manifest_store=manifest_store,
+        label=_SDK_MARKDOWN_ASSERTION_LABEL,
+    )
+    if not isinstance(assertion_data, dict):
+        return [
+            "SDK C2PA assertion "
+            f"'{_SDK_MARKDOWN_ASSERTION_LABEL}' missing or malformed."
+        ]
+    errors: list[str] = []
+    expected_hash = sha256_hex(body.encode("utf-8"))
+    if assertion_data.get("content") != body:
+        errors.append(
+            "SDK markdown assertion content mismatch against artifact payload."
+        )
+    if assertion_data.get("payloadHash") != expected_hash:
+        errors.append(
+            "SDK markdown assertion payloadHash mismatch against artifact "
+            "payload hash."
+        )
+    return errors
+
+
+def _read_assertion_data(manifest_store: Any, label: str) -> Any | None:
+    """Read assertion data payload for active manifest label."""
+
+    if not isinstance(manifest_store, dict):
+        return None
+    manifests = manifest_store.get("manifests")
+    if not isinstance(manifests, dict) or not manifests:
+        return None
+    active_manifest_key = manifest_store.get("active_manifest")
+    active_manifest: dict[str, Any] | None = None
+    if isinstance(active_manifest_key, str):
+        candidate = manifests.get(active_manifest_key)
+        if isinstance(candidate, dict):
+            active_manifest = candidate
+    if active_manifest is None:
+        first_candidate = next(
+            (item for item in manifests.values() if isinstance(item, dict)),
+            None,
+        )
+        if isinstance(first_candidate, dict):
+            active_manifest = first_candidate
+    if active_manifest is None:
+        return None
+    assertions = active_manifest.get("assertions")
+    if isinstance(assertions, list):
+        for assertion in assertions:
+            if (
+                isinstance(assertion, dict)
+                and assertion.get("label") == label
+            ):
+                return assertion.get("data")
+        return None
+    if isinstance(assertions, dict):
+        by_label = assertions.get(label)
+        if isinstance(by_label, dict) and "data" in by_label:
+            return by_label.get("data")
+        return by_label
+    return None
+
+
 def _resolve_sdk_settings(env_path: Path | None = None) -> C2PASdkSettings:
     """Resolve and validate SDK-side C2PA signer configuration."""
 
@@ -379,11 +606,14 @@ def _resolve_sdk_settings(env_path: Path | None = None) -> C2PASdkSettings:
         default=_DEFAULT_C2PA_ALGORITHM,
         env_path=env_path,
     )
+    tsa_url = read_env_optional("C2PA_TSA_URL", env_path=env_path)
+    if not tsa_url:
+        tsa_url = read_env_optional("RFC3161_TSA_URL", env_path=env_path)
     return C2PASdkSettings(
         cert_chain_pem=cert_chain_pem,
         private_key_pem=private_key_pem,
         algorithm=algorithm,
-        tsa_url=read_env_optional("C2PA_TSA_URL", env_path=env_path),
+        tsa_url=tsa_url,
         asset_format_override=read_env_optional(
             "C2PA_SDK_ASSET_FORMAT",
             env_path=env_path,
@@ -395,7 +625,7 @@ def _resolve_path(
     raw_path: str,
     env_path: Path | None = None,
 ) -> Path:
-    """Resolve env-provided path as absolute path with .env-relative support."""
+    """Resolve env-provided path with optional .env-relative base path."""
 
     path_obj = Path(raw_path)
     if path_obj.is_absolute():

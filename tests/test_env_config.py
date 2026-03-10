@@ -30,6 +30,41 @@ class EnvConfigTest(unittest.TestCase):
                 )
         self.assertEqual(value, "gemini-test-model")
 
+    def test_read_env_optional_prefers_dotenv_over_process_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            env_file = temp_path / ".env"
+            env_file.write_text(
+                "GENERATOR_MODEL_ID=gemini-via-dotenv\n",
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {"GENERATOR_MODEL_ID": "gemini-via-process-env"},
+                clear=True,
+            ):
+                value = read_env_optional(
+                    "GENERATOR_MODEL_ID",
+                    env_path=env_file,
+                )
+        self.assertEqual(value, "gemini-via-dotenv")
+
+    def test_read_env_optional_falls_back_to_process_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            env_file = temp_path / ".env"
+            env_file.write_text("OTHER_KEY=unused\n", encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {"GENERATOR_MODEL_ID": "gemini-via-process-env"},
+                clear=True,
+            ):
+                value = read_env_optional(
+                    "GENERATOR_MODEL_ID",
+                    env_path=env_file,
+                )
+        self.assertEqual(value, "gemini-via-process-env")
+
     def test_read_env_bool_parses_common_values(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -44,7 +79,10 @@ class EnvConfigTest(unittest.TestCase):
         self.assertTrue(enabled)
 
     def test_generate_parser_uses_generator_model_env_default(self) -> None:
-        with patch.dict(os.environ, {"GENERATOR_MODEL_ID": "gemini-via-env"}):
+        with patch(
+            "src.cli._read_env_optional",
+            return_value="gemini-via-env",
+        ):
             parser = build_parser()
             args = parser.parse_args(
                 [

@@ -205,6 +205,10 @@ into the canonical ML-DSA signing target (`manifestHash`).
 - `C2PA_MODE=sdk` uses `c2pa-python` to emit signed binary sidecars intended for
   validator-grade interoperability.
 
+In `sdk` mode, markdown is not signed directly as the C2PA source asset. Instead, the
+pipeline builds a deterministic XML bridge payload from envelope metadata plus markdown
+`payloadSha256`, and signs that XML payload to produce the detached `.c2pa` sidecar.
+
 `sdk` mode requires X.509 signer material:
 
 ```dotenv
@@ -212,6 +216,9 @@ C2PA_SIGN_CERT_CHAIN_PATH=./keys/c2pa-cert-chain.pem
 C2PA_PRIVATE_KEY_PATH=./keys/c2pa-private-key.pem
 C2PA_SIGNING_ALG=ES256
 ```
+
+When `ENABLE_C2PA=true` and `C2PA_MODE=sdk`, sidecar generation is fail-closed: if C2PA
+sidecar creation fails, notarization aborts and no artifact commit is produced.
 
 Strict C2PA checks are available in verification and attestation commands:
 

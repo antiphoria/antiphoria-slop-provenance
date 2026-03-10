@@ -15,7 +15,10 @@ from uuid import UUID
 
 import pygit2
 
-from src.adapters.c2pa_manifest import validate_c2pa_sidecar
+from src.adapters.c2pa_manifest import (
+    build_c2pa_validation_payload,
+    validate_c2pa_sidecar,
+)
 from src.adapters.crypto_notary import CryptoNotaryAdapter
 from src.adapters.gemini_engine import GeminiEngineAdapter
 from src.adapters.git_ledger import GitLedgerAdapter
@@ -716,10 +719,16 @@ async def _run_verify_command(args: argparse.Namespace) -> int:
         envelope, payload = parse_artifact_markdown(artifact_path)
         sidecar_path = artifact_path.with_suffix(".c2pa")
         if sidecar_path.exists():
+            validation_payload, validation_format = build_c2pa_validation_payload(
+                envelope=envelope,
+                body=payload,
+            )
             c2pa_result = validate_c2pa_sidecar(
-                payload_bytes=payload.encode("utf-8"),
+                payload_bytes=validation_payload,
                 manifest_bytes=sidecar_path.read_bytes(),
                 content_type=envelope.content_type,
+                payload_format=validation_format,
+                body_for_mvp=payload,
             )
             if not c2pa_result.valid and args.strict_c2pa:
                 print(

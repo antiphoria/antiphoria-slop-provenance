@@ -291,11 +291,18 @@ class CryptoNotaryAdapter:
         )
         c2pa_manifest: C2PAManifestArtifact | None = None
         if self._enable_c2pa:
-            c2pa_manifest = build_c2pa_sidecar_manifest(
-                unsigned_envelope,
-                body,
-                env_path=self._env_path,
-            )
+            try:
+                c2pa_manifest = build_c2pa_sidecar_manifest(
+                    unsigned_envelope,
+                    body,
+                    env_path=self._env_path,
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(
+                    "C2PA sidecar generation failed while ENABLE_C2PA=true. "
+                    "Aborting notarization (fail-closed). "
+                    f"Underlying error: {exc!r}"
+                ) from exc
         signing_target = build_envelope_signing_target(
             envelope=unsigned_envelope,
             payload_sha256_hex=payload_hash,

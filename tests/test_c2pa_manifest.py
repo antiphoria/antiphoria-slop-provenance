@@ -2,16 +2,117 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from src.adapters.c2pa_manifest import (
+    _SDK_CARRIER_FORMAT,
+    _SDK_MARKDOWN_ASSERTION_LABEL,
+    build_c2pa_validation_payload,
     build_c2pa_sidecar_manifest,
+    build_sdk_bridge_payload,
     resolve_c2pa_mode,
+    validate_c2pa_sidecar,
 )
-from src.models import Artifact, GenerationContext, Hyperparameters, Provenance
+from src.models import (
+    Artifact,
+    GenerationContext,
+    Hyperparameters,
+    Provenance,
+    sha256_hex,
+)
+
+
+class _FakeC2paModule:
+    last_payload: bytes | None = None
+    last_format: str | None = None
+    last_manifest_json: object | None = None
+    reader_manifest_store: dict[str, object] | None = None
+
+    class C2paSigningAlg:
+        ES256 = "ES256"
+
+    class C2paSignerInfo:
+        def __init__(
+            self,
+            alg: object,
+            sign_cert: bytes,
+            private_key: bytes,
+            ta_url: str | None,
+        ) -> None:
+            _ = (alg, sign_cert, private_key, ta_url)
+
+    class Signer:
+        @classmethod
+        def from_info(cls, signer_info: object) -> "_FakeC2paModule.Signer":
+            _ = signer_info
+            return cls()
+
+        def close(self) -> None:
+            return None
+
+    class Builder:
+        def __init__(self, manifest_json: object) -> None:
+            self._manifest_json = manifest_json
+
+        @classmethod
+        def get_supported_mime_types(cls) -> list[str]:
+            _ = cls
+            return ["image/jpeg", "text/xml", "application/xml"]
+
+        @classmethod
+        def from_json(cls, manifest_json: object) -> "_FakeC2paModule.Builder":
+            return cls(manifest_json)
+
+        def set_no_embed(self) -> None:
+            return None
+
+        def sign(
+            self,
+            signer: object,
+            format: str,
+            source: object,
+            dest: object | None = None,
+        ) -> bytes:
+            _ = signer
+            _FakeC2paModule.last_payload = source.read()
+            _FakeC2paModule.last_format = format
+            _FakeC2paModule.last_manifest_json = self._manifest_json
+            if dest is not None:
+                dest.write(b"FAKE-C2PA-SIDECAR")
+            return b"FAKE-C2PA-SIDECAR"
+
+        def close(self) -> None:
+            return None
+
+    class Reader:
+        def __init__(
+            self,
+            asset_format: str,
+            source: object,
+            manifest_data: bytes | None = None,
+        ) -> None:
+            _ = (source, manifest_data)
+            self._asset_format = asset_format
+
+        def get_validation_state(self) -> str:
+            _ = self._asset_format
+            return "valid"
+
+        def get_validation_results(self) -> dict[str, object]:
+            return {}
+
+        def json(self) -> str:
+            if _FakeC2paModule.reader_manifest_store is None:
+                raise RuntimeError("reader manifest store not configured")
+            return json.dumps(_FakeC2paModule.reader_manifest_store)
+
+        def close(self) -> None:
+            return None
 
 
 class C2PAManifestTest(unittest.TestCase):
@@ -63,6 +164,144 @@ class C2PAManifestTest(unittest.TestCase):
                     "payload",
                     env_path=env_path,
                 )
+
+    def test_sdk_bridge_payload_is_deterministic(self) -> None:
+        artifact = self._build_artifact()
+        first = build_sdk_bridge_payload(artifact, "payload")
+        second = build_sdk_bridge_payload(artifact, "payload")
+        self.assertEqual(first.payload_format, "text/xml")
+        self.assertEqual(first.payload_bytes, second.payload_bytes)
+        self.assertIn(b"<payloadSha256>", first.payload_bytes)
+
+    def test_sdk_provider_signs_bridge_payload_bytes(self) -> None:
+        artifact = self._build_artifact()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            cert_path = temp_path / "cert.pem"
+            key_path = temp_path / "key.pem"
+            cert_path.write_text(
+                "-----BEGIN CERTIFICATE-----\n"
+                "X\n"
+                "-----END CERTIFICATE-----\n"
+            )
+            key_path.write_text(
+                "-----BEGIN PRIVATE KEY-----\n"
+                "X\n"
+                "-----END PRIVATE KEY-----\n"
+            )
+            env_path = temp_path / ".env"
+            env_path.write_text(
+                "\n".join(
+                    [
+                        "C2PA_MODE=sdk",
+                        f"C2PA_SIGN_CERT_CHAIN_PATH={cert_path}",
+                        f"C2PA_PRIVATE_KEY_PATH={key_path}",
+                        "C2PA_SIGNING_ALG=ES256",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            payload_bytes, payload_format = build_c2pa_validation_payload(
+                artifact,
+                "payload",
+                mode="sdk",
+            )
+            self.assertEqual(payload_format, _SDK_CARRIER_FORMAT)
+            with patch(
+                "src.adapters.c2pa_manifest._load_c2pa_module",
+                return_value=_FakeC2paModule,
+            ):
+                sidecar = build_c2pa_sidecar_manifest(
+                    artifact,
+                    "payload",
+                    env_path=env_path,
+                )
+
+        self.assertEqual(sidecar.manifest_bytes, b"FAKE-C2PA-SIDECAR")
+        self.assertEqual(_FakeC2paModule.last_format, _SDK_CARRIER_FORMAT)
+        self.assertEqual(
+            _FakeC2paModule.last_payload,
+            payload_bytes,
+        )
+        self.assertIsInstance(_FakeC2paModule.last_manifest_json, dict)
+        assertions = _FakeC2paModule.last_manifest_json["assertions"]
+        markdown_assertion = next(
+            assertion
+            for assertion in assertions
+            if assertion["label"] == _SDK_MARKDOWN_ASSERTION_LABEL
+        )
+        self.assertEqual(markdown_assertion["data"]["content"], "payload")
+        self.assertEqual(
+            markdown_assertion["data"]["payloadHash"],
+            sha256_hex("payload".encode("utf-8")),
+        )
+
+    def test_sdk_validation_rejects_missing_markdown_assertion(self) -> None:
+        artifact = self._build_artifact()
+        payload = "payload"
+        payload_bytes, payload_format = build_c2pa_validation_payload(
+            artifact,
+            payload,
+            mode="sdk",
+        )
+        _FakeC2paModule.reader_manifest_store = {
+            "active_manifest": "manifest-1",
+            "manifests": {"manifest-1": {"assertions": []}},
+        }
+        with patch(
+            "src.adapters.c2pa_manifest._load_c2pa_module",
+            return_value=_FakeC2paModule,
+        ):
+            result = validate_c2pa_sidecar(
+                payload_bytes=payload_bytes,
+                manifest_bytes=b"fake-sidecar",
+                content_type=artifact.content_type,
+                payload_format=payload_format,
+                body_for_mvp=payload,
+            )
+        self.assertFalse(result.valid)
+        self.assertIn("missing or malformed", "; ".join(result.errors))
+
+    def test_sdk_validation_rejects_payload_hash_mismatch(self) -> None:
+        artifact = self._build_artifact()
+        payload = "payload"
+        payload_bytes, payload_format = build_c2pa_validation_payload(
+            artifact,
+            payload,
+            mode="sdk",
+        )
+        _FakeC2paModule.reader_manifest_store = {
+            "active_manifest": "manifest-1",
+            "manifests": {
+                "manifest-1": {
+                    "assertions": [
+                        {
+                            "label": _SDK_MARKDOWN_ASSERTION_LABEL,
+                            "data": {
+                                "content": payload,
+                                "payloadHash": "deadbeef",
+                                "contentType": artifact.content_type,
+                            },
+                        }
+                    ]
+                }
+            },
+        }
+        with patch(
+            "src.adapters.c2pa_manifest._load_c2pa_module",
+            return_value=_FakeC2paModule,
+        ):
+            result = validate_c2pa_sidecar(
+                payload_bytes=payload_bytes,
+                manifest_bytes=b"fake-sidecar",
+                content_type=artifact.content_type,
+                payload_format=payload_format,
+                body_for_mvp=payload,
+            )
+        self.assertFalse(result.valid)
+        self.assertIn("payloadHash mismatch", "; ".join(result.errors))
 
 
 if __name__ == "__main__":

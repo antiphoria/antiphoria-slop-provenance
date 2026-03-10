@@ -83,7 +83,9 @@ def _build_story_signed_event(request_id: UUID, body: str) -> StorySigned:
         signature=SignatureBlock(
             artifactHash=hashlib.sha256(body.encode("utf-8")).hexdigest(),
             cryptographicSignature="ZmFrZS1zaWduYXR1cmU=",
-            verificationAnchor=VerificationAnchor(signerFingerprint="test-fingerprint"),
+            verificationAnchor=VerificationAnchor(
+                signerFingerprint="test-fingerprint"
+            ),
         ),
     )
     return StorySigned(
@@ -100,7 +102,9 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
         self._repo_temp = tempfile.TemporaryDirectory()
         self._repo_path = Path(self._repo_temp.name)
         pygit2.init_repository(str(self._repo_path), initial_head="master")
-        self._state_temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self._state_temp = tempfile.TemporaryDirectory(
+            ignore_cleanup_errors=True
+        )
         self._state_db_path = Path(self._state_temp.name) / "state.db"
         self._old_state_db_path = os.getenv("STATE_DB_PATH")
         os.environ["STATE_DB_PATH"] = str(self._state_db_path)
@@ -127,7 +131,9 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
         repo = pygit2.Repository(str(self._repo_path))
         self.assertEqual(dict(repo.status()), {})
 
-        branch_reference = repo.lookup_reference(f"refs/heads/artifact/{request_id}")
+        branch_reference = repo.lookup_reference(
+            f"refs/heads/artifact/{request_id}"
+        )
         branch_commit = repo[branch_reference.target]
         self.assertIsInstance(branch_commit, pygit2.Commit)
 
@@ -292,7 +298,9 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("report", loaded)
         self.assertEqual(loaded["report"]["source_file"], f"{request_id}.md")
 
-    async def test_attest_fails_with_strict_c2pa_when_sidecar_missing(self) -> None:
+    async def test_attest_fails_with_strict_c2pa_when_sidecar_missing(
+        self,
+    ) -> None:
         request_id = uuid4()
         report = AuditReport(
             artifact_id=str(uuid4()),
@@ -332,6 +340,92 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
                 exit_code = await cli._run_attest_command(args)
         self.assertEqual(exit_code, 1)
         self.assertIn("[FAIL]", buffer.getvalue())
+
+    async def test_attest_fails_with_strict_c2pa_when_sidecar_invalid(
+        self,
+    ) -> None:
+        request_id = uuid4()
+        report = AuditReport(
+            artifact_id=str(uuid4()),
+            request_id=str(request_id),
+            source_file=f"{request_id}.md",
+            envelope_valid=True,
+            signature_valid=True,
+            payload_hash_match=True,
+            transparency_anchor_found=True,
+            transparency_log_integrity=True,
+            timestamp_found=True,
+            timestamp_valid=True,
+            key_status_at_signing_time="active",
+            c2pa_present=True,
+            c2pa_valid=False,
+            c2pa_validation_state="invalid",
+            c2pa_errors=["tampered sidecar"],
+            errors=["C2PA sidecar semantic validation failed."],
+            branch=f"artifact/{request_id}",
+            commit_oid="abc123",
+            ledger_path=f"{request_id}.md",
+        )
+        args = argparse.Namespace(
+            repo_path=str(self._repo_path),
+            request_id=str(request_id),
+            strict=False,
+            strict_c2pa=True,
+            json=False,
+            tsa_ca_cert_path=None,
+        )
+        with patch(
+            "src.cli._build_provenance_services",
+            return_value=(object(), _FakeVerificationService(report)),
+        ):
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                exit_code = await cli._run_attest_command(args)
+        self.assertEqual(exit_code, 1)
+        self.assertIn("[FAIL]", buffer.getvalue())
+
+    async def test_attest_passes_with_strict_c2pa_when_sidecar_valid(
+        self,
+    ) -> None:
+        request_id = uuid4()
+        report = AuditReport(
+            artifact_id=str(uuid4()),
+            request_id=str(request_id),
+            source_file=f"{request_id}.md",
+            envelope_valid=True,
+            signature_valid=True,
+            payload_hash_match=True,
+            transparency_anchor_found=True,
+            transparency_log_integrity=True,
+            timestamp_found=True,
+            timestamp_valid=True,
+            key_status_at_signing_time="active",
+            c2pa_present=True,
+            c2pa_valid=True,
+            c2pa_validation_state="valid",
+            c2pa_errors=[],
+            errors=[],
+            branch=f"artifact/{request_id}",
+            commit_oid="abc123",
+            ledger_path=f"{request_id}.md",
+        )
+        args = argparse.Namespace(
+            repo_path=str(self._repo_path),
+            request_id=str(request_id),
+            strict=False,
+            strict_c2pa=True,
+            json=False,
+            tsa_ca_cert_path=None,
+        )
+        with patch(
+            "src.cli._build_provenance_services",
+            return_value=(object(), _FakeVerificationService(report)),
+        ):
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                exit_code = await cli._run_attest_command(args)
+        self.assertEqual(exit_code, 0)
+        self.assertIn("[PASS]", buffer.getvalue())
 
 
 if __name__ == "__main__":

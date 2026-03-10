@@ -10,7 +10,10 @@ from uuid import UUID
 
 import pygit2
 
-from src.adapters.c2pa_manifest import validate_c2pa_sidecar
+from src.adapters.c2pa_manifest import (
+    build_c2pa_validation_payload,
+    validate_c2pa_sidecar,
+)
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
 from src.adapters.transparency_log import TransparencyLogAdapter
@@ -242,10 +245,16 @@ class VerificationService:
             manifest_hash=manifest_hash,
         )
         if c2pa_present and manifest_bytes is not None:
+            validation_payload, validation_format = build_c2pa_validation_payload(
+                envelope=envelope,
+                body=payload,
+            )
             c2pa_validation = validate_c2pa_sidecar(
-                payload_bytes=payload.encode("utf-8"),
+                payload_bytes=validation_payload,
                 manifest_bytes=manifest_bytes,
                 content_type=envelope.content_type,
+                payload_format=validation_format,
+                body_for_mvp=payload,
             )
             c2pa_valid = c2pa_validation.valid
             c2pa_validation_state = c2pa_validation.validation_state
