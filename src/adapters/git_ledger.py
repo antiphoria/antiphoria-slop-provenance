@@ -7,37 +7,22 @@ and commits artifacts to a local repository through pygit2.
 from __future__ import annotations
 
 import asyncio
-import os
+import base64
+import binascii
+import json
 import textwrap
 from pathlib import Path
 
 import pygit2
 
 from src.adapters.c2pa_manifest import build_c2pa_sidecar_manifest
+from src.env_config import read_env_bool, read_env_optional
 from src.events import EventBusPort, StoryCommitted, StorySigned
+from src.models import sha256_hex
 from src.secrets_guard import assert_secret_free
 
 _DEFAULT_LEDGER_AUTHOR_NAME = "Slop Orchestrator"
-_DEFAULT_LEDGER_AUTHOR_EMAIL = "bot@antinomie.local"
-
-
-def _read_env_optional(env_key: str, env_path: Path) -> str | None:
-    """Read optional env var from process or .env file. Returns None if unset."""
-
-    value = os.getenv(env_key)
-    if value and value.strip():
-        return value.strip().strip("'\"")
-    if not env_path.exists():
-        return None
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, val = line.split("=", 1)
-        if key.strip() == env_key:
-            parsed = val.strip().strip("'\"")
-            return parsed if parsed else None
-    return None
+_DEFAULT_LEDGER_AUTHOR_EMAIL = "bot@antiphoria.local"
 
 
 class GitLedgerAdapter:
@@ -47,7 +32,7 @@ class GitLedgerAdapter:
         self,
         event_bus: EventBusPort,
         repository_path: Path | None = None,
-        artifacts_directory: str = "artifacts",
+        artifacts_directory: str = "",
         env_path: Path | None = None,
     ) -> None:
         """Initialize adapter and validate local git repository path.
@@ -55,7 +40,7 @@ class GitLedgerAdapter:
         Args:
             event_bus: Shared asynchronous event bus instance.
             repository_path: Optional local git repository path.
-            artifacts_directory: Relative directory for markdown artifacts.
+            artifacts_directory: Optional relative directory for markdown artifacts.
             env_path: Optional path to .env for LEDGER_AUTHOR_NAME/EMAIL overrides.
 
         Raises:
@@ -67,7 +52,11 @@ class GitLedgerAdapter:
         self._repository_path = (repository_path or Path.cwd()).resolve()
         self._env_path = env_path or Path(".env")
         self._repo = self._open_repository(self._repository_path)
-        self._enable_c2pa = os.getenv("ENABLE_C2PA", "false").lower() == "true"
+        self._enable_c2pa = read_env_bool(
+            "ENABLE_C2PA",
+            default=False,
+            env_path=self._env_path,
+        )
 
     async def start(self) -> None:
         """Subscribe to signed-story events."""
@@ -84,12 +73,7 @@ class GitLedgerAdapter:
         self._assert_publishable_content_is_secret_free(event)
         markdown_payload = self._render_markdown(event)
         relative_path = self._build_relative_artifact_path(event)
-        c2pa_sidecar_payload: bytes | None = None
-        if self._enable_c2pa and event.c2pa_manifest_hash is not None:
-            c2pa_artifact = build_c2pa_sidecar_manifest(event.artifact, event.body)
-            if c2pa_artifact.manifest_hash != event.c2pa_manifest_hash:
-                raise RuntimeError("C2PA manifest hash mismatch while writing sidecar.")
-            c2pa_sidecar_payload = c2pa_artifact.manifest_bytes
+        c2pa_sidecar_payload = self._resolve_c2pa_sidecar_payload(event)
         commit_message = (
             f"ledger: notarize {event.artifact.title} " f"({event.request_id})"
         )
@@ -109,6 +93,43 @@ class GitLedgerAdapter:
                 commit_oid=commit_oid,
             )
         )
+
+    def _resolve_c2pa_sidecar_payload(self, event: StorySigned) -> bytes | None:
+        """Resolve sidecar bytes from event payload with hash enforcement."""
+
+        if not self._enable_c2pa:
+            return None
+
+        manifest_hash = event.c2pa_manifest_hash
+        if manifest_hash is None and event.c2pa_manifest_bytes_b64 is not None:
+            raise RuntimeError("C2PA sidecar bytes supplied without manifest hash.")
+        if event.c2pa_manifest_bytes_b64 is not None:
+            try:
+                sidecar_payload = base64.b64decode(
+                    event.c2pa_manifest_bytes_b64,
+                    validate=True,
+                )
+            except binascii.Error as exc:
+                raise RuntimeError("Invalid base64 C2PA sidecar payload.") from exc
+            if (
+                manifest_hash is not None
+                and sha256_hex(sidecar_payload) != manifest_hash
+            ):
+                raise RuntimeError(
+                    "C2PA manifest hash mismatch while writing sidecar bytes."
+                )
+            return sidecar_payload
+        if manifest_hash is None:
+            return None
+        # Backward-compatibility path: old events only carried hash, not bytes.
+        c2pa_artifact = build_c2pa_sidecar_manifest(
+            event.artifact,
+            event.body,
+            env_path=self._env_path,
+        )
+        if c2pa_artifact.manifest_hash != manifest_hash:
+            raise RuntimeError("C2PA manifest hash mismatch while writing sidecar.")
+        return c2pa_artifact.manifest_bytes
 
     @staticmethod
     def _assert_publishable_content_is_secret_free(event: StorySigned) -> None:
@@ -151,6 +172,8 @@ class GitLedgerAdapter:
         """Build deterministic repo-relative artifact markdown path."""
 
         filename = f"{event.request_id}.md"
+        if not self._artifacts_directory:
+            return filename
         return f"{self._artifacts_directory}/{filename}"
 
     @staticmethod
@@ -178,6 +201,12 @@ class GitLedgerAdapter:
         lines = text.splitlines() or [text]
         return "\n".join(f"{prefix}{line}" for line in lines)
 
+    @staticmethod
+    def _yaml_quoted(value: str) -> str:
+        """Render one YAML-safe quoted scalar using JSON escaping rules."""
+
+        return json.dumps(value, ensure_ascii=False)
+
     def _render_markdown(self, event: StorySigned) -> str:
         """Render artifact markdown with strict frontmatter schema.
 
@@ -196,11 +225,11 @@ class GitLedgerAdapter:
         )
         signature_block_yaml = "\n".join(f"    {line}" for line in signature_lines)
         signature_block_footer = "\n".join(signature_lines)
-        prompt_block_yaml = self._yaml_folded_block(
+        prompt_block_yaml = self._yaml_literal_block(
             artifact.provenance.generation_context.prompt,
             indent=6,
         )
-        system_instruction_yaml = self._yaml_folded_block(
+        system_instruction_yaml = self._yaml_literal_block(
             artifact.provenance.generation_context.system_instruction,
             indent=6,
         )
@@ -234,30 +263,33 @@ class GitLedgerAdapter:
             watermark = artifact.provenance.embedded_watermark
             watermark_block = (
                 "  embeddedWatermark:\n"
-                f'    provider: "{watermark.provider}"\n'
-                f'    status: "{watermark.status}"\n'
+                f"    provider: {self._yaml_quoted(watermark.provider)}\n"
+                f"    status: {self._yaml_quoted(watermark.status)}\n"
             )
 
         public_key_uri_line = ""
         if artifact.signature.verification_anchor.public_key_uri is not None:
-            public_key_uri_line = f'    publicKeyUri: "{artifact.signature.verification_anchor.public_key_uri}"\n'
+            public_key_uri_line = (
+                "    publicKeyUri: "
+                f"{self._yaml_quoted(str(artifact.signature.verification_anchor.public_key_uri))}\n"
+            )
 
         return (
             "---\n"
-            f'schemaVersion: "{artifact.schema_version}"\n'
-            f'id: "{artifact.id}"\n'
-            f'title: "{artifact.title}"\n'
-            f'timestamp: "{artifact.timestamp.isoformat()}"\n'
-            f'contentType: "{artifact.content_type}"\n'
-            f'license: "{artifact.license}"\n'
+            f"schemaVersion: {self._yaml_quoted(artifact.schema_version)}\n"
+            f"id: {self._yaml_quoted(str(artifact.id))}\n"
+            f"title: {self._yaml_quoted(artifact.title)}\n"
+            f"timestamp: {self._yaml_quoted(artifact.timestamp.isoformat())}\n"
+            f"contentType: {self._yaml_quoted(artifact.content_type)}\n"
+            f"license: {self._yaml_quoted(str(artifact.license))}\n"
             "provenance:\n"
-            f'  source: "{artifact.provenance.source}"\n'
-            f'  engineVersion: "{artifact.provenance.engine_version}"\n'
-            f'  modelId: "{artifact.provenance.model_id}"\n'
+            f"  source: {self._yaml_quoted(artifact.provenance.source)}\n"
+            f"  engineVersion: {self._yaml_quoted(artifact.provenance.engine_version)}\n"
+            f"  modelId: {self._yaml_quoted(artifact.provenance.model_id)}\n"
             "  generationContext:\n"
-            "    systemInstruction: >\n"
+            "    systemInstruction: |-\n"
             f"{system_instruction_yaml}\n"
-            "    prompt: >\n"
+            "    prompt: |-\n"
             f"{prompt_block_yaml}\n"
             "    hyperparameters:\n"
             f"      temperature: {artifact.provenance.generation_context.hyperparameters.temperature}\n"
@@ -267,21 +299,22 @@ class GitLedgerAdapter:
             f"{watermark_block}"
             f"{curation_block}"
             "signature:\n"
-            f'  cryptoAlgorithm: "{artifact.signature.crypto_algorithm}"\n'
-            f'  artifactHash: "{artifact.signature.artifact_hash}"\n'
+            f"  cryptoAlgorithm: {self._yaml_quoted(artifact.signature.crypto_algorithm)}\n"
+            f"  artifactHash: {self._yaml_quoted(artifact.signature.artifact_hash)}\n"
             "  verificationAnchor:\n"
-            f'    signerFingerprint: "{artifact.signature.verification_anchor.signer_fingerprint}"\n'
+            "    signerFingerprint: "
+            f"{self._yaml_quoted(artifact.signature.verification_anchor.signer_fingerprint)}\n"
             f"{public_key_uri_line}"
             "  cryptographicSignature: |\n"
             f"{signature_block_yaml}\n"
-            f'recordStatus: "{artifact.record_status}"\n'
+            f"recordStatus: {self._yaml_quoted(artifact.record_status)}\n"
             "---\n"
             f"{event.body}\n"
-            "-----BEGIN ANTINOMIE-INSTITUT ARTIFACT SIGNATURE-----\n"
+            "-----BEGIN ANTIPHORIA-INSTITUT ARTIFACT SIGNATURE-----\n"
             "Hash: SHA256\n"
             "Algorithm: CRYSTALS-Dilithium\n"
             f"{signature_block_footer}\n"
-            "-----END ANTINOMIE-INSTITUT ARTIFACT SIGNATURE-----\n"
+            "-----END ANTIPHORIA-INSTITUT ARTIFACT SIGNATURE-----\n"
         )
 
     def _resolve_commit_signature(self) -> pygit2.Signature:
@@ -291,8 +324,8 @@ class GitLedgerAdapter:
         Use env overrides to avoid burning personal PII into the public ledger.
         """
 
-        name = _read_env_optional("LEDGER_AUTHOR_NAME", self._env_path)
-        email = _read_env_optional("LEDGER_AUTHOR_EMAIL", self._env_path)
+        name = read_env_optional("LEDGER_AUTHOR_NAME", env_path=self._env_path)
+        email = read_env_optional("LEDGER_AUTHOR_EMAIL", env_path=self._env_path)
         if name and email:
             return pygit2.Signature(name, email)
         try:
@@ -365,16 +398,31 @@ class GitLedgerAdapter:
         markdown_payload: str,
         c2pa_sidecar_payload: bytes | None,
     ) -> pygit2.Oid:
-        """Build a strict two-level ODB tree for artifacts/<request_id>.md."""
+        """Build root tree with one artifact markdown file and optional sidecar."""
 
         path_obj = Path(relative_path)
-        if path_obj.parent.as_posix() != self._artifacts_directory:
+        parent_dir = path_obj.parent.as_posix()
+        if self._artifacts_directory:
+            if parent_dir != self._artifacts_directory:
+                raise RuntimeError(
+                    f"Invalid artifact path '{relative_path}'. Expected directory "
+                    f"'{self._artifacts_directory}/'."
+                )
+        elif parent_dir != ".":
             raise RuntimeError(
-                f"Invalid artifact path '{relative_path}'. Expected directory "
-                f"'{self._artifacts_directory}/'."
+                f"Invalid artifact path '{relative_path}'. Expected repository root."
             )
 
+        root_tb = self._repo.TreeBuilder()
         blob_oid = self._repo.create_blob(markdown_payload.encode("utf-8"))
+        if not self._artifacts_directory:
+            root_tb.insert(path_obj.name, blob_oid, pygit2.GIT_FILEMODE_BLOB)
+            if c2pa_sidecar_payload is not None:
+                sidecar_blob_oid = self._repo.create_blob(c2pa_sidecar_payload)
+                sidecar_name = f"{path_obj.stem}.c2pa"
+                root_tb.insert(sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB)
+            return root_tb.write()
+
         artifacts_tb = self._repo.TreeBuilder()
         artifacts_tb.insert(path_obj.name, blob_oid, pygit2.GIT_FILEMODE_BLOB)
         if c2pa_sidecar_payload is not None:
@@ -384,8 +432,6 @@ class GitLedgerAdapter:
                 sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB
             )
         artifacts_oid = artifacts_tb.write()
-
-        root_tb = self._repo.TreeBuilder()
         root_tb.insert(
             self._artifacts_directory, artifacts_oid, pygit2.GIT_FILEMODE_TREE
         )

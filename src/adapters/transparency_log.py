@@ -32,6 +32,7 @@ class TransparencyLogEntry:
     entry_hash: str
     anchored_at: str
     remote_receipt: str | None
+    metadata: dict[str, Any]
 
 
 class TransparencyLogAdapter:
@@ -46,7 +47,6 @@ class TransparencyLogAdapter:
         self._log_path = log_path
         self._publish_url = publish_url
         self._publish_timeout_sec = publish_timeout_sec
-        self._log_path.parent.mkdir(parents=True, exist_ok=True)
 
     @property
     def log_path(self) -> Path:
@@ -58,21 +58,47 @@ class TransparencyLogAdapter:
         self,
         artifact_hash: str,
         artifact_id: str,
-        source_file: Path,
+        source_file: Path | str,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> TransparencyLogEntry:
         """Append a new hash anchor entry and optionally publish it."""
 
         previous_entry_hash = self._read_latest_entry_hash()
+        entry, serializable = self.build_entry_record(
+            artifact_hash=artifact_hash,
+            artifact_id=artifact_id,
+            source_file=source_file,
+            previous_entry_hash=previous_entry_hash,
+            request_id=request_id,
+            metadata=metadata,
+        )
+        self._log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._log_path.open("a", encoding="utf-8") as log_file:
+            log_file.write(json.dumps(serializable, sort_keys=True))
+            log_file.write("\n")
+        return entry
+
+    def build_entry_record(
+        self,
+        artifact_hash: str,
+        artifact_id: str,
+        source_file: Path | str,
+        previous_entry_hash: str | None,
+        request_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[TransparencyLogEntry, dict[str, Any]]:
+        """Build one transparency record without writing local files."""
+
         entry_id = str(uuid4())
         anchored_at = _utc_now_iso()
+        source_file_str = str(source_file)
         payload = {
             "entryId": entry_id,
             "artifactHash": artifact_hash,
             "artifactId": artifact_id,
             "requestId": request_id,
-            "sourceFile": str(source_file),
+            "sourceFile": source_file_str,
             "previousEntryHash": previous_entry_hash,
             "anchoredAt": anchored_at,
             "metadata": metadata or {},
@@ -81,20 +107,19 @@ class TransparencyLogAdapter:
         full_record = {**payload, "entryHash": entry_hash}
         remote_receipt = self._publish_entry(full_record)
         serializable = {**full_record, "remoteReceipt": remote_receipt}
-        with self._log_path.open("a", encoding="utf-8") as log_file:
-            log_file.write(json.dumps(serializable, sort_keys=True))
-            log_file.write("\n")
-        return TransparencyLogEntry(
+        entry = TransparencyLogEntry(
             entry_id=entry_id,
             artifact_hash=artifact_hash,
             artifact_id=artifact_id,
             request_id=request_id,
-            source_file=str(source_file),
+            source_file=source_file_str,
             previous_entry_hash=previous_entry_hash,
             entry_hash=entry_hash,
             anchored_at=anchored_at,
             remote_receipt=remote_receipt,
+            metadata=metadata or {},
         )
+        return entry, serializable
 
     def find_entries_by_artifact_hash(
         self, artifact_hash: str
@@ -103,69 +128,100 @@ class TransparencyLogAdapter:
 
         if not self._log_path.exists():
             return []
-        matches: list[TransparencyLogEntry] = []
-        for raw in self._log_path.read_text(encoding="utf-8").splitlines():
-            raw = raw.strip()
-            if not raw:
-                continue
-            loaded = json.loads(raw)
-            if loaded.get("artifactHash") != artifact_hash:
-                continue
-            matches.append(
-                TransparencyLogEntry(
-                    entry_id=str(loaded["entryId"]),
-                    artifact_hash=str(loaded["artifactHash"]),
-                    artifact_id=str(loaded["artifactId"]),
-                    request_id=(
-                        None
-                        if loaded.get("requestId") is None
-                        else str(loaded.get("requestId"))
-                    ),
-                    source_file=str(loaded["sourceFile"]),
-                    previous_entry_hash=(
-                        None
-                        if loaded.get("previousEntryHash") is None
-                        else str(loaded.get("previousEntryHash"))
-                    ),
-                    entry_hash=str(loaded["entryHash"]),
-                    anchored_at=str(loaded["anchoredAt"]),
-                    remote_receipt=(
-                        None
-                        if loaded.get("remoteReceipt") is None
-                        else str(loaded.get("remoteReceipt"))
-                    ),
-                )
-            )
-        return matches
+        entries = self.parse_entries_from_jsonl(
+            self._log_path.read_text(encoding="utf-8")
+        )
+        return [entry for entry in entries if entry.artifact_hash == artifact_hash]
 
     def verify_integrity(self) -> bool:
         """Verify hash chain integrity for all local entries."""
 
         if not self._log_path.exists():
             return True
-        previous_entry_hash: str | None = None
-        for raw in self._log_path.read_text(encoding="utf-8").splitlines():
-            raw = raw.strip()
-            if not raw:
+        entries = self.parse_entries_from_jsonl(
+            self._log_path.read_text(encoding="utf-8")
+        )
+        return self.verify_integrity_entries(entries)
+
+    def parse_entries_from_jsonl(self, jsonl_text: str) -> list[TransparencyLogEntry]:
+        """Parse transparency entries from JSONL content in-memory."""
+
+        entries: list[TransparencyLogEntry] = []
+        for raw in jsonl_text.splitlines():
+            stripped = raw.strip()
+            if not stripped:
                 continue
-            loaded = json.loads(raw)
-            payload = {
-                "entryId": loaded["entryId"],
-                "artifactHash": loaded["artifactHash"],
-                "artifactId": loaded["artifactId"],
-                "requestId": loaded.get("requestId"),
-                "sourceFile": loaded["sourceFile"],
-                "previousEntryHash": loaded.get("previousEntryHash"),
-                "anchoredAt": loaded["anchoredAt"],
-                "metadata": loaded.get("metadata", {}),
-            }
-            expected_hash = sha256_hex(canonical_json_bytes(payload))
-            if expected_hash != loaded.get("entryHash"):
+            loaded = json.loads(stripped)
+            entries.append(self._entry_from_loaded_record(loaded))
+        return entries
+
+    def verify_integrity_entries(self, entries: list[TransparencyLogEntry]) -> bool:
+        """Verify hash-chain integrity for already parsed entries."""
+
+        previous_entry_hash: str | None = None
+        for entry in entries:
+            if entry.previous_entry_hash != previous_entry_hash:
                 return False
-            if loaded.get("previousEntryHash") != previous_entry_hash:
+            expected_hash = self._expected_entry_hash(entry)
+            if expected_hash != entry.entry_hash:
                 return False
-            previous_entry_hash = str(loaded["entryHash"])
+            previous_entry_hash = entry.entry_hash
         return True
+
+    @staticmethod
+    def _entry_from_loaded_record(loaded: dict[str, Any]) -> TransparencyLogEntry:
+        metadata_loaded = loaded.get("metadata", {})
+        metadata = metadata_loaded if isinstance(metadata_loaded, dict) else {}
+        payload = {
+            "entryId": str(loaded["entryId"]),
+            "artifactHash": str(loaded["artifactHash"]),
+            "artifactId": str(loaded["artifactId"]),
+            "requestId": (
+                None
+                if loaded.get("requestId") is None
+                else str(loaded.get("requestId"))
+            ),
+            "sourceFile": str(loaded["sourceFile"]),
+            "previousEntryHash": (
+                None
+                if loaded.get("previousEntryHash") is None
+                else str(loaded.get("previousEntryHash"))
+            ),
+            "anchoredAt": str(loaded["anchoredAt"]),
+            "metadata": metadata,
+            "entryHash": str(loaded["entryHash"]),
+            "remoteReceipt": (
+                None
+                if loaded.get("remoteReceipt") is None
+                else str(loaded.get("remoteReceipt"))
+            ),
+        }
+        return TransparencyLogEntry(
+            entry_id=payload["entryId"],
+            artifact_hash=payload["artifactHash"],
+            artifact_id=payload["artifactId"],
+            request_id=payload["requestId"],
+            source_file=payload["sourceFile"],
+            previous_entry_hash=payload["previousEntryHash"],
+            entry_hash=payload["entryHash"],
+            anchored_at=payload["anchoredAt"],
+            remote_receipt=payload["remoteReceipt"],
+            metadata=payload["metadata"],
+        )
+
+    @staticmethod
+    def _expected_entry_hash(entry: TransparencyLogEntry) -> str:
+        payload = {
+            "entryId": entry.entry_id,
+            "artifactHash": entry.artifact_hash,
+            "artifactId": entry.artifact_id,
+            "requestId": entry.request_id,
+            "sourceFile": entry.source_file,
+            "previousEntryHash": entry.previous_entry_hash,
+            "anchoredAt": entry.anchored_at,
+            "metadata": entry.metadata,
+        }
+        return sha256_hex(canonical_json_bytes(payload))
 
     def _read_latest_entry_hash(self) -> str | None:
         """Read previous hash from the last local entry."""

@@ -4,12 +4,51 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 from pathlib import Path
+from uuid import UUID
+
+import pygit2
 
 from src.adapters.kafka_event_bus import KafkaEventBus
+from src.env_config import read_env_optional
 from src.events import StoryRequested
 from src.runtime.bootstrap_topics import _bootstrap_topics
+
+
+def _resolve_artifact_branch_target(
+    ledger_repo_path: Path,
+    request_id: UUID,
+) -> tuple[str, str, str] | None:
+    """Return branch, commit, and path when artifact branch/blob exists."""
+
+    try:
+        repo = pygit2.Repository(str(ledger_repo_path))
+    except (KeyError, pygit2.GitError) as exc:
+        raise RuntimeError(f"Invalid ledger git repository: '{ledger_repo_path}'.") from exc
+
+    branch_name = f"artifact/{request_id}"
+    ref_name = f"refs/heads/{branch_name}"
+    try:
+        reference = repo.lookup_reference(ref_name)
+    except KeyError:
+        return None
+
+    commit_obj = repo[reference.target]
+    if not isinstance(commit_obj, pygit2.Commit):
+        raise RuntimeError(f"Branch ref '{ref_name}' does not point to a commit.")
+
+    artifact_path = f"{request_id}.md"
+    try:
+        tree_entry = commit_obj.tree[artifact_path]
+    except KeyError:
+        return None
+
+    blob_obj = repo[tree_entry.id]
+    if not isinstance(blob_obj, pygit2.Blob):
+        raise RuntimeError(
+            f"Artifact path '{artifact_path}' on '{branch_name}' is not a blob."
+        )
+    return branch_name, str(commit_obj.id), artifact_path
 
 
 async def _run_smoke(
@@ -22,7 +61,10 @@ async def _run_smoke(
     """Emit one generation request and wait for artifact file creation."""
 
     if bootstrap_topics:
-        await _bootstrap_topics(bootstrap_servers=bootstrap_servers, partitions=1)
+        await _bootstrap_topics(
+            bootstrap_servers=bootstrap_servers,
+            partitions=1,
+        )
 
     bus = KafkaEventBus(
         bootstrap_servers=bootstrap_servers,
@@ -35,17 +77,30 @@ async def _run_smoke(
     finally:
         await bus.stop()
 
-    artifact_path = ledger_repo_path / "artifacts" / f"{event.request_id}.md"
+    expected_branch = f"artifact/{event.request_id}"
+    expected_path = f"{event.request_id}.md"
     deadline = asyncio.get_running_loop().time() + timeout_sec
     while asyncio.get_running_loop().time() < deadline:
-        if artifact_path.exists():
-            print(f"[OK] Smoke succeeded: {artifact_path}")
+        resolved_target = _resolve_artifact_branch_target(
+            ledger_repo_path=ledger_repo_path,
+            request_id=event.request_id,
+        )
+        if resolved_target is not None:
+            branch_name, commit_oid, artifact_path = resolved_target
+            print(
+                "[OK] Smoke succeeded:",
+                f"request_id={event.request_id}",
+                f"branch={branch_name}",
+                f"commit={commit_oid}",
+                f"path={artifact_path}",
+            )
             return 0
         await asyncio.sleep(1.0)
 
     raise RuntimeError(
-        "Smoke timeout waiting for artifact file. "
-        f"expected='{artifact_path}' request_id={event.request_id}"
+        "Smoke timeout waiting for branch artifact commit. "
+        f"expected_branch='{expected_branch}' expected_path='{expected_path}' "
+        f"request_id={event.request_id}"
     )
 
 
@@ -60,12 +115,15 @@ def main() -> int:
     )
     parser.add_argument(
         "--bootstrap-servers",
-        default=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
+        default=(
+            read_env_optional("KAFKA_BOOTSTRAP_SERVERS")
+            or "localhost:9092"
+        ),
         help="Kafka bootstrap servers.",
     )
     parser.add_argument(
         "--ledger-repo-path",
-        default=os.getenv("LEDGER_REPO_PATH", "./ledger"),
+        default=read_env_optional("LEDGER_REPO_PATH") or "./ledger",
         help="Path to ledger git repository.",
     )
     parser.add_argument(

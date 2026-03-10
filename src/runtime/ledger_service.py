@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 
 from src.adapters.git_ledger import GitLedgerAdapter
+from src.env_config import read_env_optional
+from src.events import StoryCommitted
 from src.runtime.service_runtime import (
     build_kafka_bus,
+    build_repository,
     configure_logging,
     run_until_cancelled,
 )
@@ -18,7 +20,26 @@ async def _run() -> None:
     configure_logging()
     bus = build_kafka_bus("ledger-service")
     await bus.start()
-    repository_path = Path(os.getenv("LEDGER_REPO_PATH", ".")).resolve()
+    repository = build_repository()
+
+    async def _record_committed(event: StoryCommitted) -> None:
+        existing = await asyncio.to_thread(
+            repository.get_artifact_record,
+            event.request_id,
+        )
+        if existing is None:
+            # Notary persistence may have been unavailable or started late.
+            return
+        await asyncio.to_thread(
+            repository.update_artifact_status,
+            event.request_id,
+            "committed",
+            event.ledger_path,
+            event.commit_oid,
+        )
+
+    await bus.subscribe(StoryCommitted, _record_committed)
+    repository_path = Path(read_env_optional("LEDGER_REPO_PATH") or ".").resolve()
     adapter = GitLedgerAdapter(event_bus=bus, repository_path=repository_path)
     await adapter.start()
     await run_until_cancelled()

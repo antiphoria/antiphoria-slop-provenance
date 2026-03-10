@@ -82,6 +82,15 @@ class ProvenanceServicePort(Protocol):
     ) -> AnchorOutcome:
         """Anchor one artifact in transparency log."""
 
+    def anchor_committed_artifact(
+        self,
+        repository_path: Path,
+        commit_oid: str,
+        ledger_path: str,
+        request_id: UUID,
+    ) -> AnchorOutcome:
+        """Anchor one committed artifact directly from git objects."""
+
     def timestamp_artifact(
         self,
         artifact_path: Path,
@@ -90,6 +99,17 @@ class ProvenanceServicePort(Protocol):
         digest_algorithm: str = "sha256",
     ) -> TimestampOutcome:
         """Request and verify RFC3161 timestamp for one artifact."""
+
+    def timestamp_committed_artifact(
+        self,
+        repository_path: Path,
+        commit_oid: str,
+        ledger_path: str,
+        request_id: UUID | None,
+        tsa_ca_cert_path: Path | None,
+        digest_algorithm: str = "sha256",
+    ) -> TimestampOutcome:
+        """Request/verify timestamp for one committed artifact."""
 
 
 class VerificationServicePort(Protocol):

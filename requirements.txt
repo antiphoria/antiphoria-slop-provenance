@@ -8,10 +8,19 @@ aiokafka==0.13.0
     # via -r requirements.in
 annotated-types==0.7.0
     # via pydantic
+anyio==4.12.1
+    # via
+    #   google-genai
+    #   httpx
 async-timeout==5.0.1
     # via aiokafka
+c2pa-python==0.28.0
+    # via -r requirements.in
 certifi==2026.2.25
-    # via requests
+    # via
+    #   httpcore
+    #   httpx
+    #   requests
 cffi==2.0.0
     # via
     #   cryptography
@@ -19,61 +28,39 @@ cffi==2.0.0
 charset-normalizer==3.4.4
     # via requests
 colorama==0.4.6
-    # via tqdm
+    # via pytest
 cryptography==46.0.5
-    # via google-auth
-google-ai-generativelanguage==0.6.15
-    # via google-generativeai
-google-api-core[grpc]==2.25.2
     # via
-    #   google-ai-generativelanguage
-    #   google-api-python-client
-    #   google-generativeai
-google-api-python-client==2.190.0
-    # via google-generativeai
-google-auth==2.49.0.dev0
-    # via
-    #   google-ai-generativelanguage
-    #   google-api-core
-    #   google-api-python-client
-    #   google-auth-httplib2
-    #   google-generativeai
-google-auth-httplib2==0.3.0
-    # via google-api-python-client
-google-generativeai==0.8.6
+    #   c2pa-python
+    #   google-auth
+distro==1.9.0
+    # via google-genai
+google-auth[requests]==2.49.0.dev0
+    # via google-genai
+google-genai==1.66.0
     # via -r requirements.in
-googleapis-common-protos==1.72.0
-    # via
-    #   google-api-core
-    #   grpcio-status
-grpcio==1.78.0
-    # via
-    #   google-api-core
-    #   grpcio-status
-grpcio-status==1.71.2
-    # via google-api-core
-httplib2==0.31.2
-    # via
-    #   google-api-python-client
-    #   google-auth-httplib2
+h11==0.16.0
+    # via httpcore
+httpcore==1.0.9
+    # via httpx
+httpx==0.28.1
+    # via google-genai
 idna==3.11
-    # via requests
+    # via
+    #   anyio
+    #   httpx
+    #   requests
+iniconfig==2.3.0
+    # via pytest
 liboqs-python==0.14.1
     # via -r requirements.in
 packaging==26.0
-    # via aiokafka
-proto-plus==1.27.1
     # via
-    #   google-ai-generativelanguage
-    #   google-api-core
-protobuf==5.29.6
-    # via
-    #   google-ai-generativelanguage
-    #   google-api-core
-    #   google-generativeai
-    #   googleapis-common-protos
-    #   grpcio-status
-    #   proto-plus
+    #   aiokafka
+    #   pytest
+    #   wheel
+pluggy==1.6.0
+    # via pytest
 pyasn1==0.6.2
     # via pyasn1-modules
 pyasn1-modules==0.4.2
@@ -83,30 +70,43 @@ pycparser==3.0
 pydantic==2.12.5
     # via
     #   -r requirements.in
-    #   google-generativeai
+    #   google-genai
 pydantic-core==2.41.5
     # via pydantic
 pygit2==1.19.1
     # via -r requirements.in
-pyparsing==3.3.2
-    # via httplib2
+pygments==2.19.2
+    # via pytest
+pytest==9.0.2
+    # via c2pa-python
 pyyaml==6.0.3
     # via -r requirements.in
 requests==2.32.5
-    # via google-api-core
-tqdm==4.67.3
-    # via google-generativeai
+    # via
+    #   c2pa-python
+    #   google-auth
+    #   google-genai
+sniffio==1.3.1
+    # via google-genai
+tenacity==9.1.4
+    # via google-genai
+toml==0.10.2
+    # via c2pa-python
 typing-extensions==4.15.0
     # via
     #   aiokafka
-    #   google-generativeai
-    #   grpcio
+    #   google-genai
     #   pydantic
     #   pydantic-core
     #   typing-inspection
 typing-inspection==0.4.2
     # via pydantic
-uritemplate==4.2.0
-    # via google-api-python-client
 urllib3==2.6.3
     # via requests
+websockets==16.0
+    # via google-genai
+wheel==0.46.3
+    # via c2pa-python
+
+# The following packages are considered to be unsafe in a requirements file:
+# setuptools

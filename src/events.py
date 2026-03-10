@@ -100,6 +100,8 @@ class StorySigned(BaseModel):
     artifact: Artifact
     body: str = Field(min_length=1)
     c2pa_manifest_hash: str | None = None
+    c2pa_manifest_bytes_b64: str | None = None
+    # Legacy field retained for Kafka/backfill compatibility.
     c2pa_manifest_bytes_ref: str | None = None
     signed_at: datetime = Field(default_factory=_utc_now)
 
@@ -157,7 +159,8 @@ class StoryTimestamped(BaseModel):
         artifact_hash: SHA-256 payload digest used for RFC3161 query.
         tsa_url: RFC3161 TSA endpoint URL.
         digest_algorithm: Digest algorithm used for timestamp query.
-        verification_status: Timestamp verification status (`verified` or `failed`).
+        verification_status: Timestamp status
+            (`verified`, `failed`, or `skipped`).
         verification_message: Human-readable verification details.
         timestamped_at: UTC timestamp for event creation.
     """

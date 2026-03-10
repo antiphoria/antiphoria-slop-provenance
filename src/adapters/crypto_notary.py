@@ -5,14 +5,17 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 import oqs
 
-from src.adapters.c2pa_manifest import build_c2pa_sidecar_manifest
+from src.adapters.c2pa_manifest import (
+    C2PAManifestArtifact,
+    build_c2pa_sidecar_manifest,
+)
+from src.env_config import read_env_bool, read_env_required
 from src.events import EventBusPort, StoryCurated, StoryGenerated, StorySigned
 from src.policies.licensing import get_license_id
 from src.models import (
@@ -37,35 +40,6 @@ _ENV_KEY_CANDIDATES = ("PQC_PRIVATE_KEY_PATH", "OQS_PRIVATE_KEY_PATH")
 _PUBLIC_ENV_KEY_CANDIDATES = ("PQC_PUBLIC_KEY_PATH", "OQS_PUBLIC_KEY_PATH")
 _DEFAULT_ENGINE_VERSION = "slop-orchestrator-v1.0.0"
 _DEFAULT_CONTENT_TYPE = "text/markdown"
-
-
-def _read_env_value(env_key: str, env_path: Path) -> str:
-    """Read a key from process environment or local `.env` file."""
-
-    from os import getenv
-
-    direct = getenv(env_key)
-    if direct:
-        return direct
-
-    if not env_path.exists():
-        raise RuntimeError(
-            f"Missing required environment variable '{env_key}' and missing "
-            f"env file at '{env_path}'."
-        )
-
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        if key.strip() == env_key:
-            parsed = value.strip().strip("'\"")
-            if parsed:
-                return parsed
-            raise RuntimeError(f"Environment key '{env_key}' is empty in .env.")
-
-    raise RuntimeError(f"Missing required environment variable '{env_key}'.")
 
 
 def _load_key_bytes(key_path: Path) -> bytes:
@@ -127,7 +101,11 @@ class CryptoNotaryAdapter:
         if require_private_key:
             self._private_key = self._resolve_private_key()
         self._signer_fingerprint = self._resolve_signer_fingerprint()
-        self._enable_c2pa = os.getenv("ENABLE_C2PA", "false").lower() == "true"
+        self._enable_c2pa = read_env_bool(
+            "ENABLE_C2PA",
+            default=False,
+            env_path=self._env_path,
+        )
 
     async def start(self) -> None:
         """Subscribe to generation and curation events."""
@@ -141,7 +119,10 @@ class CryptoNotaryAdapter:
         private_key_path_value: str | None = None
         for env_key in _ENV_KEY_CANDIDATES:
             try:
-                private_key_path_value = _read_env_value(env_key, self._env_path)
+                private_key_path_value = read_env_required(
+                    env_key,
+                    env_path=self._env_path,
+                )
                 break
             except RuntimeError:
                 continue
@@ -161,7 +142,10 @@ class CryptoNotaryAdapter:
         """Resolve signer fingerprint from env or key hash fallback."""
 
         try:
-            return _read_env_value("SIGNER_FINGERPRINT", self._env_path)
+            return read_env_required(
+                "SIGNER_FINGERPRINT",
+                env_path=self._env_path,
+            )
         except RuntimeError:
             if self._private_key is None:
                 return "unknown"
@@ -173,7 +157,10 @@ class CryptoNotaryAdapter:
         public_key_path_value: str | None = None
         for env_key in _PUBLIC_ENV_KEY_CANDIDATES:
             try:
-                public_key_path_value = _read_env_value(env_key, self._env_path)
+                public_key_path_value = read_env_required(
+                    env_key,
+                    env_path=self._env_path,
+                )
                 break
             except RuntimeError:
                 continue
@@ -190,7 +177,7 @@ class CryptoNotaryAdapter:
     async def _on_story_generated(self, event: StoryGenerated) -> None:
         """Sign generated content and emit a signed envelope event."""
 
-        artifact = await self._build_signed_artifact(
+        artifact, c2pa_manifest = await self._build_signed_artifact(
             title=event.title,
             source="synthetic",
             model_id=event.model_id,
@@ -211,14 +198,21 @@ class CryptoNotaryAdapter:
                 request_id=event.request_id,
                 artifact=artifact,
                 body=event.body,
-                c2pa_manifest_hash=self._c2pa_manifest_hash(artifact, event.body),
+                c2pa_manifest_hash=(
+                    None if c2pa_manifest is None else c2pa_manifest.manifest_hash
+                ),
+                c2pa_manifest_bytes_b64=(
+                    None
+                    if c2pa_manifest is None
+                    else base64.b64encode(c2pa_manifest.manifest_bytes).decode("ascii")
+                ),
             )
         )
 
     async def _on_story_curated(self, event: StoryCurated) -> None:
         """Sign curated content and emit a signed envelope event."""
 
-        artifact = await self._build_signed_artifact(
+        artifact, c2pa_manifest = await self._build_signed_artifact(
             title=self._derive_title(event.curated_body),
             source="hybrid",
             model_id=event.model_id,
@@ -239,9 +233,13 @@ class CryptoNotaryAdapter:
                 request_id=event.request_id,
                 artifact=artifact,
                 body=event.curated_body,
-                c2pa_manifest_hash=self._c2pa_manifest_hash(
-                    artifact,
-                    event.curated_body,
+                c2pa_manifest_hash=(
+                    None if c2pa_manifest is None else c2pa_manifest.manifest_hash
+                ),
+                c2pa_manifest_bytes_b64=(
+                    None
+                    if c2pa_manifest is None
+                    else base64.b64encode(c2pa_manifest.manifest_bytes).decode("ascii")
                 ),
             )
         )
@@ -262,7 +260,7 @@ class CryptoNotaryAdapter:
         content_type: str,
         license: str,
         curation: Curation | None,
-    ) -> Artifact:
+    ) -> tuple[Artifact, C2PAManifestArtifact | None]:
         """Construct unsigned envelope, sign canonical target, attach signature."""
 
         if self._private_key is None:
@@ -291,14 +289,19 @@ class CryptoNotaryAdapter:
             ),
             curation=curation,
         )
-        c2pa_manifest_hash = None
+        c2pa_manifest: C2PAManifestArtifact | None = None
         if self._enable_c2pa:
-            c2pa_manifest = build_c2pa_sidecar_manifest(unsigned_envelope, body)
-            c2pa_manifest_hash = c2pa_manifest.manifest_hash
+            c2pa_manifest = build_c2pa_sidecar_manifest(
+                unsigned_envelope,
+                body,
+                env_path=self._env_path,
+            )
         signing_target = build_envelope_signing_target(
             envelope=unsigned_envelope,
             payload_sha256_hex=payload_hash,
-            manifest_sha256_hex=c2pa_manifest_hash,
+            manifest_sha256_hex=(
+                None if c2pa_manifest is None else c2pa_manifest.manifest_hash
+            ),
             prev_hash=None,
         )
         signing_hash = sha256_hex(canonical_json_bytes(signing_target))
@@ -315,14 +318,7 @@ class CryptoNotaryAdapter:
                 signerFingerprint=self._signer_fingerprint,
             ),
         )
-        return unsigned_envelope.model_copy(update={"signature": signature})
-
-    def _c2pa_manifest_hash(self, artifact: Artifact, body: str) -> str | None:
-        """Return C2PA sidecar hash when C2PA dual-write is enabled."""
-
-        if not self._enable_c2pa:
-            return None
-        return build_c2pa_sidecar_manifest(artifact, body).manifest_hash
+        return unsigned_envelope.model_copy(update={"signature": signature}), c2pa_manifest
 
     def verify_artifact(self, file_path: Path) -> bool:
         """Verify an Eternity v1 artifact against canonical signing target.
@@ -369,13 +365,73 @@ class CryptoNotaryAdapter:
         except binascii.Error as exc:
             raise RuntimeError("Invalid base64 signature payload in artifact.") from exc
         public_key = self._resolve_public_key()
+        is_valid = self._verify_mldsa_signature(
+            signing_hash=signing_hash,
+            signature_bytes=signature_bytes,
+            public_key=public_key,
+        )
+        if is_valid:
+            return True
+
+        # Backward-compatibility path for previously rendered artifacts that
+        # used folded YAML scalars and injected a trailing newline into prompt
+        # and systemInstruction during parse-time reconstruction.
+        normalized_envelope = self._normalize_generation_context_scalars(envelope)
+        if normalized_envelope is None:
+            return False
+        normalized_target = build_envelope_signing_target(
+            envelope=normalized_envelope,
+            payload_sha256_hex=payload_hash,
+            manifest_sha256_hex=manifest_hash,
+            prev_hash=None,
+        )
+        normalized_hash = sha256_hex(canonical_json_bytes(normalized_target))
+        fallback_valid = self._verify_mldsa_signature(
+            signing_hash=normalized_hash,
+            signature_bytes=signature_bytes,
+            public_key=public_key,
+        )
+        return fallback_valid
+
+    @staticmethod
+    def _verify_mldsa_signature(
+        signing_hash: str,
+        signature_bytes: bytes,
+        public_key: bytes,
+    ) -> bool:
+        """Verify one ML-DSA signature over a canonical signing-hash string."""
+
         with oqs.Signature(_ML_DSA_ALGORITHM) as verifier:
-            is_valid = verifier.verify(
-                signing_hash.encode("utf-8"),
-                signature_bytes,
-                public_key,
+            return bool(
+                verifier.verify(
+                    signing_hash.encode("utf-8"),
+                    signature_bytes,
+                    public_key,
+                )
             )
-        return bool(is_valid)
+
+    @staticmethod
+    def _normalize_generation_context_scalars(envelope: Artifact) -> Artifact | None:
+        """Normalize prompt/instruction values for legacy folded-scalar artifacts."""
+
+        generation_context = envelope.provenance.generation_context
+        normalized_prompt = generation_context.prompt.rstrip("\n")
+        normalized_system_instruction = generation_context.system_instruction.rstrip("\n")
+        if (
+            normalized_prompt == generation_context.prompt
+            and normalized_system_instruction == generation_context.system_instruction
+        ):
+            return None
+        normalized_context = generation_context.model_copy(
+            update={
+                "prompt": normalized_prompt,
+                "system_instruction": normalized_system_instruction,
+            }
+        )
+        normalized_provenance = envelope.provenance.model_copy(
+            update={"generation_context": normalized_context}
+        )
+        return envelope.model_copy(update={"provenance": normalized_provenance})
 
     def _resolve_manifest_hash_for_artifact(self, file_path: Path) -> str | None:
         """Resolve C2PA sidecar hash when a sibling .c2pa file exists."""

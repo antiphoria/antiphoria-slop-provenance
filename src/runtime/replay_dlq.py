@@ -5,7 +5,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
+
+from src.env_config import read_env_optional
 
 
 async def _replay(args: argparse.Namespace) -> int:
@@ -14,7 +15,9 @@ async def _replay(args: argparse.Namespace) -> int:
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("aiokafka is required for DLQ replay.") from exc
 
-    bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+    bootstrap_servers = (
+        read_env_optional("KAFKA_BOOTSTRAP_SERVERS") or "localhost:9092"
+    )
     dlq_topic = f"{args.topic}.dlq"
     consumer = AIOKafkaConsumer(
         dlq_topic,

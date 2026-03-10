@@ -15,6 +15,7 @@ from uuid import UUID
 
 import pygit2
 
+from src.adapters.c2pa_manifest import validate_c2pa_sidecar
 from src.adapters.crypto_notary import CryptoNotaryAdapter
 from src.adapters.gemini_engine import GeminiEngineAdapter
 from src.adapters.git_ledger import GitLedgerAdapter
@@ -23,6 +24,7 @@ from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.provenance_telemetry import ProvenanceTelemetryAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
 from src.adapters.transparency_log import TransparencyLogAdapter
+from src.env_config import read_env_optional
 from src.events import (
     EventBus,
     EventHandlerError,
@@ -46,6 +48,9 @@ from src.services.curation_service import (
 )
 from src.services.provenance_service import ProvenanceService
 from src.services.verification_service import VerificationService
+
+
+_read_env_optional = read_env_optional
 
 
 class OrchestratorLock:
@@ -100,13 +105,13 @@ def build_parser() -> argparse.ArgumentParser:
     generate_parser.add_argument("--repo-path", required=True, help="Ledger repo path.")
     generate_parser.add_argument(
         "--model-id",
-        default="gemini-2.5-flash",
+        default=_read_env_optional("GENERATOR_MODEL_ID") or "gemini-2.5-flash",
         help="Google AI Studio model identifier.",
     )
     generate_parser.add_argument(
         "--transport",
         choices=("local", "kafka"),
-        default=os.getenv("ORCHESTRATOR_TRANSPORT", "local"),
+        default=_read_env_optional("ORCHESTRATOR_TRANSPORT") or "local",
         help="Execution transport mode.",
     )
 
@@ -121,7 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     curate_parser.add_argument(
         "--transport",
         choices=("local", "kafka"),
-        default=os.getenv("ORCHESTRATOR_TRANSPORT", "local"),
+        default=_read_env_optional("ORCHESTRATOR_TRANSPORT") or "local",
         help="Execution transport mode.",
     )
 
@@ -130,6 +135,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Verify Eternity v1 artifact signature and payload integrity.",
     )
     verify_parser.add_argument("--file", required=True, help="Artifact file path.")
+    verify_parser.add_argument(
+        "--strict-c2pa",
+        action="store_true",
+        help="Require sidecar presence and valid C2PA semantic verification.",
+    )
 
     anchor_parser = subparsers.add_parser(
         "anchor",
@@ -173,6 +183,41 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional audit report output path.",
     )
+    audit_parser.add_argument(
+        "--strict-c2pa",
+        action="store_true",
+        help="Fail audit when C2PA sidecar is missing or invalid.",
+    )
+    attest_parser = subparsers.add_parser(
+        "attest",
+        help="Attest one artifact branch by request_id without checkout.",
+    )
+    attest_parser.add_argument("--repo-path", required=True, help="Ledger repo path.")
+    attest_parser.add_argument(
+        "--request-id",
+        required=True,
+        help="Artifact request UUID (maps to branch artifact/<request_id>).",
+    )
+    attest_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail attestation when timestamp is missing/invalid.",
+    )
+    attest_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print structured attestation JSON output.",
+    )
+    attest_parser.add_argument(
+        "--tsa-ca-cert-path",
+        default=None,
+        help="Path to TSA CA certificate bundle.",
+    )
+    attest_parser.add_argument(
+        "--strict-c2pa",
+        action="store_true",
+        help="Fail attestation when C2PA sidecar is missing or invalid.",
+    )
     events_parser = subparsers.add_parser(
         "events",
         help="List recent provenance lifecycle events.",
@@ -207,8 +252,6 @@ def _verify_git_commit(repository_path: Path, commit_oid: str) -> str:
         raise RuntimeError(
             f"Unable to open git repository for verification: '{repository_path}'."
         ) from exc
-    if repo.head_is_unborn:
-        raise RuntimeError("Git repository contains no commits to verify.")
     try:
         commit = repo.revparse_single(commit_oid)
     except (KeyError, pygit2.GitError) as exc:
@@ -227,6 +270,15 @@ def _validate_external_repo_path(repository_path: Path) -> None:
         )
 
 
+def _build_repository() -> SQLiteRepository:
+    """Build SQLite repository honoring optional shared STATE_DB_PATH."""
+
+    state_db_path = _read_env_optional("STATE_DB_PATH")
+    if state_db_path is None:
+        return SQLiteRepository()
+    return SQLiteRepository(db_path=Path(state_db_path).resolve())
+
+
 def _build_provenance_services(
     repository: SQLiteRepository,
     repository_path: Path,
@@ -237,10 +289,28 @@ def _build_provenance_services(
     transparency_log_path = repository_path / ".provenance" / "transparency-log.jsonl"
     transparency_log_adapter = TransparencyLogAdapter(
         log_path=transparency_log_path,
-        publish_url=os.getenv("TRANSPARENCY_LOG_PUBLISH_URL"),
+        publish_url=_read_env_optional("TRANSPARENCY_LOG_PUBLISH_URL"),
     )
-    tsa_url = tsa_url_override or os.getenv("RFC3161_TSA_URL")
-    tsa_adapter = None if tsa_url is None else RFC3161TSAAdapter(tsa_url=tsa_url)
+    tsa_url = tsa_url_override or _read_env_optional("RFC3161_TSA_URL")
+    tsa_untrusted_path = _read_env_optional("RFC3161_TSA_UNTRUSTED_CERT_PATH")
+    openssl_bin = _read_env_optional("OPENSSL_BIN") or "openssl"
+    openssl_conf = _read_env_optional("OPENSSL_CONF")
+    tsa_adapter = (
+        None
+        if tsa_url is None
+        else RFC3161TSAAdapter(
+            tsa_url=tsa_url,
+            openssl_bin=openssl_bin,
+            untrusted_cert_path=(
+                None
+                if tsa_untrusted_path is None
+                else Path(tsa_untrusted_path).resolve()
+            ),
+            openssl_conf_path=(
+                None if openssl_conf is None else Path(openssl_conf).resolve()
+            ),
+        )
+    )
     key_registry = KeyRegistryAdapter(repository=repository)
     provenance_service = ProvenanceService(
         repository=repository,
@@ -264,10 +334,21 @@ def _build_provenance_services(
 def _resolve_tsa_ca_cert_path(explicit_path: str | None) -> Path | None:
     """Resolve optional TSA CA cert path from arg or env."""
 
-    raw_path = explicit_path or os.getenv("RFC3161_CA_CERT_PATH")
+    raw_path = explicit_path or _read_env_optional("RFC3161_CA_CERT_PATH")
     if raw_path is None:
         return None
     return Path(raw_path).resolve()
+
+
+def _print_attest_next_step(repository_path: Path, request_id: UUID) -> None:
+    """Print one-click follow-up attestation command."""
+
+    print(
+        "Next step:",
+        "slop-cli attest "
+        f'--repo-path "{repository_path}" '
+        f"--request-id {request_id}",
+    )
 
 
 async def _anchor_and_timestamp_committed_artifact(
@@ -278,10 +359,11 @@ async def _anchor_and_timestamp_committed_artifact(
 ) -> None:
     """Anchor and timestamp a committed artifact when TSA is configured."""
 
-    artifact_path = repository_path / committed_event.ledger_path
     anchor_outcome = await asyncio.to_thread(
-        provenance_service.anchor_artifact,
-        artifact_path,
+        provenance_service.anchor_committed_artifact,
+        repository_path,
+        committed_event.commit_oid,
+        committed_event.ledger_path,
         committed_event.request_id,
     )
     await event_bus.emit(
@@ -301,8 +383,10 @@ async def _anchor_and_timestamp_committed_artifact(
     )
     try:
         timestamp_outcome = await asyncio.to_thread(
-            provenance_service.timestamp_artifact,
-            artifact_path,
+            provenance_service.timestamp_committed_artifact,
+            repository_path,
+            committed_event.commit_oid,
+            committed_event.ledger_path,
             committed_event.request_id,
             _resolve_tsa_ca_cert_path(None),
         )
@@ -325,6 +409,17 @@ async def _anchor_and_timestamp_committed_artifact(
             f"verified={timestamp_outcome.verification.ok}",
         )
     except RuntimeError as exc:
+        await event_bus.emit(
+            StoryTimestamped(
+                request_id=committed_event.request_id,
+                artifact_id=UUID(anchor_outcome.artifact_id),
+                artifact_hash=anchor_outcome.artifact_hash,
+                tsa_url=_read_env_optional("RFC3161_TSA_URL") or "unconfigured",
+                digest_algorithm="sha256",
+                verification_status="skipped",
+                verification_message=str(exc),
+            )
+        )
         print(f"Timestamp skipped: {exc}")
 
 
@@ -334,7 +429,9 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
     assert_secret_free("cli generate prompt", args.prompt)
 
     if args.transport == "kafka":
-        bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+        bootstrap_servers = (
+            _read_env_optional("KAFKA_BOOTSTRAP_SERVERS") or "localhost:9092"
+        )
         kafka_bus = KafkaEventBus(
             bootstrap_servers=bootstrap_servers,
             consumer_group="cli-gateway",
@@ -351,7 +448,7 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
         return 0
 
     event_bus = EventBus()
-    repository = SQLiteRepository()
+    repository = _build_repository()
     telemetry_adapter = ProvenanceTelemetryAdapter(
         event_bus=event_bus, repository=repository
     )
@@ -383,7 +480,7 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
         await asyncio.to_thread(
             provenance_service.register_signing_key,
             event.artifact.signature.verification_anchor.signer_fingerprint,
-            os.getenv("SIGNING_KEY_VERSION"),
+            _read_env_optional("SIGNING_KEY_VERSION"),
         )
 
     async def _record_committed(event: StoryCommitted) -> None:
@@ -444,6 +541,7 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
         f"commit={committed_event.commit_oid}",
         f"path={committed_event.ledger_path}",
     )
+    _print_attest_next_step(repository_path, request_event.request_id)
     await event_bus.drain()
     return 0
 
@@ -452,7 +550,7 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
     """Run curation pipeline for an edited markdown artifact file."""
 
     if args.transport == "kafka":
-        repository = SQLiteRepository()
+        repository = _build_repository()
         artifact_path = Path(args.file).resolve()
         if not artifact_path.exists():
             raise RuntimeError(f"Curated file not found: '{artifact_path}'.")
@@ -467,7 +565,9 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
         assert_secret_free("curation prompt", record.prompt)
         assert_secret_free("curation body", curated_body)
         curation_metadata = build_curation_metadata(record.body, curated_body)
-        bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+        bootstrap_servers = (
+            _read_env_optional("KAFKA_BOOTSTRAP_SERVERS") or "localhost:9092"
+        )
         kafka_bus = KafkaEventBus(
             bootstrap_servers=bootstrap_servers,
             consumer_group="cli-gateway",
@@ -487,7 +587,7 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
         return 0
 
     event_bus = EventBus()
-    repository = SQLiteRepository()
+    repository = _build_repository()
     telemetry_adapter = ProvenanceTelemetryAdapter(
         event_bus=event_bus, repository=repository
     )
@@ -531,7 +631,7 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
         await asyncio.to_thread(
             provenance_service.register_signing_key,
             event.artifact.signature.verification_anchor.signer_fingerprint,
-            os.getenv("SIGNING_KEY_VERSION"),
+            _read_env_optional("SIGNING_KEY_VERSION"),
         )
 
     async def _record_committed(event: StoryCommitted) -> None:
@@ -597,6 +697,7 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
         f"commit={committed_event.commit_oid}",
         f"path={committed_event.ledger_path}",
     )
+    _print_attest_next_step(repository_path, request_id)
     await event_bus.drain()
     return 0
 
@@ -612,6 +713,30 @@ async def _run_verify_command(args: argparse.Namespace) -> int:
         if not ok:
             print("[FAIL] CORRUPT ARTIFACT: Invalid ML-DSA signature")
             return 1
+        envelope, payload = parse_artifact_markdown(artifact_path)
+        sidecar_path = artifact_path.with_suffix(".c2pa")
+        if sidecar_path.exists():
+            c2pa_result = validate_c2pa_sidecar(
+                payload_bytes=payload.encode("utf-8"),
+                manifest_bytes=sidecar_path.read_bytes(),
+                content_type=envelope.content_type,
+            )
+            if not c2pa_result.valid and args.strict_c2pa:
+                print(
+                    "[FAIL] C2PA INVALID:",
+                    "; ".join(c2pa_result.errors) or "unknown C2PA validation error",
+                )
+                return 1
+            if c2pa_result.valid:
+                print("[OK] C2PA VERIFIED: semantic validation passed")
+            else:
+                print(
+                    "[WARN] C2PA INVALID:",
+                    "; ".join(c2pa_result.errors) or "unknown C2PA validation error",
+                )
+        elif args.strict_c2pa:
+            print("[FAIL] C2PA MISSING: strict C2PA verification requested")
+            return 1
         print(f"[OK] SIGNATURE VERIFIED: {artifact_id} (Eternity v1)")
         return 0
     except Exception as exc:  # noqa: BLE001
@@ -623,7 +748,7 @@ async def _run_anchor_command(args: argparse.Namespace) -> int:
     """Anchor one artifact hash in local/public transparency logs."""
 
     event_bus = EventBus()
-    repository = SQLiteRepository()
+    repository = _build_repository()
     telemetry_adapter = ProvenanceTelemetryAdapter(
         event_bus=event_bus, repository=repository
     )
@@ -665,7 +790,7 @@ async def _run_timestamp_command(args: argparse.Namespace) -> int:
     """Acquire and verify RFC3161 timestamp token for one artifact."""
 
     event_bus = EventBus()
-    repository = SQLiteRepository()
+    repository = _build_repository()
     telemetry_adapter = ProvenanceTelemetryAdapter(
         event_bus=event_bus, repository=repository
     )
@@ -716,7 +841,7 @@ async def _run_audit_command(args: argparse.Namespace) -> int:
     """Run full-chain audit and emit machine-readable report."""
 
     event_bus = EventBus()
-    repository = SQLiteRepository()
+    repository = _build_repository()
     telemetry_adapter = ProvenanceTelemetryAdapter(
         event_bus=event_bus, repository=repository
     )
@@ -746,6 +871,8 @@ async def _run_audit_command(args: argparse.Namespace) -> int:
         and report.timestamp_found
         and report.timestamp_valid
     )
+    if args.strict_c2pa:
+        passed = passed and report.c2pa_present and report.c2pa_valid
     artifact_uuid = None if not report.artifact_id else UUID(report.artifact_id)
     await event_bus.emit(
         StoryAudited(
@@ -759,10 +886,121 @@ async def _run_audit_command(args: argparse.Namespace) -> int:
     return 0 if passed else 1
 
 
+def _attestation_verdict(
+    report: object,
+    strict: bool,
+    strict_c2pa: bool,
+) -> tuple[str, int]:
+    """Compute user-facing attestation verdict and exit code."""
+
+    critical_failure = not (
+        report.envelope_valid
+        and report.signature_valid
+        and report.payload_hash_match
+        and report.transparency_anchor_found
+        and report.transparency_log_integrity
+    )
+    timestamp_failure = not (report.timestamp_found and report.timestamp_valid)
+    c2pa_failure = strict_c2pa and not (report.c2pa_present and report.c2pa_valid)
+    if critical_failure or c2pa_failure or (strict and timestamp_failure):
+        return "FAIL", 1
+    if timestamp_failure:
+        return "WARN", 0
+    if report.c2pa_present and not report.c2pa_valid:
+        return "WARN", 0
+    return "PASS", 0
+
+
+async def _run_attest_command(args: argparse.Namespace) -> int:
+    """Attest one branch artifact by request_id without branch checkout."""
+
+    event_bus = EventBus()
+    repository = _build_repository()
+    telemetry_adapter = ProvenanceTelemetryAdapter(
+        event_bus=event_bus, repository=repository
+    )
+    await telemetry_adapter.start()
+    repository_path = Path(args.repo_path).resolve()
+    _, verification_service = _build_provenance_services(repository, repository_path)
+
+    try:
+        request_id = UUID(str(args.request_id))
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid request id '{args.request_id}'.") from exc
+
+    report = await asyncio.to_thread(
+        verification_service.audit_committed_artifact,
+        repository_path,
+        request_id,
+        _resolve_tsa_ca_cert_path(args.tsa_ca_cert_path),
+    )
+    verdict, exit_code = _attestation_verdict(
+        report,
+        args.strict,
+        args.strict_c2pa,
+    )
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "verdict": verdict,
+                    "strict": bool(args.strict),
+                    "strict_c2pa": bool(args.strict_c2pa),
+                    "report": report.to_dict(),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+    else:
+        print(
+            f"[{verdict}] request_id={request_id} "
+            f"artifact_id={report.artifact_id or '<unknown>'}"
+        )
+        if report.branch is not None and report.commit_oid is not None:
+            print(
+                "Branch context:",
+                f"branch={report.branch}",
+                f"commit={report.commit_oid}",
+                f"path={report.ledger_path or report.source_file}",
+            )
+        print(
+            "Checks:",
+            f"signature={report.signature_valid}",
+            f"payload_hash={report.payload_hash_match}",
+            f"anchor={report.transparency_anchor_found}",
+            f"log_integrity={report.transparency_log_integrity}",
+            f"c2pa_present={report.c2pa_present}",
+            f"c2pa_valid={report.c2pa_valid}",
+            f"timestamp_found={report.timestamp_found}",
+            f"timestamp_valid={report.timestamp_valid}",
+            f"key_status={report.key_status_at_signing_time}",
+        )
+        if report.c2pa_validation_state is not None:
+            print("C2PA state:", report.c2pa_validation_state)
+        for c2pa_error in report.c2pa_errors:
+            print(f"- C2PA: {c2pa_error}")
+        for error in report.errors:
+            print(f"- {error}")
+
+    artifact_uuid = None if not report.artifact_id else UUID(report.artifact_id)
+    await event_bus.emit(
+        StoryAudited(
+            request_id=request_id,
+            artifact_id=artifact_uuid,
+            audit_passed=verdict == "PASS",
+            report_path=None,
+        )
+    )
+    await event_bus.drain()
+    return exit_code
+
+
 async def _run_events_command(args: argparse.Namespace) -> int:
     """List recent provenance lifecycle telemetry events."""
 
-    repository = SQLiteRepository()
+    repository = _build_repository()
     rows = await asyncio.to_thread(
         repository.list_provenance_event_logs,
         args.limit,
@@ -797,6 +1035,8 @@ async def _dispatch(args: argparse.Namespace) -> int:
         return await _run_timestamp_command(args)
     if args.command == "audit":
         return await _run_audit_command(args)
+    if args.command == "attest":
+        return await _run_attest_command(args)
     if args.command == "events":
         return await _run_events_command(args)
     raise RuntimeError(f"Unsupported command: {args.command}")
@@ -814,6 +1054,7 @@ def main() -> int:
         "anchor",
         "timestamp",
         "audit",
+        "attest",
         "events",
     }:
         lock_base = Path(parsed_args.repo_path).resolve()

@@ -9,6 +9,10 @@ from uuid import UUID
 
 from src.models import Curation
 
+_FOOTER_MARKERS: tuple[str, ...] = (
+    "\n-----BEGIN ANTIPHORIA-INSTITUT ARTIFACT SIGNATURE-----",
+)
+
 
 def extract_request_id_from_artifact_path(file_path: Path) -> UUID:
     """Extract request id from curated artifact filename."""
@@ -33,10 +37,16 @@ def extract_markdown_body(markdown_text: str) -> str:
         second_delimiter_index = body.find("\n---\n", 4)
         if second_delimiter_index == -1:
             raise RuntimeError("Invalid markdown frontmatter block.")
-        body = body[second_delimiter_index + len("\n---\n") :]
+        body = body[second_delimiter_index + len("\n---\n"):]
 
-    footer_marker = "\n-----BEGIN ANTINOMIE-INSTITUT ARTIFACT SIGNATURE-----"
-    footer_index = body.find(footer_marker)
+    footer_index = -1
+    for footer_marker in _FOOTER_MARKERS:
+        candidate_index = body.find(footer_marker)
+        if candidate_index == -1:
+            continue
+        if footer_index == -1 or candidate_index < footer_index:
+            footer_index = candidate_index
+
     if footer_index != -1:
         body = body[:footer_index]
 

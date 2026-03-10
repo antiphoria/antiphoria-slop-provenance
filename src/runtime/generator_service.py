@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import os
 
 from src.adapters.gemini_engine import GeminiEngineAdapter
+from src.env_config import read_env_optional
 from src.runtime.service_runtime import (
     build_kafka_bus,
     configure_logging,
@@ -19,7 +19,7 @@ async def _run() -> None:
     await bus.start()
     adapter = GeminiEngineAdapter(
         event_bus=bus,
-        model_id=os.getenv("GENERATOR_MODEL_ID", "gemini-2.5-flash"),
+        model_id=read_env_optional("GENERATOR_MODEL_ID") or "gemini-2.5-flash",
     )
     await adapter.start()
     await run_until_cancelled()

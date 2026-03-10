@@ -39,19 +39,37 @@ Edit `.env` and set at least:
 
 ```dotenv
 GOOGLE_API_KEY=...
-PQC_PRIVATE_KEY_PATH=./keys/private.pem
-OQS_PUBLIC_KEY_PATH=./keys/public.pem
+GENERATOR_MODEL_ID=gemini-2.5-flash
+GENERATOR_DUMMY_MODE=false
+GENERATOR_DUMMY_DELAY_SEC=1.0
+PQC_PRIVATE_KEY_PATH=./keys/private.key
+OQS_PUBLIC_KEY_PATH=./keys/public.key
 SIGNER_FINGERPRINT=optional-fingerprint
 TRANSPARENCY_LOG_PUBLISH_URL=https://example.org/transparency/append
 RFC3161_TSA_URL=https://freetsa.org/tsr
 RFC3161_CA_CERT_PATH=./keys/tsa-ca.pem
+RFC3161_TSA_UNTRUSTED_CERT_PATH=./keys/tsa.crt
 SIGNING_KEY_VERSION=v1
 ORCHESTRATOR_TRANSPORT=local
 KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+STATE_DB_PATH=./state.db
 ENABLE_C2PA=false
+C2PA_MODE=mvp
 ```
 
 Only the key and API entries are strictly required for generation/signature flow. TSA and transparency publish URL are optional but recommended for long-term external auditability.
+
+For quota-free local pipeline testing, set `GENERATOR_DUMMY_MODE=true` (and
+optionally `GENERATOR_DUMMY_DELAY_SEC=0`). In dummy mode, `GOOGLE_API_KEY` is
+not required and no network call to Gemini is made.
+
+If RFC3161 verification fails because OpenSSL cannot locate its config on
+Windows/conda installs, you can optionally set:
+
+```dotenv
+OPENSSL_BIN=openssl
+OPENSSL_CONF=C:/path/to/openssl.cnf
+```
 
 ## Core Commands
 
@@ -59,6 +77,13 @@ Only the key and API entries are strictly required for generation/signature flow
 
 ```bash
 slop-cli generate --prompt "A short brutalist micro-story." --repo-path ../my-ledger
+```
+
+The command prints a follow-up attestation command when generation completes.
+Run that command directly (no manual branch checkout required):
+
+```bash
+slop-cli attest --repo-path ../my-ledger --request-id <request_id>
 ```
 
 Kafka dispatch mode:
@@ -70,37 +95,55 @@ slop-cli generate --prompt "A short brutalist micro-story." --repo-path ../my-le
 ### Curate and re-certify
 
 ```bash
-slop-cli curate --file ../my-ledger/artifacts/<request_id>.md --repo-path ../my-ledger
+slop-cli curate --file ../my-ledger/<request_id>.md --repo-path ../my-ledger
 ```
 
 Kafka dispatch mode:
 
 ```bash
-slop-cli curate --file ../my-ledger/artifacts/<request_id>.md --repo-path ../my-ledger --transport kafka
+slop-cli curate --file ../my-ledger/<request_id>.md --repo-path ../my-ledger --transport kafka
+```
+
+### Request-ID attestation (recommended)
+
+```bash
+slop-cli attest --repo-path ../my-ledger --request-id <request_id>
+```
+
+Strict mode requires a valid RFC3161 timestamp, otherwise attestation fails:
+
+```bash
+slop-cli attest --repo-path ../my-ledger --request-id <request_id> --strict
+```
+
+JSON output for automation/CI:
+
+```bash
+slop-cli attest --repo-path ../my-ledger --request-id <request_id> --json
 ```
 
 ### Signature verification
 
 ```bash
-slop-cli verify --file ../my-ledger/artifacts/<request_id>.md
+slop-cli verify --file ../my-ledger/<request_id>.md
 ```
 
 ### Explicit anchoring
 
 ```bash
-slop-cli anchor --file ../my-ledger/artifacts/<request_id>.md --repo-path ../my-ledger
+slop-cli anchor --file ../my-ledger/<request_id>.md --repo-path ../my-ledger
 ```
 
 ### RFC3161 timestamp
 
 ```bash
-slop-cli timestamp --file ../my-ledger/artifacts/<request_id>.md --repo-path ../my-ledger --tsa-url https://freetsa.org/tsr --tsa-ca-cert-path ./keys/tsa-ca.pem
+slop-cli timestamp --file ../my-ledger/<request_id>.md --repo-path ../my-ledger --tsa-url https://freetsa.org/tsr --tsa-ca-cert-path ./keys/tsa-ca.pem
 ```
 
 ### Full-chain audit report
 
 ```bash
-slop-cli audit --file ../my-ledger/artifacts/<request_id>.md --repo-path ../my-ledger --tsa-ca-cert-path ./keys/tsa-ca.pem --report-file ./audit_report.json
+slop-cli audit --file ../my-ledger/<request_id>.md --repo-path ../my-ledger --tsa-ca-cert-path ./keys/tsa-ca.pem --report-file ./audit_report.json
 ```
 
 ## Distributed runtime (Kafka + microservices)
@@ -145,12 +188,38 @@ Run an end-to-end Kafka smoke test (requires running workers):
 slop-smoke-kafka --bootstrap-topics --ledger-repo-path ./ledger --timeout-sec 180
 ```
 
+When workers run in Docker Compose, run smoke from the compose network so
+Kafka broker resolution stays consistent:
+
+```bash
+docker compose run --rm --no-deps ledger-service \
+  slop-smoke-kafka --bootstrap-servers kafka:9092 --ledger-repo-path /ledger --timeout-sec 180
+```
+
 ## C2PA implementation note
 
-When `ENABLE_C2PA=true`, the pipeline emits deterministic `.c2pa` sidecar payloads and
-binds their hash into the signed target. The current sidecar payload is JSON-based and
-intended for MVP dual-write compatibility. Full validator-grade C2PA/JUMBF production
-compatibility requires integrating `c2patool` or C2PA SDK bindings in a later hardening pass.
+When `ENABLE_C2PA=true`, the pipeline emits `.c2pa` sidecar payloads and binds their hash
+into the canonical ML-DSA signing target (`manifestHash`).
+
+- `C2PA_MODE=mvp` writes deterministic JSON sidecars for legacy/dev compatibility.
+- `C2PA_MODE=sdk` uses `c2pa-python` to emit signed binary sidecars intended for
+  validator-grade interoperability.
+
+`sdk` mode requires X.509 signer material:
+
+```dotenv
+C2PA_SIGN_CERT_CHAIN_PATH=./keys/c2pa-cert-chain.pem
+C2PA_PRIVATE_KEY_PATH=./keys/c2pa-private-key.pem
+C2PA_SIGNING_ALG=ES256
+```
+
+Strict C2PA checks are available in verification and attestation commands:
+
+```bash
+slop-cli verify --file ../my-ledger/<request_id>.md --strict-c2pa
+slop-cli attest --repo-path ../my-ledger --request-id <request_id> --strict-c2pa
+slop-cli audit --file ../my-ledger/<request_id>.md --repo-path ../my-ledger --strict-c2pa
+```
 
 ## Developer shortcuts
 

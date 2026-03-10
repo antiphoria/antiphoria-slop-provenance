@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 from typing import Any
+
+from src.env_config import read_env_optional
 
 
 def _load_snapshot(path: Path) -> dict[str, Any]:
@@ -49,7 +50,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="slop-metrics")
     parser.add_argument(
         "--metrics-dir",
-        default=os.getenv("KAFKA_METRICS_DIR", ".metrics"),
+        default=read_env_optional("KAFKA_METRICS_DIR") or ".metrics",
         help="Directory containing per-service metrics snapshots.",
     )
     parser.add_argument(

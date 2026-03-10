@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
+
+from src.env_config import read_env_optional
 
 
 TOPICS: tuple[str, ...] = (
@@ -23,9 +24,14 @@ async def _bootstrap_topics(bootstrap_servers: str, partitions: int) -> int:
     """Create required primary, retry, and dead-letter topics."""
 
     try:
-        from aiokafka.admin import AIOKafkaAdminClient, NewTopic  # type: ignore
+        from aiokafka.admin import (  # type: ignore
+            AIOKafkaAdminClient,
+            NewTopic,
+        )
     except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("aiokafka is required to bootstrap topics.") from exc
+        raise RuntimeError(
+            "aiokafka is required to bootstrap topics."
+        ) from exc
 
     admin = AIOKafkaAdminClient(bootstrap_servers=bootstrap_servers)
     await admin.start()
@@ -70,7 +76,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="slop-bootstrap-topics")
     parser.add_argument(
         "--bootstrap-servers",
-        default=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
+        default=(
+            read_env_optional("KAFKA_BOOTSTRAP_SERVERS")
+            or "localhost:9092"
+        ),
         help="Kafka bootstrap servers.",
     )
     parser.add_argument(

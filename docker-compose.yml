@@ -23,6 +23,9 @@ services:
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - ORCHESTRATOR_TRANSPORT=kafka
+      - STATE_DB_PATH=/state/state.db
+    volumes:
+      - ./state:/state
     depends_on:
       - kafka
 
@@ -34,8 +37,10 @@ services:
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - ORCHESTRATOR_TRANSPORT=kafka
+      - STATE_DB_PATH=/state/state.db
     volumes:
       - ./keys:/app/keys:ro
+      - ./state:/state
     depends_on:
       - kafka
 
@@ -48,8 +53,10 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - LEDGER_REPO_PATH=/ledger
       - ORCHESTRATOR_TRANSPORT=kafka
+      - STATE_DB_PATH=/state/state.db
     volumes:
       - ./ledger:/ledger
+      - ./state:/state
     depends_on:
       - kafka
 
@@ -62,8 +69,10 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - LEDGER_REPO_PATH=/ledger
       - ORCHESTRATOR_TRANSPORT=kafka
+      - STATE_DB_PATH=/state/state.db
     volumes:
       - ./ledger:/ledger
+      - ./state:/state
     depends_on:
       - kafka
 
@@ -75,5 +84,8 @@ services:
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - ORCHESTRATOR_TRANSPORT=kafka
+      - STATE_DB_PATH=/state/state.db
+    volumes:
+      - ./state:/state
     depends_on:
       - kafka

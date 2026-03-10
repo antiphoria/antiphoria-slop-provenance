@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from pathlib import Path
 
 from src.adapters.kafka_event_bus import KafkaEventBus
+from src.env_config import read_env_int, read_env_optional
 from src.repository import SQLiteRepository
 
 
@@ -15,28 +15,36 @@ def configure_logging() -> None:
     """Configure structured-ish log formatting for worker processes."""
 
     logging.basicConfig(
-        level=os.getenv("LOG_LEVEL", "INFO"),
+        level=read_env_optional("LOG_LEVEL") or "INFO",
         format=("%(asctime)s %(levelname)s %(name)s " "message=%(message)s"),
     )
+
+
+def build_repository() -> SQLiteRepository:
+    """Build SQLite repository honoring optional shared STATE_DB_PATH."""
+
+    state_db_path = read_env_optional("STATE_DB_PATH")
+    if state_db_path is None:
+        return SQLiteRepository()
+    return SQLiteRepository(db_path=Path(state_db_path).resolve())
 
 
 def build_kafka_bus(service_name: str) -> KafkaEventBus:
     """Build and configure Kafka event bus for one service group."""
 
-    bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
-    state_db_path = os.getenv("STATE_DB_PATH")
-    metrics_dir = Path(os.getenv("KAFKA_METRICS_DIR", ".metrics")).resolve()
-    metrics_snapshot_path = metrics_dir / f"{service_name}.json"
-    dedup_repository = SQLiteRepository(
-        db_path=None if state_db_path is None else Path(state_db_path).resolve()
+    bootstrap_servers = (
+        read_env_optional("KAFKA_BOOTSTRAP_SERVERS") or "localhost:9092"
     )
+    metrics_dir = Path(read_env_optional("KAFKA_METRICS_DIR") or ".metrics").resolve()
+    metrics_snapshot_path = metrics_dir / f"{service_name}.json"
+    dedup_repository = build_repository()
     return KafkaEventBus(
         bootstrap_servers=bootstrap_servers,
         consumer_group=service_name,
-        max_retries=int(os.getenv("KAFKA_MAX_RETRIES", "3")),
+        max_retries=read_env_int("KAFKA_MAX_RETRIES", default=3),
         dedup_repository=dedup_repository,
         metrics_snapshot_path=metrics_snapshot_path,
-        metrics_flush_every=int(os.getenv("KAFKA_METRICS_FLUSH_EVERY", "100")),
+        metrics_flush_every=read_env_int("KAFKA_METRICS_FLUSH_EVERY", default=100),
     )
 
 

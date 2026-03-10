@@ -6,7 +6,13 @@ import asyncio
 from pathlib import Path
 from uuid import UUID
 
-from src.events import EventBusPort, StoryAnchored, StoryCommitted, StoryTimestamped
+from src.env_config import read_env_optional
+from src.events import (
+    EventBusPort,
+    StoryAnchored,
+    StoryCommitted,
+    StoryTimestamped,
+)
 from src.services.provenance_service import ProvenanceService
 
 
@@ -28,15 +34,18 @@ class ProvenanceWorkerAdapter:
     async def start(self) -> None:
         """Subscribe to commit events."""
 
-        await self._event_bus.subscribe(StoryCommitted, self._on_story_committed)
+        await self._event_bus.subscribe(
+            StoryCommitted, self._on_story_committed
+        )
 
     async def _on_story_committed(self, event: StoryCommitted) -> None:
         """Anchor and timestamp one committed artifact."""
 
-        artifact_path = self._repository_path / event.ledger_path
         anchor_outcome = await asyncio.to_thread(
-            self._provenance_service.anchor_artifact,
-            artifact_path,
+            self._provenance_service.anchor_committed_artifact,
+            self._repository_path,
+            event.commit_oid,
+            event.ledger_path,
             event.request_id,
         )
         await self._event_bus.emit(
@@ -51,10 +60,15 @@ class ProvenanceWorkerAdapter:
         )
         try:
             timestamp_outcome = await asyncio.to_thread(
-                self._provenance_service.timestamp_artifact,
-                artifact_path,
+                self._provenance_service.timestamp_committed_artifact,
+                self._repository_path,
+                event.commit_oid,
+                event.ledger_path,
                 event.request_id,
                 self._tsa_ca_cert_path,
+            )
+            verification_status = (
+                "verified" if timestamp_outcome.verification.ok else "failed"
             )
             await self._event_bus.emit(
                 StoryTimestamped(
@@ -63,11 +77,19 @@ class ProvenanceWorkerAdapter:
                     artifact_hash=anchor_outcome.artifact_hash,
                     tsa_url=timestamp_outcome.tsa_url,
                     digest_algorithm=timestamp_outcome.digest_algorithm,
-                    verification_status=(
-                        "verified" if timestamp_outcome.verification.ok else "failed"
-                    ),
+                    verification_status=verification_status,
                     verification_message=timestamp_outcome.verification.message,
                 )
             )
-        except RuntimeError:
-            return
+        except RuntimeError as exc:
+            await self._event_bus.emit(
+                StoryTimestamped(
+                    request_id=event.request_id,
+                    artifact_id=UUID(anchor_outcome.artifact_id),
+                    artifact_hash=anchor_outcome.artifact_hash,
+                    tsa_url=read_env_optional("RFC3161_TSA_URL") or "unconfigured",
+                    digest_algorithm="sha256",
+                    verification_status="skipped",
+                    verification_message=str(exc),
+                )
+            )
