@@ -12,7 +12,7 @@ import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
 import pygit2
@@ -177,6 +177,77 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.ledger_path, f"{request_id}.md")
         self.assertIsNotNone(report.commit_oid)
         self.assertEqual(dict(repo.status()), {})
+
+    async def test_audit_committed_artifact_sets_remote_anchor_verified_false_when_remote_empty(
+        self,
+    ) -> None:
+        """When remote returns no rows, remote_anchor_verified is False."""
+        request_id = uuid4()
+        body = "Payload for remote verification test."
+        event = _build_story_signed_event(request_id=request_id, body=body)
+
+        ledger = GitLedgerAdapter(
+            event_bus=InMemoryEventBus(),
+            repository_path=self._repo_path,
+        )
+        await ledger._on_story_signed(event)
+
+        repo = pygit2.Repository(str(self._repo_path))
+        branch_reference = repo.lookup_reference(
+            f"refs/heads/artifact/{request_id}"
+        )
+        branch_commit = repo[branch_reference.target]
+
+        repository = SQLiteRepository(db_path=self._state_db_path)
+        log_adapter = TransparencyLogAdapter(
+            log_path=self._repo_path / ".provenance" / "transparency-log.jsonl",
+            publish_url="https://test.supabase.co/rest/v1/transparency_log",
+            publish_headers={"apikey": "x", "Authorization": "Bearer x"},
+        )
+        def fake_urlopen(request: object, timeout: float = 10.0) -> object:
+            resp = MagicMock()
+            resp.read.return_value = b'[{"id": 1, "payload": {}}]'
+            resp.__enter__ = MagicMock(return_value=resp)
+            resp.__exit__ = MagicMock(return_value=False)
+            return resp
+
+        with patch("urllib.request.urlopen", fake_urlopen):
+            provenance_service = ProvenanceService(
+                repository=repository,
+                transparency_log_adapter=log_adapter,
+                tsa_adapter=None,
+                key_registry=KeyRegistryAdapter(repository=repository),
+            )
+            provenance_service.anchor_committed_artifact(
+                repository_path=self._repo_path,
+                commit_oid=str(branch_commit.id),
+                ledger_path=f"{request_id}.md",
+                request_id=request_id,
+            )
+
+        with patch.object(
+            log_adapter,
+            "fetch_remote_entries_by_artifact_hash",
+            return_value=[],
+        ):
+            verification_service = VerificationService(
+                repository=repository,
+                transparency_log_adapter=log_adapter,
+                tsa_adapter=None,
+                key_registry=KeyRegistryAdapter(repository=repository),
+                artifact_verifier=_AllowAllVerifier(),
+            )
+            report = verification_service.audit_committed_artifact(
+                repository_path=self._repo_path,
+                request_id=request_id,
+                tsa_ca_cert_path=None,
+            )
+
+        self.assertFalse(report.remote_anchor_verified)
+        self.assertIn(
+            "Remote transparency log: no matching entry.",
+            report.errors,
+        )
 
     async def test_attest_warns_without_timestamp_when_non_strict(self) -> None:
         request_id = uuid4()
@@ -426,6 +497,44 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
                 exit_code = await cli._run_attest_command(args)
         self.assertEqual(exit_code, 0)
         self.assertIn("[PASS]", buffer.getvalue())
+
+    async def test_attest_fails_when_remote_anchor_verified_false(self) -> None:
+        request_id = uuid4()
+        report = AuditReport(
+            artifact_id=str(uuid4()),
+            request_id=str(request_id),
+            source_file=f"{request_id}.md",
+            envelope_valid=True,
+            signature_valid=True,
+            payload_hash_match=True,
+            transparency_anchor_found=True,
+            transparency_log_integrity=True,
+            remote_anchor_verified=False,
+            timestamp_found=True,
+            timestamp_valid=True,
+            key_status_at_signing_time="active",
+            errors=["Remote transparency log: no matching entry."],
+            branch=f"artifact/{request_id}",
+            commit_oid="abc123",
+            ledger_path=f"{request_id}.md",
+        )
+        args = argparse.Namespace(
+            repo_path=str(self._repo_path),
+            request_id=str(request_id),
+            strict=False,
+            strict_c2pa=False,
+            json=False,
+            tsa_ca_cert_path=None,
+        )
+        with patch(
+            "src.cli._build_provenance_services",
+            return_value=(object(), _FakeVerificationService(report)),
+        ):
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                exit_code = await cli._run_attest_command(args)
+        self.assertEqual(exit_code, 1)
+        self.assertIn("[FAIL]", buffer.getvalue())
 
 
 if __name__ == "__main__":

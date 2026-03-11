@@ -1,9 +1,27 @@
-"""Shared environment configuration helpers with `.env` fallback."""
+"""Shared environment configuration helpers with `.env` fallback.
+
+When env_path is None, resolution order:
+  1. Explicit env_path (when passed by caller)
+  2. PROJECT_ROOT env var (if set) + /.env - for systemd/Docker
+  3. Path(".env") relative to CWD
+
+Entrypoints (CLI, workers) should pass explicit env_path when CWD may differ.
+"""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
+
+
+def _resolve_env_path(env_path: Path | None) -> Path:
+    """Resolve .env path: explicit > PROJECT_ROOT > CWD."""
+    if env_path is not None:
+        return env_path
+    project_root = os.getenv("PROJECT_ROOT")
+    if project_root:
+        return Path(project_root).resolve() / ".env"
+    return Path(".env")
 
 
 def read_env_optional(
@@ -12,7 +30,7 @@ def read_env_optional(
 ) -> str | None:
     """Read optional value from local `.env`, then process env."""
 
-    resolved_env_path = env_path or Path(".env")
+    resolved_env_path = _resolve_env_path(env_path)
     if resolved_env_path.exists():
         env_text = resolved_env_path.read_text(encoding="utf-8")
         for raw_line in env_text.splitlines():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -16,7 +17,10 @@ from src.adapters.c2pa_manifest import (
 )
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
-from src.adapters.transparency_log import TransparencyLogAdapter
+from src.adapters.transparency_log import (
+    TransparencyLogAdapter,
+    TransparencyLogEntry,
+)
 from src.models import Artifact, sha256_hex
 from src.parsing import (
     parse_artifact_markdown,
@@ -41,6 +45,7 @@ class AuditReport:
     timestamp_found: bool
     timestamp_valid: bool
     key_status_at_signing_time: str
+    remote_anchor_verified: bool | None = None
     c2pa_present: bool = False
     c2pa_valid: bool = False
     c2pa_validation_state: str | None = None
@@ -78,17 +83,20 @@ class VerificationService:
         tsa_adapter: RFC3161TSAAdapter | None,
         key_registry: KeyRegistryAdapter,
         artifact_verifier: ArtifactVerifierPort,
+        env_path: Path | None = None,
     ) -> None:
         self._repository = repository
         self._transparency_log_adapter = transparency_log_adapter
         self._tsa_adapter = tsa_adapter
         self._key_registry = key_registry
         self._artifact_verifier = artifact_verifier
+        self._env_path = env_path or Path(".env")
 
     def audit_artifact(
         self,
         artifact_path: Path,
         tsa_ca_cert_path: Path | None,
+        repository_path: Path | None = None,
     ) -> AuditReport:
         """Run full-chain audit and persist report."""
 
@@ -100,12 +108,46 @@ class VerificationService:
         except RuntimeError:
             request_id = None
 
+        branch: str | None = None
+        commit_oid: str | None = None
+        ledger_path: str | None = None
+        if request_id and repository_path is not None:
+            branch, commit_oid, ledger_path = self._resolve_branch_context(
+                repository_path, request_id
+            )
+
         try:
             envelope, payload = parse_artifact_markdown(artifact_path)
             digest_hex = sha256_hex(payload.encode("utf-8"))
-            anchor_matches = self._transparency_log_adapter.find_entries_by_artifact_hash(
-                digest_hex
-            )
+            if branch and commit_oid and ledger_path:
+                log_text = self._read_optional_blob_from_branch(
+                    repository_path, f"artifact/{request_id}", ".provenance/transparency-log.jsonl"
+                )
+                entries = self._transparency_log_adapter.parse_entries_from_jsonl(
+                    log_text
+                )
+                transparency_anchor_found = any(
+                    e.artifact_hash == digest_hex for e in entries
+                )
+                transparency_log_integrity = (
+                    self._transparency_log_adapter.verify_integrity_entries(entries)
+                )
+                remote_anchor_verified = self._verify_remote_anchor(
+                    digest_hex=digest_hex,
+                    entries=entries,
+                )
+            else:
+                anchor_matches = self._transparency_log_adapter.find_entries_by_artifact_hash(
+                    digest_hex
+                )
+                transparency_anchor_found = len(anchor_matches) > 0
+                transparency_log_integrity = (
+                    self._transparency_log_adapter.verify_integrity()
+                )
+                remote_anchor_verified = self._verify_remote_anchor(
+                    digest_hex=digest_hex,
+                    entries=anchor_matches,
+                )
             manifest_hash, manifest_bytes = self._read_manifest_for_file(artifact_path)
             report = self._build_audit_report(
                 envelope=envelope,
@@ -114,20 +156,96 @@ class VerificationService:
                 source_file=str(artifact_path),
                 manifest_hash=manifest_hash,
                 manifest_bytes=manifest_bytes,
-                transparency_anchor_found=len(anchor_matches) > 0,
-                transparency_log_integrity=(
-                    self._transparency_log_adapter.verify_integrity()
-                ),
+                transparency_anchor_found=transparency_anchor_found,
+                transparency_log_integrity=transparency_log_integrity,
+                remote_anchor_verified=remote_anchor_verified,
                 tsa_ca_cert_path=tsa_ca_cert_path,
+                branch=branch,
+                commit_oid=commit_oid,
+                ledger_path=ledger_path,
             )
         except Exception as exc:  # noqa: BLE001
             report = self._build_error_report(
                 source_file=str(artifact_path),
                 request_id=request_id,
                 error_message=str(exc),
+                branch=branch,
+                ledger_path=ledger_path,
             )
         self._persist_report(report)
         return report
+
+    @staticmethod
+    def _resolve_branch_context(
+        repository_path: Path,
+        request_id: str,
+    ) -> tuple[str | None, str | None, str | None]:
+        """Resolve branch, commit_oid, ledger_path for artifact when branch exists."""
+        branch = f"artifact/{request_id}"
+        ref_name = f"refs/heads/{branch}"
+        ledger_path = f"{request_id}.md"
+        try:
+            repo = pygit2.Repository(str(repository_path))
+            reference = repo.lookup_reference(ref_name)
+            commit_obj = repo[reference.target]
+            if isinstance(commit_obj, pygit2.Commit):
+                return branch, str(commit_obj.id), ledger_path
+        except (KeyError, pygit2.GitError):
+            pass
+        return None, None, None
+
+    @staticmethod
+    def _read_optional_blob_from_branch(
+        repository_path: Path,
+        branch_name: str,
+        relative_path: str,
+    ) -> str:
+        """Read blob from branch or return empty string if branch/path missing."""
+        ref_name = f"refs/heads/{branch_name}"
+        try:
+            repo = pygit2.Repository(str(repository_path))
+            reference = repo.lookup_reference(ref_name)
+            commit_obj = repo[reference.target]
+            if not isinstance(commit_obj, pygit2.Commit):
+                return ""
+            tree_entry = commit_obj.tree[relative_path]
+            blob_obj = repo[tree_entry.id]
+        except (KeyError, pygit2.GitError):
+            return ""
+        if not isinstance(blob_obj, pygit2.Blob):
+            return ""
+        return bytes(blob_obj.data).decode("utf-8")
+
+    def _verify_remote_anchor(
+        self,
+        digest_hex: str,
+        entries: list[TransparencyLogEntry],
+    ) -> bool | None:
+        """Verify remote Supabase has matching entry. None=skip, True=ok, False=fail."""
+        matching_entry = next(
+            (e for e in entries if e.artifact_hash == digest_hex), None
+        )
+        if matching_entry is None:
+            return None
+        remote_rows = self._transparency_log_adapter.fetch_remote_entries_by_artifact_hash(
+            digest_hex
+        )
+        if remote_rows is None:
+            return None
+        if not remote_rows:
+            return False
+        for row in remote_rows:
+            payload = row.get("payload") or row.get("Payload")
+            if not isinstance(payload, dict):
+                _logger.warning(
+                    "Remote transparency log row has unexpected shape: "
+                    "payload column missing or not a dict. Keys: %s",
+                    list(row.keys()) if isinstance(row, dict) else "not a dict",
+                )
+                continue
+            if payload.get("entryHash") == matching_entry.entry_hash:
+                return True
+        return False
 
     def audit_committed_artifact(
         self,
@@ -148,6 +266,10 @@ class VerificationService:
                 raise RuntimeError(
                     f"Branch ref '{ref_name}' does not point to a commit."
                 )
+            ledger_path = self._resolve_ledger_path_from_commit(
+                commit_obj=commit_obj,
+                request_id=str(request_id),
+            )
             markdown_text = self._read_blob_text_from_commit(
                 repo=repo,
                 commit_obj=commit_obj,
@@ -169,6 +291,10 @@ class VerificationService:
             transparency_log_integrity = (
                 self._transparency_log_adapter.verify_integrity_entries(entries)
             )
+            remote_anchor_verified = self._verify_remote_anchor(
+                digest_hex=digest_hex,
+                entries=entries,
+            )
             manifest_hash, manifest_bytes = self._read_manifest_from_commit(
                 repo=repo,
                 commit_obj=commit_obj,
@@ -183,6 +309,7 @@ class VerificationService:
                 manifest_bytes=manifest_bytes,
                 transparency_anchor_found=transparency_anchor_found,
                 transparency_log_integrity=transparency_log_integrity,
+                remote_anchor_verified=remote_anchor_verified,
                 tsa_ca_cert_path=tsa_ca_cert_path,
                 branch=branch,
                 commit_oid=str(commit_obj.id),
@@ -209,7 +336,8 @@ class VerificationService:
         manifest_bytes: bytes | None,
         transparency_anchor_found: bool,
         transparency_log_integrity: bool,
-        tsa_ca_cert_path: Path | None,
+        remote_anchor_verified: bool | None = None,
+        tsa_ca_cert_path: Path | None = None,
         branch: str | None = None,
         commit_oid: str | None = None,
         ledger_path: str | None = None,
@@ -248,12 +376,14 @@ class VerificationService:
             validation_payload, validation_format = build_c2pa_validation_payload(
                 envelope=envelope,
                 body=payload,
+                env_path=self._env_path,
             )
             c2pa_validation = validate_c2pa_sidecar(
                 payload_bytes=validation_payload,
                 manifest_bytes=manifest_bytes,
                 content_type=envelope.content_type,
                 payload_format=validation_format,
+                env_path=self._env_path,
                 body_for_mvp=payload,
             )
             c2pa_valid = c2pa_validation.valid
@@ -265,6 +395,8 @@ class VerificationService:
             errors.append("No transparency anchor found for artifact hash.")
         if not transparency_log_integrity:
             errors.append("Transparency log hash chain integrity check failed.")
+        if remote_anchor_verified is False:
+            errors.append("Remote transparency log: no matching entry.")
 
         latest_timestamp = self._repository.get_latest_timestamp_record(digest_hex)
         if latest_timestamp is not None:
@@ -295,6 +427,7 @@ class VerificationService:
             payload_hash_match=payload_hash_match,
             transparency_anchor_found=transparency_anchor_found,
             transparency_log_integrity=transparency_log_integrity,
+            remote_anchor_verified=remote_anchor_verified,
             timestamp_found=timestamp_found,
             timestamp_valid=timestamp_valid,
             key_status_at_signing_time=key_status,
@@ -325,6 +458,7 @@ class VerificationService:
             payload_hash_match=False,
             transparency_anchor_found=False,
             transparency_log_integrity=False,
+            remote_anchor_verified=None,
             timestamp_found=False,
             timestamp_valid=False,
             key_status_at_signing_time="unknown",
@@ -344,6 +478,21 @@ class VerificationService:
             request_id=report.request_id,
             report_json=json.dumps(report.to_dict(), sort_keys=True),
         )
+
+    @staticmethod
+    def _resolve_ledger_path_from_commit(
+        commit_obj: pygit2.Commit,
+        request_id: str,
+    ) -> str:
+        """Resolve ledger path by trying common layouts (flat, artifacts_directory)."""
+        candidates = [f"{request_id}.md", f"artifact/{request_id}.md"]
+        for candidate in candidates:
+            try:
+                _ = commit_obj.tree[candidate]
+                return candidate
+            except KeyError:
+                continue
+        return f"{request_id}.md"
 
     @staticmethod
     def _read_manifest_for_file(artifact_path: Path) -> tuple[str | None, bytes | None]:
@@ -394,7 +543,7 @@ class VerificationService:
         commit_obj: pygit2.Commit,
         ledger_path: str,
     ) -> tuple[str | None, bytes | None]:
-        sidecar_path = f"{Path(ledger_path).stem}.c2pa"
+        sidecar_path = str(Path(ledger_path).with_suffix(".c2pa"))
         try:
             tree_entry = commit_obj.tree[sidecar_path]
         except KeyError:

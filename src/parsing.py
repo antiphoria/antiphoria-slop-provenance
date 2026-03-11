@@ -10,7 +10,7 @@ import yaml
 from src.models import Artifact
 
 _FOOTER_MARKERS: tuple[str, ...] = (
-    "\n-----BEGIN ANTIPHORIA-INSTITUT ARTIFACT SIGNATURE-----",
+    "\n-----BEGIN ANTIPHORIA ARTIFACT SIGNATURE-----",
 )
 
 
@@ -23,9 +23,16 @@ def parse_artifact_markdown(file_path: Path) -> tuple[Artifact, str]:
     return parse_artifact_markdown_text(text)
 
 
+def _sanitize_null_bytes(text: str) -> str:
+    """Remove null bytes that corrupt YAML parsing (e.g. from UTF-16 file copy)."""
+
+    return text.replace("\x00", "")
+
+
 def parse_artifact_markdown_text(text: str) -> tuple[Artifact, str]:
     """Parse artifact markdown text into strict envelope and body payload."""
 
+    text = _sanitize_null_bytes(text)
     if not text.startswith("---\n"):
         raise RuntimeError("Artifact file is missing YAML frontmatter delimiter.")
     delimiter_index = text.find("\n---\n", 4)

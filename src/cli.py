@@ -26,7 +26,10 @@ from src.adapters.kafka_event_bus import KafkaEventBus
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.provenance_telemetry import ProvenanceTelemetryAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
-from src.adapters.transparency_log import TransparencyLogAdapter
+from src.adapters.transparency_log import (
+    TransparencyLogAdapter,
+    build_supabase_publish_config,
+)
 from src.env_config import read_env_optional
 from src.events import (
     EventBus,
@@ -35,6 +38,7 @@ from src.events import (
     StoryAudited,
     StoryCommitted,
     StoryCurated,
+    StoryHumanRegistered,
     StoryRequested,
     StorySigned,
     StoryTimestamped,
@@ -131,6 +135,20 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("local", "kafka"),
         default=_read_env_optional("ORCHESTRATOR_TRANSPORT") or "local",
         help="Execution transport mode.",
+    )
+
+    register_parser = subparsers.add_parser(
+        "register",
+        help="Certify human-only content (no AI generation).",
+    )
+    register_parser.add_argument(
+        "--file", required=True, help="Plain markdown file path."
+    )
+    register_parser.add_argument("--repo-path", required=True, help="Ledger repo path.")
+    register_parser.add_argument(
+        "--title",
+        default=None,
+        help="Artifact title (default: first line or filename).",
     )
 
     verify_parser = subparsers.add_parser(
@@ -290,9 +308,15 @@ def _build_provenance_services(
     """Build provenance + verification services."""
 
     transparency_log_path = repository_path / ".provenance" / "transparency-log.jsonl"
+    publish_url = _read_env_optional("TRANSPARENCY_LOG_PUBLISH_URL")
+    publish_headers, publish_supabase_format = build_supabase_publish_config(
+        publish_url, env_path=Path(".env")
+    )
     transparency_log_adapter = TransparencyLogAdapter(
         log_path=transparency_log_path,
-        publish_url=_read_env_optional("TRANSPARENCY_LOG_PUBLISH_URL"),
+        publish_url=publish_url,
+        publish_headers=publish_headers if publish_headers else None,
+        publish_supabase_format=publish_supabase_format,
     )
     tsa_url = tsa_url_override or _read_env_optional("RFC3161_TSA_URL")
     tsa_untrusted_path = _read_env_optional("RFC3161_TSA_UNTRUSTED_CERT_PATH")
@@ -321,6 +345,7 @@ def _build_provenance_services(
         tsa_adapter=tsa_adapter,
         key_registry=key_registry,
     )
+    env_path = Path(__file__).resolve().parents[1] / ".env"
     verification_service = VerificationService(
         repository=repository,
         transparency_log_adapter=transparency_log_adapter,
@@ -330,6 +355,7 @@ def _build_provenance_services(
             event_bus=EventBus(),
             require_private_key=False,
         ),
+        env_path=env_path,
     )
     return provenance_service, verification_service
 
@@ -563,6 +589,11 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
             raise RuntimeError(
                 f"Artifact record not found for request_id={request_id}."
             )
+        if record.model_id == "human":
+            raise RuntimeError(
+                "Human-registered artifacts cannot be curated. "
+                "Register seals the file; use attest to verify."
+            )
         markdown_text = artifact_path.read_text(encoding="utf-8")
         curated_body = extract_markdown_body(markdown_text)
         assert_secret_free("curation prompt", record.prompt)
@@ -583,6 +614,7 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
                 prompt=record.prompt,
                 curation_metadata=curation_metadata,
                 model_id=record.model_id,
+                title=record.title if record.model_id == "human" else None,
             )
         )
         await kafka_bus.stop()
@@ -614,6 +646,11 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
     record = await asyncio.to_thread(repository.get_artifact_record, request_id)
     if record is None:
         raise RuntimeError(f"Artifact record not found for request_id={request_id}.")
+    if record.model_id == "human":
+        raise RuntimeError(
+            "Human-registered artifacts cannot be curated. "
+            "Register seals the file; use attest to verify."
+        )
 
     markdown_text = artifact_path.read_text(encoding="utf-8")
     curated_body = extract_markdown_body(markdown_text)
@@ -685,6 +722,7 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
             prompt=record.prompt,
             curation_metadata=curation_metadata,
             model_id=record.model_id,
+            title=record.title if record.model_id == "human" else None,
         )
     )
     committed_event = await asyncio.wait_for(completion_future, timeout=300.0)
@@ -701,6 +739,136 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
         f"path={committed_event.ledger_path}",
     )
     _print_attest_next_step(repository_path, request_id)
+    await event_bus.drain()
+    return 0
+
+
+def _derive_register_title(body: str, filename: str) -> str:
+    """Derive artifact title from body or filename."""
+
+    first_line = body.strip().splitlines()[0].strip() if body.strip() else ""
+    candidate = first_line.strip("# ").strip()[:50]
+    if candidate:
+        return candidate
+    return Path(filename).stem or "Untitled"
+
+
+async def _run_register_command(args: argparse.Namespace) -> int:
+    """Run human-only certification pipeline."""
+
+    event_bus = EventBus()
+    repository = _build_repository()
+    telemetry_adapter = ProvenanceTelemetryAdapter(
+        event_bus=event_bus, repository=repository
+    )
+    repository_path = Path(args.repo_path).resolve()
+    _validate_external_repo_path(repository_path)
+    provenance_service, _ = _build_provenance_services(repository, repository_path)
+    completion_future: asyncio.Future[StoryCommitted] = (
+        asyncio.get_running_loop().create_future()
+    )
+
+    notary_adapter = CryptoNotaryAdapter(event_bus=event_bus)
+    ledger_adapter = GitLedgerAdapter(
+        event_bus=event_bus, repository_path=repository_path
+    )
+
+    artifact_path = Path(args.file).resolve()
+    if not artifact_path.exists():
+        raise RuntimeError(f"File not found: '{artifact_path}'.")
+
+    raw_text = artifact_path.read_text(encoding="utf-8").lstrip("\ufeff")
+    if raw_text.startswith("---\n"):
+        try:
+            body = extract_markdown_body(raw_text)
+        except RuntimeError:
+            raise RuntimeError(
+                f"File has malformed frontmatter. For human-only registration, "
+                f"use plain markdown or fix the frontmatter: '{artifact_path}'."
+            ) from None
+    else:
+        body = raw_text.strip()
+    if not body:
+        raise RuntimeError(f"File body is empty: '{artifact_path}'.")
+
+    assert_secret_free("artifact body", body)
+    title = args.title or _derive_register_title(body, artifact_path.name)
+
+    async def _record_signed(event: StorySigned) -> None:
+        if event.artifact.signature is None:
+            raise RuntimeError("Signed artifact is missing signature block.")
+        await asyncio.to_thread(
+            repository.create_artifact_record,
+            event.request_id,
+            "signed",
+            event.artifact,
+            event.artifact.provenance.generation_context.prompt,
+            event.body,
+            event.artifact.provenance.model_id,
+        )
+        await asyncio.to_thread(
+            provenance_service.register_signing_key,
+            event.artifact.signature.verification_anchor.signer_fingerprint,
+            _read_env_optional("SIGNING_KEY_VERSION"),
+        )
+
+    async def _record_committed(event: StoryCommitted) -> None:
+        try:
+            commit_id = await asyncio.to_thread(
+                _verify_git_commit,
+                repository_path,
+                event.commit_oid,
+            )
+            await asyncio.to_thread(
+                repository.update_artifact_status,
+                event.request_id,
+                "committed",
+                event.ledger_path,
+                commit_id,
+            )
+            if not completion_future.done():
+                completion_future.set_result(event)
+        except Exception as exc:
+            if not completion_future.done():
+                completion_future.set_exception(exc)
+            raise
+
+    async def _record_dispatch_error(event: EventHandlerError) -> None:
+        if completion_future.done():
+            return
+        completion_future.set_exception(
+            RuntimeError(
+                "Event handler failed: "
+                f"event={event.event_type} "
+                f"handler={event.handler_name} "
+                f"type={event.error_type} "
+                f"message={event.error_message}"
+            )
+        )
+
+    await event_bus.subscribe(StorySigned, _record_signed)
+    await event_bus.subscribe(StoryCommitted, _record_committed)
+    await event_bus.subscribe_errors(_record_dispatch_error)
+    await telemetry_adapter.start()
+    await notary_adapter.start()
+    await ledger_adapter.start()
+
+    human_event = StoryHumanRegistered(body=body, title=title)
+    await event_bus.emit(human_event)
+    committed_event = await asyncio.wait_for(completion_future, timeout=300.0)
+    await _anchor_and_timestamp_committed_artifact(
+        event_bus=event_bus,
+        provenance_service=provenance_service,
+        repository_path=repository_path,
+        committed_event=committed_event,
+    )
+    print(
+        "Registration completed:",
+        f"request_id={human_event.request_id}",
+        f"commit={committed_event.commit_oid}",
+        f"path={committed_event.ledger_path}",
+    )
+    _print_attest_next_step(repository_path, human_event.request_id)
     await event_bus.drain()
     return 0
 
@@ -770,10 +938,16 @@ async def _run_anchor_command(args: argparse.Namespace) -> int:
         request_id = extract_request_id_from_artifact_path(artifact_path)
     except RuntimeError:
         request_id = None
+    if request_id is None:
+        raise RuntimeError(
+            "Cannot anchor: request_id could not be extracted from artifact path. "
+            "Use <request_id>.md or YYYYMMDDTHHMMSSZ_<request_id>.md."
+        )
     outcome = await asyncio.to_thread(
         provenance_service.anchor_artifact,
         artifact_path,
         request_id,
+        repository_path,
     )
     await event_bus.emit(
         StoryAnchored(
@@ -862,6 +1036,7 @@ async def _run_audit_command(args: argparse.Namespace) -> int:
         verification_service.audit_artifact,
         artifact_path,
         _resolve_tsa_ca_cert_path(args.tsa_ca_cert_path),
+        repository_path,
     )
     report_json = json.dumps(report.to_dict(), indent=2, sort_keys=True)
     if args.report_file is None:
@@ -908,7 +1083,7 @@ def _attestation_verdict(
         and report.payload_hash_match
         and report.transparency_anchor_found
         and report.transparency_log_integrity
-    )
+    ) or (report.remote_anchor_verified is False)
     timestamp_failure = not (report.timestamp_found and report.timestamp_valid)
     c2pa_failure = strict_c2pa and not (report.c2pa_present and report.c2pa_valid)
     if critical_failure or c2pa_failure or (strict and timestamp_failure):
@@ -1036,6 +1211,8 @@ async def _dispatch(args: argparse.Namespace) -> int:
         return await _run_generate_command(args)
     if args.command == "curate":
         return await _run_curate_command(args)
+    if args.command == "register":
+        return await _run_register_command(args)
     if args.command == "verify":
         return await _run_verify_command(args)
     if args.command == "anchor":
@@ -1060,6 +1237,7 @@ def main() -> int:
     if getattr(parsed_args, "command", None) in {
         "generate",
         "curate",
+        "register",
         "anchor",
         "timestamp",
         "audit",

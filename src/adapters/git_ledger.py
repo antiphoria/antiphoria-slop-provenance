@@ -242,7 +242,7 @@ class GitLedgerAdapter:
             curation_block = (
                 "curation:\n"
                 f"  differenceScore: {artifact.curation.difference_score:.2f}\n"
-                "  unifiedDiff: |\n"
+                "  unifiedDiff: |-\n"
                 f"{diff_block}\n"
             )
         else:
@@ -310,11 +310,11 @@ class GitLedgerAdapter:
             f"recordStatus: {self._yaml_quoted(artifact.record_status)}\n"
             "---\n"
             f"{event.body}\n"
-            "-----BEGIN ANTIPHORIA-INSTITUT ARTIFACT SIGNATURE-----\n"
+            "-----BEGIN ANTIPHORIA ARTIFACT SIGNATURE-----\n"
             "Hash: SHA256\n"
-            "Algorithm: CRYSTALS-Dilithium\n"
+            f"Algorithm: {artifact.signature.crypto_algorithm}\n"
             f"{signature_block_footer}\n"
-            "-----END ANTIPHORIA-INSTITUT ARTIFACT SIGNATURE-----\n"
+            "-----END ANTIPHORIA ARTIFACT SIGNATURE-----\n"
         )
 
     def _resolve_commit_signature(self) -> pygit2.Signature:
@@ -363,6 +363,7 @@ class GitLedgerAdapter:
             relative_path=relative_path,
             markdown_payload=markdown_payload,
             c2pa_sidecar_payload=c2pa_sidecar_payload,
+            parent_tree_oid=parent_commit.tree_id if parent_commit else None,
         )
 
         signature = self._resolve_commit_signature()
@@ -397,8 +398,9 @@ class GitLedgerAdapter:
         relative_path: str,
         markdown_payload: str,
         c2pa_sidecar_payload: bytes | None,
+        parent_tree_oid: pygit2.Oid | None = None,
     ) -> pygit2.Oid:
-        """Build root tree with one artifact markdown file and optional sidecar."""
+        """Build root tree with artifact files, preserving parent tree (e.g. .provenance)."""
 
         path_obj = Path(relative_path)
         parent_dir = path_obj.parent.as_posix()
@@ -413,9 +415,13 @@ class GitLedgerAdapter:
                 f"Invalid artifact path '{relative_path}'. Expected repository root."
             )
 
-        root_tb = self._repo.TreeBuilder()
         blob_oid = self._repo.create_blob(markdown_payload.encode("utf-8"))
         if not self._artifacts_directory:
+            root_tb = (
+                self._repo.TreeBuilder(parent_tree_oid)
+                if parent_tree_oid is not None
+                else self._repo.TreeBuilder()
+            )
             root_tb.insert(path_obj.name, blob_oid, pygit2.GIT_FILEMODE_BLOB)
             if c2pa_sidecar_payload is not None:
                 sidecar_blob_oid = self._repo.create_blob(c2pa_sidecar_payload)
@@ -423,7 +429,13 @@ class GitLedgerAdapter:
                 root_tb.insert(sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB)
             return root_tb.write()
 
-        artifacts_tb = self._repo.TreeBuilder()
+        parent_tree = self._repo[parent_tree_oid] if parent_tree_oid else None
+        artifacts_tb = (
+            self._repo.TreeBuilder(parent_tree[self._artifacts_directory].id)
+            if parent_tree is not None
+            and self._artifacts_directory in parent_tree
+            else self._repo.TreeBuilder()
+        )
         artifacts_tb.insert(path_obj.name, blob_oid, pygit2.GIT_FILEMODE_BLOB)
         if c2pa_sidecar_payload is not None:
             sidecar_blob_oid = self._repo.create_blob(c2pa_sidecar_payload)
@@ -432,6 +444,11 @@ class GitLedgerAdapter:
                 sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB
             )
         artifacts_oid = artifacts_tb.write()
+        root_tb = (
+            self._repo.TreeBuilder(parent_tree_oid)
+            if parent_tree_oid is not None
+            else self._repo.TreeBuilder()
+        )
         root_tb.insert(
             self._artifacts_directory, artifacts_oid, pygit2.GIT_FILEMODE_TREE
         )

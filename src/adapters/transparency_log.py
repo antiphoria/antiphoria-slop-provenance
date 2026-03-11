@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,7 +12,35 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from src.env_config import read_env_optional
 from src.models import canonical_json_bytes, sha256_hex
+
+
+def build_supabase_publish_config(
+    publish_url: str | None,
+    env_path: Path | None = None,
+) -> tuple[dict[str, str], bool]:
+    """Build Supabase auth headers and format flag when URL and key are set.
+
+    Returns:
+        (headers, use_supabase_format). Prefer SUPABASE_SERVICE_KEY over
+        SUPABASE_ANON_KEY. If no key is set, returns ({}, False).
+    """
+    if not publish_url:
+        return {}, False
+    key = read_env_optional("SUPABASE_SERVICE_KEY", env_path=env_path)
+    if key is None:
+        key = read_env_optional("SUPABASE_ANON_KEY", env_path=env_path)
+    if key is None:
+        return {}, False
+    return (
+        {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Prefer": "return=representation",
+        },
+        True,
+    )
 
 
 def _utc_now_iso() -> str:
@@ -43,10 +73,14 @@ class TransparencyLogAdapter:
         log_path: Path,
         publish_url: str | None = None,
         publish_timeout_sec: float = 10.0,
+        publish_headers: dict[str, str] | None = None,
+        publish_supabase_format: bool = False,
     ) -> None:
         self._log_path = log_path
         self._publish_url = publish_url
         self._publish_timeout_sec = publish_timeout_sec
+        self._publish_headers = publish_headers or {}
+        self._publish_supabase_format = publish_supabase_format
 
     @property
     def log_path(self) -> Path:
@@ -245,14 +279,52 @@ class TransparencyLogAdapter:
 
         if self._publish_url is None:
             return None
+        headers: dict[str, str] = {"Content-Type": "application/json", **self._publish_headers}
+        body = {"payload": payload} if self._publish_supabase_format else payload
         request = urllib.request.Request(
             self._publish_url,
             method="POST",
-            headers={"Content-Type": "application/json"},
-            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            data=json.dumps(body).encode("utf-8"),
         )
         with urllib.request.urlopen(  # noqa: S310
             request,
             timeout=self._publish_timeout_sec,
         ) as response:
-            return response.read().decode("utf-8").strip() or None
+            raw = response.read().decode("utf-8").strip()
+            if not raw:
+                return None
+            return raw
+
+    def fetch_remote_entries_by_artifact_hash(
+        self, artifact_hash: str
+    ) -> list[dict[str, Any]] | None:
+        """Fetch remote transparency log rows by artifact hash.
+
+        Returns None when remote is not configured (no publish_url or headers),
+        or on HTTP/network/JSON error (could not verify - caller should skip).
+        Returns [] on successful request with no matching rows (verified empty).
+        Returns list of row dicts (each with 'payload' key) on success.
+        """
+        if self._publish_url is None or not self._publish_headers:
+            return None
+        query = urllib.parse.urlencode(
+            [("payload->>artifactHash", f"eq.{artifact_hash}")]
+        )
+        url = f"{self._publish_url.rstrip('/')}?{query}"
+        headers = {k: v for k, v in self._publish_headers.items() if k != "Prefer"}
+        request = urllib.request.Request(url, method="GET", headers=headers)
+        try:
+            with urllib.request.urlopen(  # noqa: S310
+                request,
+                timeout=self._publish_timeout_sec,
+            ) as response:
+                raw = response.read().decode("utf-8").strip()
+                if not raw:
+                    return []
+                data = json.loads(raw)
+                if not isinstance(data, list):
+                    return []
+                return [row for row in data if isinstance(row, dict)]
+        except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError):
+            return None

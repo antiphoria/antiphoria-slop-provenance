@@ -79,14 +79,22 @@ class ProvenanceService:
         self,
         artifact_path: Path,
         request_id: UUID | None,
+        repository_path: Path | None = None,
     ) -> AnchorOutcome:
-        """Anchor one artifact hash in append-only transparency log."""
+        """Anchor one artifact hash and commit to branch when request_id + repo given."""
 
+        if request_id is not None and repository_path is not None:
+            return self._anchor_artifact_and_commit(
+                artifact_path=artifact_path,
+                request_id=request_id,
+                repository_path=repository_path,
+            )
         envelope, payload = parse_artifact_markdown(artifact_path)
+        source_file = self._repo_relative_path(artifact_path, repository_path)
         entry = self._anchor_parsed_artifact(
             envelope=envelope,
             payload=payload,
-            source_file=str(artifact_path),
+            source_file=source_file or str(artifact_path),
             request_id=request_id,
         )
         self._repository.create_transparency_log_record(
@@ -109,6 +117,91 @@ class ProvenanceService:
             anchored_at=entry.anchored_at,
             log_path=str(self._transparency_log_adapter.log_path),
         )
+
+    def _anchor_artifact_and_commit(
+        self,
+        artifact_path: Path,
+        request_id: UUID,
+        repository_path: Path,
+    ) -> AnchorOutcome:
+        """Anchor artifact from file and commit to artifact branch (idempotent)."""
+
+        envelope, payload = parse_artifact_markdown(artifact_path)
+        artifact_hash = sha256_hex(payload.encode("utf-8"))
+        self._assert_artifact_hash_matches_signature(
+            artifact_hash=artifact_hash,
+            signature_artifact_hash=(
+                None if envelope.signature is None else envelope.signature.artifact_hash
+            ),
+        )
+        ledger_path = f"{request_id}.md"
+        branch_ref = f"refs/heads/artifact/{request_id}"
+        existing_log = self._read_branch_file(
+            repository_path=repository_path,
+            ref_name=branch_ref,
+            relative_path=_BRANCH_LOG_PATH,
+        )
+        entries = self._transparency_log_adapter.parse_entries_from_jsonl(
+            existing_log
+        )
+        matches = [e for e in entries if e.artifact_hash == artifact_hash]
+        if matches:
+            last = matches[-1]
+            return AnchorOutcome(
+                entry_id=last.entry_id,
+                entry_hash=last.entry_hash,
+                artifact_hash=last.artifact_hash,
+                artifact_id=last.artifact_id,
+                anchored_at=last.anchored_at,
+                log_path=_BRANCH_LOG_PATH,
+            )
+        previous_entry_hash = self._read_latest_entry_hash(existing_log)
+        entry, serializable = self._transparency_log_adapter.build_entry_record(
+            artifact_hash=artifact_hash,
+            artifact_id=str(envelope.id),
+            source_file=ledger_path,
+            previous_entry_hash=previous_entry_hash,
+            request_id=str(request_id),
+            metadata={"source": envelope.provenance.source},
+        )
+        next_log_content = f"{existing_log}{json.dumps(serializable, sort_keys=True)}\n"
+        self._commit_branch_file(
+            repository_path=repository_path,
+            ref_name=branch_ref,
+            relative_path=_BRANCH_LOG_PATH,
+            payload_text=next_log_content,
+            commit_message=f"provenance: append transparency anchor ({request_id})",
+        )
+        self._repository.create_transparency_log_record(
+            entry_id=entry.entry_id,
+            artifact_hash=entry.artifact_hash,
+            artifact_id=entry.artifact_id,
+            request_id=entry.request_id,
+            source_file=entry.source_file,
+            log_path=_BRANCH_LOG_PATH,
+            previous_entry_hash=entry.previous_entry_hash,
+            entry_hash=entry.entry_hash,
+            published_at=entry.anchored_at,
+            remote_receipt=entry.remote_receipt,
+        )
+        return AnchorOutcome(
+            entry_id=entry.entry_id,
+            entry_hash=entry.entry_hash,
+            artifact_hash=entry.artifact_hash,
+            artifact_id=entry.artifact_id,
+            anchored_at=entry.anchored_at,
+            log_path=_BRANCH_LOG_PATH,
+        )
+
+    @staticmethod
+    def _repo_relative_path(artifact_path: Path, repository_path: Path | None) -> str | None:
+        """Return artifact path relative to repository root, or None if not under repo."""
+        if repository_path is None:
+            return None
+        try:
+            return str(artifact_path.resolve().relative_to(repository_path.resolve()))
+        except ValueError:
+            return None
 
     def anchor_committed_artifact(
         self,
@@ -141,6 +234,20 @@ class ProvenanceService:
             ref_name=branch_ref,
             relative_path=_BRANCH_LOG_PATH,
         )
+        entries = self._transparency_log_adapter.parse_entries_from_jsonl(
+            existing_log
+        )
+        matches = [e for e in entries if e.artifact_hash == artifact_hash]
+        if matches:
+            last = matches[-1]
+            return AnchorOutcome(
+                entry_id=last.entry_id,
+                entry_hash=last.entry_hash,
+                artifact_hash=last.artifact_hash,
+                artifact_id=last.artifact_id,
+                anchored_at=last.anchored_at,
+                log_path=_BRANCH_LOG_PATH,
+            )
         previous_entry_hash = self._read_latest_entry_hash(existing_log)
         entry, serializable = self._transparency_log_adapter.build_entry_record(
             artifact_hash=artifact_hash,
@@ -278,6 +385,11 @@ class ProvenanceService:
             artifact_hash=artifact_hash,
             signature_artifact_hash=signature_artifact_hash,
         )
+        matches = self._transparency_log_adapter.find_entries_by_artifact_hash(
+            artifact_hash
+        )
+        if matches:
+            return matches[-1]
         return self._transparency_log_adapter.append_entry(
             artifact_hash=artifact_hash,
             artifact_id=str(envelope.id),

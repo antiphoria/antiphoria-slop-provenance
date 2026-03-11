@@ -208,6 +208,8 @@ class StoryCurated(BaseModel):
         prompt: Original user prompt that birthed the artifact.
         curation_metadata: Computed curation metadata containing score/diff.
         model_id: Source model identifier for provenance continuity.
+        title: Optional original artifact title; when provided (e.g. human-registered),
+            used instead of deriving from body.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -218,6 +220,24 @@ class StoryCurated(BaseModel):
     prompt: str = Field(min_length=1)
     curation_metadata: Curation
     model_id: str = Field(min_length=1)
+    title: str | None = None
+
+
+class StoryHumanRegistered(BaseModel):
+    """Event emitted when human-only content is submitted for certification.
+
+    Attributes:
+        request_id: Correlation ID for this registration flow.
+        body: Raw human-authored markdown body.
+        title: Artifact title for the envelope.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    request_id: UUID = Field(default_factory=uuid4)
+    event_version: str = Field(default="v1")
+    body: str = Field(min_length=1)
+    title: str = Field(min_length=1)
 
 
 class EventHandlerError(BaseModel):

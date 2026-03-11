@@ -16,7 +16,13 @@ from src.adapters.c2pa_manifest import (
     build_c2pa_sidecar_manifest,
 )
 from src.env_config import read_env_bool, read_env_required
-from src.events import EventBusPort, StoryCurated, StoryGenerated, StorySigned
+from src.events import (
+    EventBusPort,
+    StoryCurated,
+    StoryGenerated,
+    StoryHumanRegistered,
+    StorySigned,
+)
 from src.policies.licensing import get_license_id
 from src.models import (
     Artifact,
@@ -112,6 +118,9 @@ class CryptoNotaryAdapter:
 
         await self._event_bus.subscribe(StoryGenerated, self._on_story_generated)
         await self._event_bus.subscribe(StoryCurated, self._on_story_curated)
+        await self._event_bus.subscribe(
+            StoryHumanRegistered, self._on_story_human_registered
+        )
 
     def _resolve_private_key(self) -> bytes:
         """Resolve and load private key bytes from configured path."""
@@ -213,7 +222,11 @@ class CryptoNotaryAdapter:
         """Sign curated content and emit a signed envelope event."""
 
         artifact, c2pa_manifest = await self._build_signed_artifact(
-            title=self._derive_title(event.curated_body),
+            title=(
+                event.title
+                if event.title is not None
+                else self._derive_title(event.curated_body)
+            ),
             source="hybrid",
             model_id=event.model_id,
             body=event.curated_body,
@@ -244,10 +257,45 @@ class CryptoNotaryAdapter:
             )
         )
 
+    async def _on_story_human_registered(self, event: StoryHumanRegistered) -> None:
+        """Sign human-only content and emit a signed envelope event."""
+
+        artifact, c2pa_manifest = await self._build_signed_artifact(
+            title=event.title,
+            source="human",
+            model_id="human",
+            body=event.body,
+            prompt="N/A",
+            system_instruction="Human-authored. No AI generation.",
+            temperature=0.0,
+            top_p=1.0,
+            top_k=0,
+            usage_metrics=None,
+            embedded_watermark=None,
+            content_type=_DEFAULT_CONTENT_TYPE,
+            license=get_license_id("human"),
+            curation=None,
+        )
+        await self._event_bus.emit(
+            StorySigned(
+                request_id=event.request_id,
+                artifact=artifact,
+                body=event.body,
+                c2pa_manifest_hash=(
+                    None if c2pa_manifest is None else c2pa_manifest.manifest_hash
+                ),
+                c2pa_manifest_bytes_b64=(
+                    None
+                    if c2pa_manifest is None
+                    else base64.b64encode(c2pa_manifest.manifest_bytes).decode("ascii")
+                ),
+            )
+        )
+
     async def _build_signed_artifact(
         self,
         title: str,
-        source: Literal["synthetic", "hybrid"],
+        source: Literal["synthetic", "hybrid", "human"],
         model_id: str,
         body: str,
         prompt: str,

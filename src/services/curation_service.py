@@ -10,7 +10,7 @@ from uuid import UUID
 from src.models import Curation
 
 _FOOTER_MARKERS: tuple[str, ...] = (
-    "\n-----BEGIN ANTIPHORIA-INSTITUT ARTIFACT SIGNATURE-----",
+    "\n-----BEGIN ANTIPHORIA ARTIFACT SIGNATURE-----",
 )
 
 
@@ -29,10 +29,16 @@ def extract_request_id_from_artifact_path(file_path: Path) -> UUID:
         return UUID(match.group(1))
 
 
+def _sanitize_null_bytes(text: str) -> str:
+    """Remove null bytes that corrupt YAML/artifact parsing (e.g. from UTF-16)."""
+
+    return text.replace("\x00", "")
+
+
 def extract_markdown_body(markdown_text: str) -> str:
     """Remove frontmatter and signature footer, returning raw artifact body."""
 
-    body = markdown_text
+    body = _sanitize_null_bytes(markdown_text)
     if body.startswith("---\n"):
         second_delimiter_index = body.find("\n---\n", 4)
         if second_delimiter_index == -1:

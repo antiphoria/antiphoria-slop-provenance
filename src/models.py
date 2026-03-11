@@ -71,7 +71,7 @@ class VerificationAnchor(StrictModel):
 class Provenance(StrictModel):
     """Provenance metadata independent from transport/render format."""
 
-    source: Literal["synthetic", "hybrid"]
+    source: Literal["synthetic", "hybrid", "human"]
     engine_version: str = Field(alias="engineVersion", min_length=1)
     model_id: str = Field(alias="modelId", min_length=1)
     generation_context: GenerationContext = Field(alias="generationContext")

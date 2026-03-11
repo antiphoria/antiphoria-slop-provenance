@@ -237,8 +237,22 @@ class SdkC2PAManifestProvider:
     def _build_signer(self, c2pa: Any) -> Any:
         """Create SDK signer from configured X.509 material."""
 
+        if self._settings.algorithm not in _C2PA_ALGORITHM_VALUES:
+            raise RuntimeError(
+                f"C2PA signing algorithm '{self._settings.algorithm}' is not "
+                f"supported. Use one of: {', '.join(_C2PA_ALGORITHM_VALUES)}."
+            )
+        try:
+            alg_constant = getattr(
+                c2pa.C2paSigningAlg, self._settings.algorithm
+            )
+        except AttributeError as exc:
+            raise RuntimeError(
+                f"C2PA SDK does not support algorithm '{self._settings.algorithm}'. "
+                f"Supported: {', '.join(_C2PA_ALGORITHM_VALUES)}."
+            ) from exc
         signer_info = c2pa.C2paSignerInfo(
-            alg=getattr(c2pa.C2paSigningAlg, self._settings.algorithm),
+            alg=alg_constant,
             sign_cert=self._settings.cert_chain_pem.encode("utf-8"),
             private_key=self._settings.private_key_pem.encode("utf-8"),
             ta_url=self._settings.tsa_url or "",
@@ -344,6 +358,17 @@ def validate_c2pa_sidecar(
     mvp_result = _validate_mvp_manifest(manifest_bytes, body_for_mvp)
     if mvp_result is not None:
         return mvp_result
+
+    mvp_requires_body = _manifest_looks_like_mvp(manifest_bytes)
+    if mvp_requires_body and body_for_mvp is None:
+        return C2PAManifestValidation(
+            valid=False,
+            validation_state="invalid",
+            errors=[
+                "MVP C2PA manifest requires artifact body for payload hash "
+                "validation. Pass body_for_mvp when validating MVP sidecars."
+            ],
+        )
 
     try:
         c2pa = _load_c2pa_module()
@@ -464,6 +489,20 @@ def validate_c2pa_sidecar(
             str(last_error),
         ],
     )
+
+
+def _manifest_looks_like_mvp(manifest_bytes: bytes) -> bool:
+    """Return True if manifest has MVP JSON structure (assertions.c2pa.asset)."""
+    try:
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    if not isinstance(manifest, dict):
+        return False
+    assertions = manifest.get("assertions")
+    if not isinstance(assertions, dict):
+        return False
+    return "c2pa.asset" in assertions
 
 
 def _validate_mvp_manifest(
