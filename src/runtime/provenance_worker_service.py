@@ -93,6 +93,7 @@ async def _run() -> None:
         transparency_log_adapter=transparency_log_adapter,
         tsa_adapter=_build_tsa_adapter(env_path),
         key_registry=key_registry,
+        env_path=env_path,
     )
     adapter = ProvenanceWorkerAdapter(
         event_bus=bus,

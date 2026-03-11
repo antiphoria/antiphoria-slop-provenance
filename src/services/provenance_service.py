@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
 import pygit2
+from filelock import FileLock
 
 from src.env_config import read_env_optional
 from src.adapters.key_registry import KeyRegistryAdapter
@@ -43,6 +46,7 @@ class TimestampOutcome:
     tsa_url: str
     digest_algorithm: str
     verification: TimestampVerification
+    token_base64: str | None = None
 
 
 class ProvenanceService:
@@ -54,11 +58,13 @@ class ProvenanceService:
         transparency_log_adapter: TransparencyLogAdapter,
         tsa_adapter: RFC3161TSAAdapter | None,
         key_registry: KeyRegistryAdapter,
+        env_path: Path | None = None,
     ) -> None:
         self._repository = repository
         self._transparency_log_adapter = transparency_log_adapter
         self._tsa_adapter = tsa_adapter
         self._key_registry = key_registry
+        self._env_path = env_path
 
     def register_signing_key(
         self,
@@ -163,6 +169,7 @@ class ProvenanceService:
             previous_entry_hash=previous_entry_hash,
             request_id=str(request_id),
             metadata={"source": envelope.provenance.source},
+            skip_remote=True,
         )
         next_log_content = f"{existing_log}{json.dumps(serializable, sort_keys=True)}\n"
         self._commit_branch_file(
@@ -172,6 +179,7 @@ class ProvenanceService:
             payload_text=next_log_content,
             commit_message=f"provenance: append transparency anchor ({request_id})",
         )
+        remote_receipt = self._transparency_log_adapter.publish_entry(serializable)
         self._repository.create_transparency_log_record(
             entry_id=entry.entry_id,
             artifact_hash=entry.artifact_hash,
@@ -182,7 +190,7 @@ class ProvenanceService:
             previous_entry_hash=entry.previous_entry_hash,
             entry_hash=entry.entry_hash,
             published_at=entry.anchored_at,
-            remote_receipt=entry.remote_receipt,
+            remote_receipt=remote_receipt,
         )
         return AnchorOutcome(
             entry_id=entry.entry_id,
@@ -256,6 +264,7 @@ class ProvenanceService:
             previous_entry_hash=previous_entry_hash,
             request_id=str(request_id),
             metadata={"source": envelope.provenance.source},
+            skip_remote=True,
         )
         next_log_content = f"{existing_log}{json.dumps(serializable, sort_keys=True)}\n"
         self._commit_branch_file(
@@ -265,6 +274,7 @@ class ProvenanceService:
             payload_text=next_log_content,
             commit_message=f"provenance: append transparency anchor ({request_id})",
         )
+        remote_receipt = self._transparency_log_adapter.publish_entry(serializable)
         self._repository.create_transparency_log_record(
             entry_id=entry.entry_id,
             artifact_hash=entry.artifact_hash,
@@ -275,7 +285,7 @@ class ProvenanceService:
             previous_entry_hash=entry.previous_entry_hash,
             entry_hash=entry.entry_hash,
             published_at=entry.anchored_at,
-            remote_receipt=entry.remote_receipt,
+            remote_receipt=remote_receipt,
         )
         return AnchorOutcome(
             entry_id=entry.entry_id,
@@ -313,7 +323,11 @@ class ProvenanceService:
         tsa_ca_cert_path: Path | None,
         digest_algorithm: str = "sha256",
     ) -> TimestampOutcome:
-        """Timestamp one artifact from a branch commit without worktree writes."""
+        """Timestamp one artifact from a branch commit without worktree writes.
+
+        Writes the .tsr token to the Git ledger at .provenance/timestamp-<request_id>.tsr
+        so verification does not depend solely on SQLite.
+        """
 
         markdown_text = self._read_markdown_from_commit(
             repository_path=repository_path,
@@ -321,13 +335,27 @@ class ProvenanceService:
             ledger_path=ledger_path,
         )
         envelope, payload = parse_artifact_markdown_text(markdown_text)
-        return self._timestamp_parsed_artifact(
+        outcome = self._timestamp_parsed_artifact(
             envelope_id=str(envelope.id),
             payload=payload,
             request_id=request_id,
             tsa_ca_cert_path=tsa_ca_cert_path,
             digest_algorithm=digest_algorithm,
         )
+        if (
+            outcome.token_base64 is not None
+            and request_id is not None
+        ):
+            ref_name = f"refs/heads/artifact/{request_id}"
+            ts_path = f".provenance/timestamp-{request_id}.tsr"
+            self._commit_branch_file(
+                repository_path=repository_path,
+                ref_name=ref_name,
+                relative_path=ts_path,
+                payload_text=outcome.token_base64,
+                commit_message=f"provenance: add RFC3161 timestamp ({request_id})",
+            )
+        return outcome
 
     def _timestamp_parsed_artifact(
         self,
@@ -368,6 +396,7 @@ class ProvenanceService:
             tsa_url=self._tsa_adapter.tsa_url or "",
             digest_algorithm=digest_algorithm,
             verification=verification,
+            token_base64=encoded_token,
         )
 
     def _anchor_parsed_artifact(
@@ -471,7 +500,10 @@ class ProvenanceService:
             stripped = raw.strip()
             if not stripped:
                 continue
-            loaded = json.loads(stripped)
+            try:
+                loaded = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
             entry_hash = loaded.get("entryHash")
             if entry_hash is None:
                 return None
@@ -479,6 +511,29 @@ class ProvenanceService:
         return None
 
     def _commit_branch_file(
+        self,
+        repository_path: Path,
+        ref_name: str,
+        relative_path: str,
+        payload_text: str,
+        commit_message: str,
+    ) -> None:
+        repo_hash = hashlib.sha256(
+            str(repository_path.resolve()).encode()
+        ).hexdigest()[:16]
+        lock_dir = Path(tempfile.gettempdir()) / "slop-orchestrator" / "locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = lock_dir / f"{repo_hash}_{ref_name.replace('/', '_')}.lock"
+        with FileLock(lock_path):
+            self._commit_branch_file_impl(
+                repository_path=repository_path,
+                ref_name=ref_name,
+                relative_path=relative_path,
+                payload_text=payload_text,
+                commit_message=commit_message,
+            )
+
+    def _commit_branch_file_impl(
         self,
         repository_path: Path,
         ref_name: str,
@@ -500,9 +555,12 @@ class ProvenanceService:
 
         path_obj = Path(relative_path)
         path_parts = path_obj.parts
+        # Constraint: relative_path must be exactly two levels (e.g. ".provenance/transparency-log.jsonl").
+        # Nested paths like ".provenance/subdir/transparency-log.jsonl" are not supported.
         if len(path_parts) != 2:
             raise RuntimeError(
-                f"Invalid branch log path '{relative_path}'. Expected two levels."
+                f"Invalid branch log path '{relative_path}'. "
+                "Expected two levels (e.g. .provenance/transparency-log.jsonl)."
             )
         directory_name, filename = path_parts
 
@@ -531,7 +589,7 @@ class ProvenanceService:
         if tree_oid == parent_commit.tree_id:
             return
 
-        signature = self._resolve_commit_signature(repo)
+        signature = self._resolve_commit_signature(repo, self._env_path)
         repo.create_commit(
             ref_name,
             signature,
@@ -542,9 +600,11 @@ class ProvenanceService:
         )
 
     @staticmethod
-    def _resolve_commit_signature(repo: pygit2.Repository) -> pygit2.Signature:
-        name = read_env_optional("LEDGER_AUTHOR_NAME")
-        email = read_env_optional("LEDGER_AUTHOR_EMAIL")
+    def _resolve_commit_signature(
+        repo: pygit2.Repository, env_path: Path | None = None
+    ) -> pygit2.Signature:
+        name = read_env_optional("LEDGER_AUTHOR_NAME", env_path=env_path)
+        email = read_env_optional("LEDGER_AUTHOR_EMAIL", env_path=env_path)
         try:
             name = name or repo.config["user.name"]
             email = email or repo.config["user.email"]

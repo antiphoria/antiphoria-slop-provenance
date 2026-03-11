@@ -59,6 +59,8 @@ C2PA_MODE=mvp
 
 Only the key and API entries are strictly required for generation/signature flow. TSA and transparency publish URL are optional but recommended for long-term external auditability.
 
+**Supabase requirement:** If `TRANSPARENCY_LOG_PUBLISH_URL` is set, you *must* also set either `SUPABASE_SERVICE_KEY` or `SUPABASE_ANON_KEY`. Attestation cannot validate against the remote transparency log without these keys; the CLI will fail at startup if the URL is set but keys are missing.
+
 For quota-free local pipeline testing, set `GENERATOR_DUMMY_MODE=true` (and
 optionally `GENERATOR_DUMMY_DELAY_SEC=0`). In dummy mode, `GOOGLE_API_KEY` is
 not required and no network call to Gemini is made.
@@ -201,7 +203,7 @@ docker compose run --rm --no-deps ledger-service \
 When `ENABLE_C2PA=true`, the pipeline emits `.c2pa` sidecar payloads and binds their hash
 into the canonical ML-DSA signing target (`manifestHash`).
 
-- `C2PA_MODE=mvp` writes deterministic JSON sidecars for legacy/dev compatibility.
+- `C2PA_MODE=mvp` writes deterministic JSON sidecars for legacy/dev compatibility (not C2PA-signed manifests; see [doc/LIMITATIONS.md](doc/LIMITATIONS.md)).
 - `C2PA_MODE=sdk` uses `c2pa-python` to emit signed binary sidecars intended for
   validator-grade interoperability.
 
@@ -254,6 +256,10 @@ You can print a consolidated report with:
 slop-metrics --metrics-dir ./.metrics
 slop-metrics --metrics-dir ./.metrics --json
 ```
+
+## Limitations and design notes
+
+See [doc/LIMITATIONS.md](doc/LIMITATIONS.md) for scientific, design, and enterprise limitations (reproducibility, mixed sources of truth, C2PA MVP mode, etc.).
 
 ## Repository Policies
 

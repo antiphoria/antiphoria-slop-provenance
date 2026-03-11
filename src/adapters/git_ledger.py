@@ -267,6 +267,18 @@ class GitLedgerAdapter:
                 f"    status: {self._yaml_quoted(watermark.status)}\n"
             )
 
+        attestation_block = ""
+        if artifact.provenance.author_attestation is not None:
+            att = artifact.provenance.author_attestation
+            attestation_block = (
+                "  authorAttestation:\n"
+                f"    classification: {self._yaml_quoted(att.classification)}\n"
+                f"    isHuman: {str(att.is_human).lower()}\n"
+                f"    isOriginalCreation: {str(att.is_original_creation).lower()}\n"
+                f"    isIndependentAndAccurate: {str(att.is_independent_and_accurate).lower()}\n"
+                f"    understandsCryptographicPermanence: {str(att.understands_cryptographic_permanence).lower()}\n"
+            )
+
         public_key_uri_line = ""
         if artifact.signature.verification_anchor.public_key_uri is not None:
             public_key_uri_line = (
@@ -297,6 +309,7 @@ class GitLedgerAdapter:
             f"      topK: {artifact.provenance.generation_context.hyperparameters.top_k}\n"
             f"{usage_block}"
             f"{watermark_block}"
+            f"{attestation_block}"
             f"{curation_block}"
             "signature:\n"
             f"  cryptoAlgorithm: {self._yaml_quoted(artifact.signature.crypto_algorithm)}\n"

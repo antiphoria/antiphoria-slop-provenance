@@ -122,11 +122,12 @@ class BuildSupabaseConfigTest(unittest.TestCase):
         self.assertEqual(headers, {})
         self.assertFalse(use_format)
 
-    def test_returns_empty_when_no_key(self) -> None:
+    def test_raises_when_url_set_but_no_key(self) -> None:
         with patch("src.adapters.transparency_log.read_env_optional", return_value=None):
-            headers, use_format = build_supabase_publish_config("https://x.supabase.co/rest/v1/t")
-        self.assertEqual(headers, {})
-        self.assertFalse(use_format)
+            with self.assertRaises(RuntimeError) as ctx:
+                build_supabase_publish_config("https://x.supabase.co/rest/v1/t")
+        self.assertIn("SUPABASE_SERVICE_KEY", str(ctx.exception))
+        self.assertIn("SUPABASE_ANON_KEY", str(ctx.exception))
 
     def test_returns_headers_when_key_set(self) -> None:
         with patch(
@@ -213,7 +214,21 @@ class FetchRemoteEntriesTest(unittest.TestCase):
         header_items = {k.lower(): v for k, v in req.header_items()}
         self.assertEqual(header_items.get("apikey"), "test-key")
 
-    def test_returns_none_on_http_error(self) -> None:
+    def test_returns_empty_list_when_no_matching_rows(self) -> None:
+        """Successful fetch with no matches returns [] (verified empty), not None."""
+        def fake_urlopen(request: object, timeout: float = 10.0) -> object:
+            return _make_response(b"[]")
+
+        adapter = TransparencyLogAdapter(
+            log_path=self._log_path,
+            publish_url="https://test.supabase.co/rest/v1/transparency_log",
+            publish_headers={"apikey": "x", "Authorization": "Bearer x"},
+        )
+        with patch("urllib.request.urlopen", fake_urlopen):
+            result = adapter.fetch_remote_entries_by_artifact_hash("d" * 64)
+        self.assertEqual(result, [])
+
+    def test_raises_on_http_error(self) -> None:
         import urllib.error
 
         def fake_urlopen(request: object, timeout: float = 10.0) -> object:
@@ -228,6 +243,38 @@ class FetchRemoteEntriesTest(unittest.TestCase):
         )
 
         with patch("urllib.request.urlopen", fake_urlopen):
-            result = adapter.fetch_remote_entries_by_artifact_hash("c" * 64)
+            with self.assertRaises(RuntimeError) as ctx:
+                adapter.fetch_remote_entries_by_artifact_hash("c" * 64)
+        self.assertIn("Remote transparency log fetch failed", str(ctx.exception))
+        self.assertIn("500", str(ctx.exception))
 
-        self.assertIsNone(result)
+    def test_raises_on_urlerror(self) -> None:
+        import urllib.error
+
+        def fake_urlopen(request: object, timeout: float = 10.0) -> object:
+            raise urllib.error.URLError("Connection refused")
+
+        adapter = TransparencyLogAdapter(
+            log_path=self._log_path,
+            publish_url="https://test.supabase.co/rest/v1/transparency_log",
+            publish_headers={"apikey": "x", "Authorization": "Bearer x"},
+        )
+        with patch("urllib.request.urlopen", fake_urlopen):
+            with self.assertRaises(RuntimeError) as ctx:
+                adapter.fetch_remote_entries_by_artifact_hash("e" * 64)
+        self.assertIn("Remote transparency log fetch failed", str(ctx.exception))
+        self.assertIn("Connection refused", str(ctx.exception))
+
+    def test_raises_on_json_decode_error(self) -> None:
+        def fake_urlopen(request: object, timeout: float = 10.0) -> object:
+            return _make_response(b"not valid json")
+
+        adapter = TransparencyLogAdapter(
+            log_path=self._log_path,
+            publish_url="https://test.supabase.co/rest/v1/transparency_log",
+            publish_headers={"apikey": "x", "Authorization": "Bearer x"},
+        )
+        with patch("urllib.request.urlopen", fake_urlopen):
+            with self.assertRaises(RuntimeError) as ctx:
+                adapter.fetch_remote_entries_by_artifact_hash("f" * 64)
+        self.assertIn("Remote transparency log fetch failed", str(ctx.exception))

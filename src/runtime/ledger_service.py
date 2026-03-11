@@ -15,6 +15,9 @@ from src.runtime.service_runtime import (
     run_until_cancelled,
 )
 
+# Resolve .env relative to project root so config is consistent regardless of CWD.
+_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+
 
 async def _run() -> None:
     configure_logging()
@@ -39,7 +42,9 @@ async def _run() -> None:
         )
 
     await bus.subscribe(StoryCommitted, _record_committed)
-    repository_path = Path(read_env_optional("LEDGER_REPO_PATH") or ".").resolve()
+    repository_path = Path(
+        read_env_optional("LEDGER_REPO_PATH", env_path=_ENV_PATH) or "."
+    ).resolve()
     adapter = GitLedgerAdapter(event_bus=bus, repository_path=repository_path)
     await adapter.start()
     await run_until_cancelled()

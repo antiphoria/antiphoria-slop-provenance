@@ -487,7 +487,7 @@ class SQLiteRepository:
                 message=f"No timestamp token found for artifact_hash={artifact_hash}.",
             )
         token_b64 = str(record["token_base64"])
-        token_bytes = base64.b64decode(token_b64.encode("ascii"))
+        token_bytes = base64.b64decode(token_b64.encode("ascii"), validate=True)
         return tsa_adapter.verify_timestamp_token(
             digest_hex=artifact_hash,
             token_bytes=token_bytes,
@@ -651,13 +651,36 @@ class SQLiteRepository:
                 (str(request_id),),
             )
 
+    def is_message_processed(self, message_id: str, consumer_name: str) -> bool:
+        """Return True when message was already marked processed."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM processed_messages
+                WHERE message_id = ? AND consumer_name = ?;
+                """,
+                (message_id, consumer_name),
+            ).fetchone()
+            return row is not None
+
+    def mark_message_processed(self, message_id: str, consumer_name: str) -> None:
+        """Mark one message id as processed. Idempotent."""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO processed_messages (
+                    message_id, consumer_name, processed_at
+                ) VALUES (?, ?, ?);
+                """,
+                (message_id, consumer_name, _utc_now_iso()),
+            )
+
     def try_mark_message_processed(self, message_id: str, consumer_name: str) -> bool:
         """Try to mark one message id as processed.
 
         Returns:
             True when inserted for the first time, False if already processed.
         """
-
         with self._connect() as connection:
             cursor = connection.execute(
                 """

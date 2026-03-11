@@ -22,6 +22,14 @@ class _FakeDedupRepository:
     def __init__(self) -> None:
         self._seen: set[str] = set()
 
+    def is_message_processed(self, message_id: str, consumer_name: str) -> bool:
+        _ = consumer_name
+        return message_id in self._seen
+
+    def mark_message_processed(self, message_id: str, consumer_name: str) -> None:
+        _ = consumer_name
+        self._seen.add(message_id)
+
     def try_mark_message_processed(self, message_id: str, consumer_name: str) -> bool:
         _ = consumer_name
         if message_id in self._seen:
@@ -47,6 +55,7 @@ class KafkaBusIdempotencyTest(unittest.IsolatedAsyncioTestCase):
             headers=[("x-message-id", b"mid-123")],
         )
         first = await bus._should_process_message(message)
+        await bus._mark_message_processed(message)
         second = await bus._should_process_message(message)
         self.assertTrue(first)
         self.assertFalse(second)

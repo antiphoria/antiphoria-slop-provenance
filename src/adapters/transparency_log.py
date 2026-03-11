@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import urllib.error
+from dataclasses import replace
+from filelock import FileLock
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -15,6 +18,8 @@ from uuid import uuid4
 from src.env_config import read_env_optional
 from src.models import canonical_json_bytes, sha256_hex
 
+_logger = logging.getLogger(__name__)
+
 
 def build_supabase_publish_config(
     publish_url: str | None,
@@ -24,7 +29,12 @@ def build_supabase_publish_config(
 
     Returns:
         (headers, use_supabase_format). Prefer SUPABASE_SERVICE_KEY over
-        SUPABASE_ANON_KEY. If no key is set, returns ({}, False).
+        SUPABASE_ANON_KEY. If no key is set and no URL, returns ({}, False).
+
+    Raises:
+        RuntimeError: When TRANSPARENCY_LOG_PUBLISH_URL is set but neither
+            SUPABASE_SERVICE_KEY nor SUPABASE_ANON_KEY is set. Attestation
+            cannot validate against the remote log without keys.
     """
     if not publish_url:
         return {}, False
@@ -32,7 +42,11 @@ def build_supabase_publish_config(
     if key is None:
         key = read_env_optional("SUPABASE_ANON_KEY", env_path=env_path)
     if key is None:
-        return {}, False
+        raise RuntimeError(
+            "TRANSPARENCY_LOG_PUBLISH_URL is set but neither SUPABASE_SERVICE_KEY "
+            "nor SUPABASE_ANON_KEY is set. Set one of these for attestation to "
+            "validate against the remote transparency log."
+        )
     return (
         {
             "apikey": key,
@@ -88,6 +102,14 @@ class TransparencyLogAdapter:
 
         return self._log_path
 
+    def is_remote_configured(self) -> bool:
+        """Return True when remote publish is configured (URL and auth headers)."""
+
+        return (
+            self._publish_url is not None
+            and bool(self._publish_headers)
+        )
+
     def append_entry(
         self,
         artifact_hash: str,
@@ -96,22 +118,36 @@ class TransparencyLogAdapter:
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> TransparencyLogEntry:
-        """Append a new hash anchor entry and optionally publish it."""
+        """Append a new hash anchor entry and optionally publish it.
 
-        previous_entry_hash = self._read_latest_entry_hash()
-        entry, serializable = self.build_entry_record(
-            artifact_hash=artifact_hash,
-            artifact_id=artifact_id,
-            source_file=source_file,
-            previous_entry_hash=previous_entry_hash,
-            request_id=request_id,
-            metadata=metadata,
-        )
-        self._log_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._log_path.open("a", encoding="utf-8") as log_file:
-            log_file.write(json.dumps(serializable, sort_keys=True))
-            log_file.write("\n")
-        return entry
+        Writes to local log before publishing to avoid remote-only desync.
+        Uses file locking to prevent interleaved writes from concurrent workers.
+        """
+        lock_path = Path(str(self._log_path) + ".lock")
+        with FileLock(lock_path):
+            previous_entry_hash = self._read_latest_entry_hash()
+            entry, serializable = self.build_entry_record(
+                artifact_hash=artifact_hash,
+                artifact_id=artifact_id,
+                source_file=source_file,
+                previous_entry_hash=previous_entry_hash,
+                request_id=request_id,
+                metadata=metadata,
+                skip_remote=True,
+            )
+            self._log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._log_path.open("a", encoding="utf-8") as log_file:
+                log_file.write(json.dumps(serializable, sort_keys=True))
+                log_file.write("\n")
+        receipt = self.publish_entry(serializable)
+        return replace(entry, remote_receipt=receipt) if receipt else entry
+
+    def publish_entry(self, record: dict[str, Any]) -> str | None:
+        """Publish a transparency record to remote when configured.
+
+        Call after local persistence to avoid remote-only desync.
+        """
+        return self._publish_entry(record)
 
     def build_entry_record(
         self,
@@ -121,6 +157,7 @@ class TransparencyLogAdapter:
         previous_entry_hash: str | None,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        skip_remote: bool = False,
     ) -> tuple[TransparencyLogEntry, dict[str, Any]]:
         """Build one transparency record without writing local files."""
 
@@ -139,7 +176,7 @@ class TransparencyLogAdapter:
         }
         entry_hash = sha256_hex(canonical_json_bytes(payload))
         full_record = {**payload, "entryHash": entry_hash}
-        remote_receipt = self._publish_entry(full_record)
+        remote_receipt = None if skip_remote else self._publish_entry(full_record)
         serializable = {**full_record, "remoteReceipt": remote_receipt}
         entry = TransparencyLogEntry(
             entry_id=entry_id,
@@ -178,15 +215,34 @@ class TransparencyLogAdapter:
         return self.verify_integrity_entries(entries)
 
     def parse_entries_from_jsonl(self, jsonl_text: str) -> list[TransparencyLogEntry]:
-        """Parse transparency entries from JSONL content in-memory."""
+        """Parse transparency entries from JSONL content in-memory.
+
+        Malformed or incomplete lines are skipped and logged.
+        """
 
         entries: list[TransparencyLogEntry] = []
-        for raw in jsonl_text.splitlines():
+        for i, raw in enumerate(jsonl_text.splitlines()):
             stripped = raw.strip()
             if not stripped:
                 continue
-            loaded = json.loads(stripped)
-            entries.append(self._entry_from_loaded_record(loaded))
+            try:
+                loaded = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                _logger.warning(
+                    "Skipping malformed JSONL line %d: %s",
+                    i + 1,
+                    exc,
+                )
+                continue
+            try:
+                entries.append(self._entry_from_loaded_record(loaded))
+            except (KeyError, TypeError) as exc:
+                _logger.warning(
+                    "Skipping JSONL line %d with missing or invalid keys: %s",
+                    i + 1,
+                    exc,
+                )
+                continue
         return entries
 
     def verify_integrity_entries(self, entries: list[TransparencyLogEntry]) -> bool:
@@ -257,6 +313,25 @@ class TransparencyLogAdapter:
         }
         return sha256_hex(canonical_json_bytes(payload))
 
+    @staticmethod
+    def compute_expected_entry_hash_from_payload(payload: dict[str, Any]) -> str:
+        """Compute entryHash from payload dict. Used for remote integrity verification."""
+        hash_payload = {
+            "entryId": payload.get("entryId"),
+            "artifactHash": payload.get("artifactHash"),
+            "artifactId": payload.get("artifactId"),
+            "requestId": payload.get("requestId"),
+            "sourceFile": payload.get("sourceFile"),
+            "previousEntryHash": payload.get("previousEntryHash"),
+            "anchoredAt": payload.get("anchoredAt"),
+            "metadata": (
+                payload.get("metadata")
+                if isinstance(payload.get("metadata"), dict)
+                else {}
+            ),
+        }
+        return sha256_hex(canonical_json_bytes(hash_payload))
+
     def _read_latest_entry_hash(self) -> str | None:
         """Read previous hash from the last local entry."""
 
@@ -267,7 +342,10 @@ class TransparencyLogAdapter:
             raw = raw.strip()
             if not raw:
                 continue
-            loaded = json.loads(raw)
+            try:
+                loaded = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
             latest = loaded.get("entryHash")
             if latest is None:
                 return None
@@ -301,10 +379,14 @@ class TransparencyLogAdapter:
     ) -> list[dict[str, Any]] | None:
         """Fetch remote transparency log rows by artifact hash.
 
-        Returns None when remote is not configured (no publish_url or headers),
-        or on HTTP/network/JSON error (could not verify - caller should skip).
+        Returns None only when remote is not configured (no publish_url or headers).
         Returns [] on successful request with no matching rows (verified empty).
         Returns list of row dicts (each with 'payload' key) on success.
+
+        Raises:
+            RuntimeError: On HTTP/network/JSON error when remote is configured.
+                Callers must not treat this as "skip verification" to prevent
+                network-level bypass attacks.
         """
         if self._publish_url is None or not self._publish_headers:
             return None
@@ -326,5 +408,7 @@ class TransparencyLogAdapter:
                 if not isinstance(data, list):
                     return []
                 return [row for row in data if isinstance(row, dict)]
-        except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError):
-            return None
+        except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"Remote transparency log fetch failed for artifact_hash={artifact_hash}: {exc}"
+            ) from exc

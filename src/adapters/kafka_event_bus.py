@@ -58,6 +58,12 @@ _TOPIC_BY_EVENT = {
 class MessageDedupRepository(Protocol):
     """Persistence interface for message-level idempotency checks."""
 
+    def is_message_processed(self, message_id: str, consumer_name: str) -> bool:
+        """Return True when message was already marked processed."""
+
+    def mark_message_processed(self, message_id: str, consumer_name: str) -> None:
+        """Mark one message id as processed."""
+
     def try_mark_message_processed(self, message_id: str, consumer_name: str) -> bool:
         """Return True when message id is newly marked."""
 
@@ -127,6 +133,7 @@ class KafkaEventBus(EventBusPort):
             try:
                 await consumer.stop()
             except Exception:
+                LOGGER.exception("Failed to stop Kafka consumer")
                 continue
         if self._producer is not None:
             await self._producer.stop()
@@ -243,7 +250,13 @@ class KafkaEventBus(EventBusPort):
         consumer: Any,
         message: Any,
     ) -> None:
-        """Decode and dispatch one Kafka message for a typed event."""
+        """Decode and dispatch one Kafka message for a typed event.
+
+        Mark as processed only after handler success to avoid message loss on crash.
+        Handlers must remain idempotent: the At-Least-Once delivery model can cause
+        duplicate processing when multiple consumers receive the same message before
+        either marks it processed.
+        """
 
         try:
             if not await self._should_process_message(message):
@@ -262,6 +275,7 @@ class KafkaEventBus(EventBusPort):
             for handler in handlers:
                 await handler(event)
             self._increment_metric("events_processed_total", base_topic)
+            await self._mark_message_processed(message)
             await self._commit_message_offset(consumer, message)
         except Exception as exc:  # noqa: BLE001
             retry_count = self._extract_retry_count(message.headers)
@@ -360,6 +374,9 @@ class KafkaEventBus(EventBusPort):
             try:
                 await handler(payload)
             except Exception:
+                LOGGER.exception(
+                    "Error handler raised for %s", event_type.__name__
+                )
                 continue
         LOGGER.exception("Kafka event dispatch failed for %s", event_type.__name__)
 
@@ -390,8 +407,21 @@ class KafkaEventBus(EventBusPort):
         if self._dedup_repository is None:
             return True
         message_id = self._extract_message_id(message)
-        return await asyncio.to_thread(
-            self._dedup_repository.try_mark_message_processed,
+        is_processed = await asyncio.to_thread(
+            self._dedup_repository.is_message_processed,
+            message_id,
+            self._consumer_group,
+        )
+        return not is_processed
+
+    async def _mark_message_processed(self, message: Any) -> None:
+        """Mark message as processed after handler success."""
+
+        if self._dedup_repository is None:
+            return
+        message_id = self._extract_message_id(message)
+        await asyncio.to_thread(
+            self._dedup_repository.mark_message_processed,
             message_id,
             self._consumer_group,
         )

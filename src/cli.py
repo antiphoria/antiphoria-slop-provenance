@@ -43,7 +43,7 @@ from src.events import (
     StorySigned,
     StoryTimestamped,
 )
-from src.models import sha256_hex
+from src.models import AuthorAttestation, sha256_hex
 from src.parsing import parse_artifact_markdown
 from src.ports import ProvenanceServicePort
 from src.repository import SQLiteRepository
@@ -149,6 +149,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--title",
         default=None,
         help="Artifact title (default: first line or filename).",
+    )
+    register_parser.add_argument(
+        "--license",
+        default="ARR",
+        help="Content license to apply (e.g. ARR, CC-BY-4.0, CC0-1.0).",
+    )
+    register_parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Skip legal attestation wizard; use defaults (for CI/automation).",
     )
 
     verify_parser = subparsers.add_parser(
@@ -261,6 +271,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print full events as JSON.",
     )
 
+    admin_parser = subparsers.add_parser(
+        "admin",
+        help="Admin operations (key revocation, etc.).",
+    )
+    admin_sub = admin_parser.add_subparsers(dest="admin_command", required=True)
+    revoke_parser = admin_sub.add_parser(
+        "revoke-key",
+        help="Revoke a signing key by fingerprint.",
+    )
+    revoke_parser.add_argument(
+        "--fingerprint",
+        required=True,
+        help="Signer fingerprint to revoke.",
+    )
+    revoke_parser.add_argument(
+        "--state-db-path",
+        default=None,
+        help="Path to state.db (default: STATE_DB_PATH env or ./state.db).",
+    )
+
     return parser
 
 
@@ -308,9 +338,10 @@ def _build_provenance_services(
     """Build provenance + verification services."""
 
     transparency_log_path = repository_path / ".provenance" / "transparency-log.jsonl"
-    publish_url = _read_env_optional("TRANSPARENCY_LOG_PUBLISH_URL")
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    publish_url = _read_env_optional("TRANSPARENCY_LOG_PUBLISH_URL", env_path=env_path)
     publish_headers, publish_supabase_format = build_supabase_publish_config(
-        publish_url, env_path=Path(".env")
+        publish_url, env_path=env_path
     )
     transparency_log_adapter = TransparencyLogAdapter(
         log_path=transparency_log_path,
@@ -344,8 +375,8 @@ def _build_provenance_services(
         transparency_log_adapter=transparency_log_adapter,
         tsa_adapter=tsa_adapter,
         key_registry=key_registry,
+        env_path=env_path,
     )
-    env_path = Path(__file__).resolve().parents[1] / ".env"
     verification_service = VerificationService(
         repository=repository,
         transparency_log_adapter=transparency_log_adapter,
@@ -794,6 +825,72 @@ async def _run_register_command(args: argparse.Namespace) -> int:
     assert_secret_free("artifact body", body)
     title = args.title or _derive_register_title(body, artifact_path.name)
 
+    # --- Legal attestation wizard ---
+    if getattr(args, "non_interactive", False):
+        attestation = AuthorAttestation(
+            classification="fiction",
+            is_human=True,
+            is_original_creation=True,
+            is_independent_and_accurate=True,
+            understands_cryptographic_permanence=True,
+        )
+    else:
+        try:
+            print("\n" + "=" * 50)
+            print("LEGAL ATTESTATION WIZARD")
+            print("=" * 50)
+            print("STEP 1: Legal Classification")
+            print(
+                "To establish the proper legal context for this public record, "
+                "how do you classify the primary intent of this text? Select one:"
+            )
+            print("[1] Statement of Fact / Record (Intended as literal truth)")
+            print("[2] Opinion / Commentary (Subjective analysis or belief)")
+            print("[3] Creative Fiction / Art (Imaginative or literary work)")
+            print("[4] Satire / Parody (Humorous or exaggerated critique)")
+            class_choice = input("Enter 1-4: ").strip()
+            class_map = {"1": "fact", "2": "opinion", "3": "fiction", "4": "satire"}
+            if class_choice not in class_map:
+                raise RuntimeError("Registration aborted: Invalid classification selected.")
+            classification = class_map[class_choice]
+
+            print("\nSTEP 2: The Attestations")
+            p1 = input(
+                "Prompt 1: Do you affirm that you are a human acting on your own behalf, "
+                "and that you possess the legal capacity to make these declarations? [y/N]: "
+            ).strip().lower()
+            p2 = input(
+                "Prompt 2: Do you publicly declare ownership of this text, "
+                "affirming that it is your original creation? [y/N]: "
+            ).strip().lower()
+            p3 = input(
+                f"Prompt 3: Do you declare in good faith that this text is your independent creation, "
+                f"and that its content accurately reflects the classification ({classification.upper()}) "
+                "you selected above? [y/N]: "
+            ).strip().lower()
+            p4 = input(
+                "Prompt 4: Do you fully understand and consent that this declaration will be "
+                "cryptographically sealed into a public, append-only ledger, and that any future "
+                "attempt to alter or delete this record will deliberately break the cryptographic "
+                "chain of trust? [y/N]: "
+            ).strip().lower()
+
+            if not all(ans == "y" for ans in [p1, p2, p3, p4]):
+                raise RuntimeError(
+                    "Registration aborted: All attestations must be agreed to (y) to proceed."
+                )
+            attestation = AuthorAttestation(
+                classification=classification,
+                is_human=True,
+                is_original_creation=True,
+                is_independent_and_accurate=True,
+                understands_cryptographic_permanence=True,
+            )
+            print("=" * 50 + "\n")
+        except (KeyboardInterrupt, EOFError):
+            print("\nRegistration aborted by user.")
+            return 1
+
     async def _record_signed(event: StorySigned) -> None:
         if event.artifact.signature is None:
             raise RuntimeError("Signed artifact is missing signature block.")
@@ -853,7 +950,12 @@ async def _run_register_command(args: argparse.Namespace) -> int:
     await notary_adapter.start()
     await ledger_adapter.start()
 
-    human_event = StoryHumanRegistered(body=body, title=title)
+    human_event = StoryHumanRegistered(
+        body=body,
+        title=title,
+        license=args.license,
+        attestation=attestation,
+    )
     await event_bus.emit(human_event)
     committed_event = await asyncio.wait_for(completion_future, timeout=300.0)
     await _anchor_and_timestamp_committed_artifact(
@@ -1077,13 +1179,17 @@ def _attestation_verdict(
 ) -> tuple[str, int]:
     """Compute user-facing attestation verdict and exit code."""
 
-    critical_failure = not (
-        report.envelope_valid
-        and report.signature_valid
-        and report.payload_hash_match
-        and report.transparency_anchor_found
-        and report.transparency_log_integrity
-    ) or (report.remote_anchor_verified is False)
+    critical_failure = (
+        not (
+            report.envelope_valid
+            and report.signature_valid
+            and report.payload_hash_match
+            and report.transparency_anchor_found
+            and report.transparency_log_integrity
+        )
+        or (report.remote_anchor_verified is False)
+        or (report.key_status_at_signing_time == "revoked")
+    )
     timestamp_failure = not (report.timestamp_found and report.timestamp_valid)
     c2pa_failure = strict_c2pa and not (report.c2pa_present and report.c2pa_valid)
     if critical_failure or c2pa_failure or (strict and timestamp_failure):
@@ -1204,6 +1310,29 @@ async def _run_events_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_admin_revoke_key_command(args: argparse.Namespace) -> int:
+    """Revoke a signing key by fingerprint."""
+
+    db_path = args.state_db_path
+    if db_path is None:
+        raw = _read_env_optional("STATE_DB_PATH")
+        db_path = Path(raw).resolve() if raw else Path("state.db").resolve()
+    else:
+        db_path = Path(db_path).resolve()
+
+    if not db_path.exists():
+        raise RuntimeError(f"State database not found at: {db_path}")
+
+    repository = SQLiteRepository(db_path=db_path)
+    key_registry = KeyRegistryAdapter(repository=repository)
+    if key_registry.get_status(args.fingerprint) is None:
+        raise RuntimeError(f"Key fingerprint not found in registry: {args.fingerprint}")
+
+    key_registry.set_status(fingerprint=args.fingerprint, status="revoked")
+    print(f"Key revoked: fingerprint={args.fingerprint}")
+    return 0
+
+
 async def _dispatch(args: argparse.Namespace) -> int:
     """Dispatch parsed CLI args to command handlers."""
 
@@ -1225,6 +1354,10 @@ async def _dispatch(args: argparse.Namespace) -> int:
         return await _run_attest_command(args)
     if args.command == "events":
         return await _run_events_command(args)
+    if args.command == "admin":
+        if args.admin_command == "revoke-key":
+            return _run_admin_revoke_key_command(args)
+        raise RuntimeError(f"Unsupported admin command: {args.admin_command}")
     raise RuntimeError(f"Unsupported command: {args.command}")
 
 

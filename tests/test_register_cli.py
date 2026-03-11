@@ -153,6 +153,7 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
                             str(self._repo_path),
                             "--title",
                             "My Human Story",
+                            "--non-interactive",
                         ]
                     )
                     exit_code = await cli._run_register_command(args)
@@ -209,5 +210,52 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 await cli._run_curate_command(curate_args)
             self.assertIn("cannot be curated", str(ctx.exception))
+        finally:
+            artifact_path.unlink(missing_ok=True)
+
+    async def test_register_non_interactive_skips_wizard(self) -> None:
+        """With --non-interactive, input() is never called."""
+
+        markdown_content = "Human-only content."
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(markdown_content)
+            artifact_path = Path(f.name)
+
+        try:
+            with patch("builtins.input") as mock_input:
+                async def _fake_on_story_human_registered(
+                    self: object, event: StoryHumanRegistered
+                ) -> None:
+                    signed = _build_human_story_signed_event(
+                        request_id=event.request_id,
+                        body=event.body,
+                        title=event.title,
+                    )
+                    await getattr(self, "_event_bus").emit(signed)
+
+                with patch(
+                    "src.adapters.crypto_notary.CryptoNotaryAdapter._on_story_human_registered",
+                    _fake_on_story_human_registered,
+                ):
+                    args = cli.build_parser().parse_args(
+                        [
+                            "register",
+                            "--file",
+                            str(artifact_path),
+                            "--repo-path",
+                            str(self._repo_path),
+                            "--title",
+                            "Non-Interactive Test",
+                            "--non-interactive",
+                        ]
+                    )
+                    buffer = io.StringIO()
+                    with redirect_stdout(buffer):
+                        exit_code = await cli._run_register_command(args)
+
+                self.assertEqual(exit_code, 0)
+                mock_input.assert_not_called()
         finally:
             artifact_path.unlink(missing_ok=True)

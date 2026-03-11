@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from dataclasses import asdict, dataclass, field
@@ -28,6 +29,8 @@ from src.parsing import (
 )
 from src.repository import SQLiteRepository
 from src.services.curation_service import extract_request_id_from_artifact_path
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -119,7 +122,8 @@ class VerificationService:
         try:
             envelope, payload = parse_artifact_markdown(artifact_path)
             digest_hex = sha256_hex(payload.encode("utf-8"))
-            if branch and commit_oid and ledger_path:
+            token_base64_from_git: str | None = None
+            if branch and commit_oid and ledger_path and repository_path is not None:
                 log_text = self._read_optional_blob_from_branch(
                     repository_path, f"artifact/{request_id}", ".provenance/transparency-log.jsonl"
                 )
@@ -132,22 +136,59 @@ class VerificationService:
                 transparency_log_integrity = (
                     self._transparency_log_adapter.verify_integrity_entries(entries)
                 )
-                remote_anchor_verified = self._verify_remote_anchor(
-                    digest_hex=digest_hex,
-                    entries=entries,
+                remote_anchor_verified: bool | None = None
+                remote_error_message: str | None = None
+                try:
+                    remote_anchor_verified = self._verify_remote_anchor(
+                        digest_hex=digest_hex,
+                        entries=entries,
+                    )
+                except RuntimeError as remote_exc:
+                    remote_anchor_verified = False
+                    remote_error_message = str(remote_exc)
+                ts_text = self._read_optional_blob_from_branch(
+                    repository_path,
+                    f"artifact/{request_id}",
+                    f".provenance/timestamp-{request_id}.tsr",
                 )
+                token_base64_from_git = ts_text.strip() or None
             else:
-                anchor_matches = self._transparency_log_adapter.find_entries_by_artifact_hash(
-                    digest_hex
+                if repository_path is not None:
+                    log_text = self._read_optional_blob_from_head(
+                        repository_path,
+                        ".provenance/transparency-log.jsonl",
+                    )
+                    entries = self._transparency_log_adapter.parse_entries_from_jsonl(
+                        log_text
+                    )
+                    if request_id:
+                        ts_text = self._read_optional_blob_from_head(
+                            repository_path,
+                            f".provenance/timestamp-{request_id}.tsr",
+                        )
+                        token_base64_from_git = ts_text.strip() or None
+                else:
+                    entries = self._transparency_log_adapter.find_entries_by_artifact_hash(
+                        digest_hex
+                    )
+                transparency_anchor_found = any(
+                    e.artifact_hash == digest_hex for e in entries
                 )
-                transparency_anchor_found = len(anchor_matches) > 0
                 transparency_log_integrity = (
-                    self._transparency_log_adapter.verify_integrity()
+                    self._transparency_log_adapter.verify_integrity_entries(entries)
+                    if entries
+                    else True
                 )
-                remote_anchor_verified = self._verify_remote_anchor(
-                    digest_hex=digest_hex,
-                    entries=anchor_matches,
-                )
+                remote_anchor_verified = None
+                remote_error_message = None
+                try:
+                    remote_anchor_verified = self._verify_remote_anchor(
+                        digest_hex=digest_hex,
+                        entries=entries,
+                    )
+                except RuntimeError as remote_exc:
+                    remote_anchor_verified = False
+                    remote_error_message = str(remote_exc)
             manifest_hash, manifest_bytes = self._read_manifest_for_file(artifact_path)
             report = self._build_audit_report(
                 envelope=envelope,
@@ -159,12 +200,14 @@ class VerificationService:
                 transparency_anchor_found=transparency_anchor_found,
                 transparency_log_integrity=transparency_log_integrity,
                 remote_anchor_verified=remote_anchor_verified,
+                remote_error_message=remote_error_message,
                 tsa_ca_cert_path=tsa_ca_cert_path,
                 branch=branch,
                 commit_oid=commit_oid,
                 ledger_path=ledger_path,
+                token_base64_from_git=token_base64_from_git,
             )
-        except Exception as exc:  # noqa: BLE001
+        except (RuntimeError, KeyError, ValueError, FileNotFoundError, OSError) as exc:
             report = self._build_error_report(
                 source_file=str(artifact_path),
                 request_id=request_id,
@@ -172,6 +215,9 @@ class VerificationService:
                 branch=branch,
                 ledger_path=ledger_path,
             )
+        except Exception:
+            _logger.exception("Unexpected error during audit_artifact")
+            raise
         self._persist_report(report)
         return report
 
@@ -216,6 +262,25 @@ class VerificationService:
             return ""
         return bytes(blob_obj.data).decode("utf-8")
 
+    @staticmethod
+    def _read_optional_blob_from_head(
+        repository_path: Path,
+        relative_path: str,
+    ) -> str:
+        """Read blob from HEAD commit; return empty string if path missing."""
+        try:
+            repo = pygit2.Repository(str(repository_path))
+            commit_obj = repo.revparse_single("HEAD")
+            if not isinstance(commit_obj, pygit2.Commit):
+                return ""
+            tree_entry = commit_obj.tree[relative_path]
+            blob_obj = repo[tree_entry.id]
+        except (KeyError, pygit2.GitError, AttributeError, ValueError):
+            return ""
+        if not isinstance(blob_obj, pygit2.Blob):
+            return ""
+        return bytes(blob_obj.data).decode("utf-8")
+
     def _verify_remote_anchor(
         self,
         digest_hex: str,
@@ -231,6 +296,8 @@ class VerificationService:
             digest_hex
         )
         if remote_rows is None:
+            if self._transparency_log_adapter.is_remote_configured():
+                return False
             return None
         if not remote_rows:
             return False
@@ -243,8 +310,29 @@ class VerificationService:
                     list(row.keys()) if isinstance(row, dict) else "not a dict",
                 )
                 continue
-            if payload.get("entryHash") == matching_entry.entry_hash:
-                return True
+
+            # Deep check: recompute entryHash from remote payload; detect tampering
+            expected_hash = TransparencyLogAdapter.compute_expected_entry_hash_from_payload(
+                payload
+            )
+            if expected_hash != payload.get("entryHash"):
+                _logger.warning(
+                    "Remote transparency log payload tampered: recomputed entryHash "
+                    "does not match stored value."
+                )
+                continue
+
+            if payload.get("entryHash") != matching_entry.entry_hash:
+                continue
+            if payload.get("artifactHash") != matching_entry.artifact_hash:
+                _logger.warning(
+                    "Remote row entryHash matches but artifactHash differs: "
+                    "expected %s, got %s",
+                    matching_entry.artifact_hash,
+                    payload.get("artifactHash"),
+                )
+                continue
+            return True
         return False
 
     def audit_committed_artifact(
@@ -291,15 +379,26 @@ class VerificationService:
             transparency_log_integrity = (
                 self._transparency_log_adapter.verify_integrity_entries(entries)
             )
-            remote_anchor_verified = self._verify_remote_anchor(
-                digest_hex=digest_hex,
-                entries=entries,
-            )
+            remote_anchor_verified: bool | None = None
+            remote_error_message: str | None = None
+            try:
+                remote_anchor_verified = self._verify_remote_anchor(
+                    digest_hex=digest_hex,
+                    entries=entries,
+                )
+            except RuntimeError as remote_exc:
+                remote_anchor_verified = False
+                remote_error_message = str(remote_exc)
             manifest_hash, manifest_bytes = self._read_manifest_from_commit(
                 repo=repo,
                 commit_obj=commit_obj,
                 ledger_path=ledger_path,
             )
+            token_base64_from_git = self._read_optional_blob_text_from_commit(
+                repo=repo,
+                commit_obj=commit_obj,
+                relative_path=f".provenance/timestamp-{request_id}.tsr",
+            ).strip()
             report = self._build_audit_report(
                 envelope=envelope,
                 payload=payload,
@@ -310,12 +409,14 @@ class VerificationService:
                 transparency_anchor_found=transparency_anchor_found,
                 transparency_log_integrity=transparency_log_integrity,
                 remote_anchor_verified=remote_anchor_verified,
+                remote_error_message=remote_error_message,
                 tsa_ca_cert_path=tsa_ca_cert_path,
                 branch=branch,
                 commit_oid=str(commit_obj.id),
                 ledger_path=ledger_path,
+                token_base64_from_git=token_base64_from_git or None,
             )
-        except Exception as exc:  # noqa: BLE001
+        except (RuntimeError, KeyError, ValueError, FileNotFoundError, OSError) as exc:
             report = self._build_error_report(
                 source_file=ledger_path,
                 request_id=str(request_id),
@@ -323,6 +424,9 @@ class VerificationService:
                 branch=branch,
                 ledger_path=ledger_path,
             )
+        except Exception:
+            _logger.exception("Unexpected error during audit_committed_artifact")
+            raise
         self._persist_report(report)
         return report
 
@@ -337,10 +441,12 @@ class VerificationService:
         transparency_anchor_found: bool,
         transparency_log_integrity: bool,
         remote_anchor_verified: bool | None = None,
+        remote_error_message: str | None = None,
         tsa_ca_cert_path: Path | None = None,
         branch: str | None = None,
         commit_oid: str | None = None,
         ledger_path: str | None = None,
+        token_base64_from_git: str | None = None,
     ) -> AuditReport:
         errors: list[str] = []
         signature_valid = False
@@ -396,27 +502,55 @@ class VerificationService:
         if not transparency_log_integrity:
             errors.append("Transparency log hash chain integrity check failed.")
         if remote_anchor_verified is False:
-            errors.append("Remote transparency log: no matching entry.")
-
-        latest_timestamp = self._repository.get_latest_timestamp_record(digest_hex)
-        if latest_timestamp is not None:
-            timestamp_found = True
-            if self._tsa_adapter is None:
-                timestamp_valid = False
-                errors.append(
-                    "TSA adapter unavailable for RFC3161 verification."
-                )
+            if remote_error_message:
+                errors.append(f"Remote transparency log: {remote_error_message}")
             else:
-                verification = self._repository.verify_latest_timestamp_record(
-                    artifact_hash=digest_hex,
-                    tsa_adapter=self._tsa_adapter,
+                errors.append("Remote transparency log: no matching entry.")
+        if key_status == "revoked":
+            errors.append("Signing key has been revoked.")
+
+        if token_base64_from_git is not None and self._tsa_adapter is not None:
+            timestamp_found = True
+            try:
+                token_bytes = base64.b64decode(
+                    token_base64_from_git.encode("ascii"), validate=True
+                )
+                verification = self._tsa_adapter.verify_timestamp_token(
+                    digest_hex=digest_hex,
+                    token_bytes=token_bytes,
                     tsa_ca_cert_path=tsa_ca_cert_path,
+                    digest_algorithm="sha256",
                 )
                 timestamp_valid = verification.ok
                 if not verification.ok:
                     errors.append(verification.message)
+            except Exception as exc:
+                timestamp_valid = False
+                errors.append(f"Git timestamp verification failed: {exc}")
         else:
-            errors.append("No RFC3161 timestamp token found for artifact hash.")
+            latest_timestamp = self._repository.get_latest_timestamp_record(
+                digest_hex
+            )
+            if latest_timestamp is not None:
+                timestamp_found = True
+                if self._tsa_adapter is None:
+                    timestamp_valid = False
+                    errors.append(
+                        "TSA adapter unavailable for RFC3161 verification."
+                    )
+                else:
+                    verification = self._repository.verify_latest_timestamp_record(
+                        artifact_hash=digest_hex,
+                        tsa_adapter=self._tsa_adapter,
+                        tsa_ca_cert_path=tsa_ca_cert_path,
+                    )
+                    timestamp_valid = verification.ok
+                    if not verification.ok:
+                        errors.append(verification.message)
+            else:
+                errors.append(
+                    "No RFC3161 timestamp token found for artifact hash."
+                )
 
         return AuditReport(
             artifact_id=str(envelope.id),

@@ -13,7 +13,13 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.models import Artifact, Curation, EmbeddedWatermark, UsageMetrics
+from src.models import (
+    Artifact,
+    AuthorAttestation,
+    Curation,
+    EmbeddedWatermark,
+    UsageMetrics,
+)
 
 EventT = TypeVar("EventT", bound=BaseModel)
 EventHandler = Callable[[EventT], Awaitable[None]]
@@ -230,6 +236,8 @@ class StoryHumanRegistered(BaseModel):
         request_id: Correlation ID for this registration flow.
         body: Raw human-authored markdown body.
         title: Artifact title for the envelope.
+        license: Content license to apply (e.g. ARR, CC-BY-4.0).
+        attestation: Legal declarations from the wizard.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -238,6 +246,8 @@ class StoryHumanRegistered(BaseModel):
     event_version: str = Field(default="v1")
     body: str = Field(min_length=1)
     title: str = Field(min_length=1)
+    license: str = Field(min_length=1, default="ARR")
+    attestation: AuthorAttestation
 
 
 class EventHandlerError(BaseModel):

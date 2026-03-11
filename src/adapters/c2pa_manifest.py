@@ -353,7 +353,11 @@ def validate_c2pa_sidecar(
     env_path: Path | None = None,
     body_for_mvp: str | None = None,
 ) -> C2PAManifestValidation:
-    """Validate one sidecar manifest against one payload."""
+    """Validate one sidecar manifest against one payload.
+
+    Callers validating MVP mode sidecars must pass body_for_mvp (the raw artifact
+    body); otherwise validation fails with a clear error.
+    """
 
     mvp_result = _validate_mvp_manifest(manifest_bytes, body_for_mvp)
     if mvp_result is not None:

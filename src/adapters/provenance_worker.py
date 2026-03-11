@@ -89,7 +89,7 @@ class ProvenanceWorkerAdapter:
                     artifact_hash=anchor_outcome.artifact_hash,
                     tsa_url=read_env_optional("RFC3161_TSA_URL") or "unconfigured",
                     digest_algorithm="sha256",
-                    verification_status="skipped",
+                    verification_status="failed",
                     verification_message=str(exc),
                 )
             )

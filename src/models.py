@@ -16,6 +16,9 @@ CRYPTO_ALGORITHM_ML_DSA_44 = "CRYSTALS-Dilithium (NIST ML-DSA-44)"
 PolicyLicenseId: TypeAlias = Literal["ARR", "CC-BY-4.0", "CC0-1.0"]
 """Canonical license IDs from CONTENT_LICENSE_POLICY. Use | str for custom escape hatch."""
 
+LegalClassification: TypeAlias = Literal["fact", "opinion", "fiction", "satire"]
+"""Legal classification for human-authored content."""
+
 
 class StrictModel(BaseModel):
     """Strict immutable base model used across Eternity v1."""
@@ -61,6 +64,18 @@ class Curation(StrictModel):
     unified_diff: str = Field(alias="unifiedDiff", min_length=1)
 
 
+class AuthorAttestation(StrictModel):
+    """Explicit legal declarations made by a human author."""
+
+    classification: LegalClassification
+    is_human: bool = Field(alias="isHuman")
+    is_original_creation: bool = Field(alias="isOriginalCreation")
+    is_independent_and_accurate: bool = Field(alias="isIndependentAndAccurate")
+    understands_cryptographic_permanence: bool = Field(
+        alias="understandsCryptographicPermanence"
+    )
+
+
 class VerificationAnchor(StrictModel):
     """Public verification anchor for signature identity lookup."""
 
@@ -78,6 +93,10 @@ class Provenance(StrictModel):
     usage_metrics: UsageMetrics | None = Field(alias="usageMetrics", default=None)
     embedded_watermark: EmbeddedWatermark | None = Field(
         alias="embeddedWatermark",
+        default=None,
+    )
+    author_attestation: AuthorAttestation | None = Field(
+        alias="authorAttestation",
         default=None,
     )
 

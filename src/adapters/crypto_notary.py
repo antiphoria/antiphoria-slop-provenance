@@ -26,6 +26,7 @@ from src.events import (
 from src.policies.licensing import get_license_id
 from src.models import (
     Artifact,
+    AuthorAttestation,
     CRYPTO_ALGORITHM_ML_DSA_44,
     Curation,
     EmbeddedWatermark,
@@ -201,6 +202,7 @@ class CryptoNotaryAdapter:
             content_type=event.content_type,
             license=event.license,
             curation=None,
+            author_attestation=None,
         )
         await self._event_bus.emit(
             StorySigned(
@@ -240,6 +242,7 @@ class CryptoNotaryAdapter:
             content_type=_DEFAULT_CONTENT_TYPE,
             license=get_license_id("hybrid"),
             curation=event.curation_metadata,
+            author_attestation=None,
         )
         await self._event_bus.emit(
             StorySigned(
@@ -273,8 +276,9 @@ class CryptoNotaryAdapter:
             usage_metrics=None,
             embedded_watermark=None,
             content_type=_DEFAULT_CONTENT_TYPE,
-            license=get_license_id("human"),
+            license=event.license,
             curation=None,
+            author_attestation=event.attestation,
         )
         await self._event_bus.emit(
             StorySigned(
@@ -308,6 +312,7 @@ class CryptoNotaryAdapter:
         content_type: str,
         license: str,
         curation: Curation | None,
+        author_attestation: AuthorAttestation | None = None,
     ) -> tuple[Artifact, C2PAManifestArtifact | None]:
         """Construct unsigned envelope, sign canonical target, attach signature."""
 
@@ -334,6 +339,7 @@ class CryptoNotaryAdapter:
                 ),
                 usageMetrics=usage_metrics,
                 embeddedWatermark=embedded_watermark,
+                authorAttestation=author_attestation,
             ),
             curation=curation,
         )
@@ -428,9 +434,12 @@ class CryptoNotaryAdapter:
         if is_valid:
             return True
 
-        # Backward-compatibility path for previously rendered artifacts that
-        # used folded YAML scalars and injected a trailing newline into prompt
-        # and systemInstruction during parse-time reconstruction.
+        # Legacy compatibility fallback: previously rendered artifacts used folded
+        # YAML scalars and injected trailing newlines into prompt/systemInstruction
+        # during parse-time reconstruction. Signatures created over the normalized
+        # form (rstrip) are accepted here. This broadens the set of accepted
+        # signatures; callers controlling those fields should be aware. Consider
+        # deprecating or restricting this fallback for artifacts after a cutoff.
         normalized_envelope = self._normalize_generation_context_scalars(envelope)
         if normalized_envelope is None:
             return False
