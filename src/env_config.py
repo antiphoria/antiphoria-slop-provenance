@@ -24,11 +24,20 @@ def _resolve_env_path(env_path: Path | None) -> Path:
     return Path(".env")
 
 
+# Keys injected by run-secure.ps1 / run-secure.sh; process env takes precedence over .env
+_LAUNCHER_INJECTED_KEYS = frozenset(("PQC_PRIVATE_KEY_PATH", "C2PA_PRIVATE_KEY_PATH"))
+
+
 def read_env_optional(
     env_key: str,
     env_path: Path | None = None,
 ) -> str | None:
-    """Read optional value from local `.env`, then process env."""
+    """Read optional value from local `.env`, then process env.
+    For launcher-injected keys, process env takes precedence over .env."""
+    if env_key in _LAUNCHER_INJECTED_KEYS:
+        val = os.getenv(env_key)
+        if val is not None and val.strip():
+            return val.strip().strip("'\"")
 
     resolved_env_path = _resolve_env_path(env_path)
     if resolved_env_path.exists():

@@ -8,7 +8,6 @@ from src.models import (
     AuthorAttestation,
     GenerationContext,
     Hyperparameters,
-    LegalClassification,
     Provenance,
 )
 
@@ -34,7 +33,7 @@ class AuthorAttestationTest(unittest.TestCase):
         self.assertEqual(dumped["classification"], "fiction")
         self.assertIs(dumped["isHuman"], True)
 
-    def test_accepts_all_legal_classifications(self) -> None:
+    def test_accepts_all_artistic_classifications(self) -> None:
         for classification in ("fact", "opinion", "fiction", "satire"):
             att = AuthorAttestation(
                 classification=classification,

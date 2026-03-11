@@ -1,4 +1,5 @@
 keys/
+docs/
 *.hc
 *.tar.gpg
 keys_vault.hc
@@ -227,6 +228,3 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-
-# Repo snapshot
-REPO_SNAPSHOT.md

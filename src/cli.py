@@ -158,7 +158,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_parser.add_argument(
         "--non-interactive",
         action="store_true",
-        help="Skip legal attestation wizard; use defaults (for CI/automation).",
+        help="Skip artistic attestation wizard; use defaults (for CI/automation).",
     )
 
     verify_parser = subparsers.add_parser(
@@ -825,7 +825,7 @@ async def _run_register_command(args: argparse.Namespace) -> int:
     assert_secret_free("artifact body", body)
     title = args.title or _derive_register_title(body, artifact_path.name)
 
-    # --- Legal attestation wizard ---
+    # --- Artistic attestation wizard ---
     if getattr(args, "non_interactive", False):
         attestation = AuthorAttestation(
             classification="fiction",
@@ -837,11 +837,11 @@ async def _run_register_command(args: argparse.Namespace) -> int:
     else:
         try:
             print("\n" + "=" * 50)
-            print("LEGAL ATTESTATION WIZARD")
+            print("ARTISTIC ATTESTATION WIZARD")
             print("=" * 50)
-            print("STEP 1: Legal Classification")
+            print("STEP 1: Artistic Classification")
             print(
-                "To establish the proper legal context for this public record, "
+                "To establish the proper artistic context for this public record, "
                 "how do you classify the primary intent of this text? Select one:"
             )
             print("[1] Statement of Fact / Record (Intended as literal truth)")
@@ -857,7 +857,7 @@ async def _run_register_command(args: argparse.Namespace) -> int:
             print("\nSTEP 2: The Attestations")
             p1 = input(
                 "Prompt 1: Do you affirm that you are a human acting on your own behalf, "
-                "and that you possess the legal capacity to make these declarations? [y/N]: "
+                "and that you possess the artistic capacity to make these declarations? [y/N]: "
             ).strip().lower()
             p2 = input(
                 "Prompt 2: Do you publicly declare ownership of this text, "

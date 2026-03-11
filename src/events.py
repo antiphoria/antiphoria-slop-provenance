@@ -237,7 +237,7 @@ class StoryHumanRegistered(BaseModel):
         body: Raw human-authored markdown body.
         title: Artifact title for the envelope.
         license: Content license to apply (e.g. ARR, CC-BY-4.0).
-        attestation: Legal declarations from the wizard.
+        attestation: Artistic declarations from the wizard.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)

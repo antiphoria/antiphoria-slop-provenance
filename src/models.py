@@ -16,8 +16,8 @@ CRYPTO_ALGORITHM_ML_DSA_44 = "CRYSTALS-Dilithium (NIST ML-DSA-44)"
 PolicyLicenseId: TypeAlias = Literal["ARR", "CC-BY-4.0", "CC0-1.0"]
 """Canonical license IDs from CONTENT_LICENSE_POLICY. Use | str for custom escape hatch."""
 
-LegalClassification: TypeAlias = Literal["fact", "opinion", "fiction", "satire"]
-"""Legal classification for human-authored content."""
+ArtisticClassification: TypeAlias = Literal["fact", "opinion", "fiction", "satire"]
+"""Artistic classification for human-authored content."""
 
 
 class StrictModel(BaseModel):
@@ -65,9 +65,9 @@ class Curation(StrictModel):
 
 
 class AuthorAttestation(StrictModel):
-    """Explicit legal declarations made by a human author."""
+    """Explicit artistic declarations made by a human author."""
 
-    classification: LegalClassification
+    classification: ArtisticClassification
     is_human: bool = Field(alias="isHuman")
     is_original_creation: bool = Field(alias="isOriginalCreation")
     is_independent_and_accurate: bool = Field(alias="isIndependentAndAccurate")
