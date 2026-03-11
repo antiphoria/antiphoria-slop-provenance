@@ -77,6 +77,10 @@ openssl pkcs8 -topk8 -nocrypt -in ".\keys\c2pa-leaf.key.pem" -out ".\keys\c2pa-p
 openssl verify -CAfile ".\keys\c2pa-root-ca.cert.pem" ".\keys\c2pa-leaf.cert.pem"
 openssl x509 -in ".\keys\c2pa-leaf.cert.pem" -text -noout
 
-Write-Host "`nC2PA keys generated successfully. Update .env and run:"
-Write-Host "  C2PA_SIGN_CERT_CHAIN_PATH=./keys/c2pa-cert-chain.pem"
-Write-Host "  C2PA_PRIVATE_KEY_PATH=./keys/c2pa-private-key.pem"
+Write-Host "`nC2PA keys generated successfully."
+Write-Host ""
+Write-Host "Next steps (BYOV):"
+Write-Host "  1. Move c2pa-root-ca.key.pem to offline USB"
+Write-Host "  2. Move c2pa-private-key.pem into the vault (with private.key)"
+Write-Host "  3. Keep c2pa-cert-chain.pem on disk; set C2PA_SIGN_CERT_CHAIN_PATH=./keys/c2pa-cert-chain.pem in .env"
+Write-Host "  4. SECURE CLEANUP: Delete keys/private.key and keys/c2pa-private-key.pem from your SSD!"

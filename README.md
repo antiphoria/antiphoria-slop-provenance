@@ -42,7 +42,6 @@ GOOGLE_API_KEY=...
 GENERATOR_MODEL_ID=gemini-2.5-flash
 GENERATOR_DUMMY_MODE=false
 GENERATOR_DUMMY_DELAY_SEC=1.0
-PQC_PRIVATE_KEY_PATH=./keys/private.key
 OQS_PUBLIC_KEY_PATH=./keys/public.key
 SIGNER_FINGERPRINT=optional-fingerprint
 TRANSPARENCY_LOG_PUBLISH_URL=https://example.org/transparency/append
@@ -56,6 +55,8 @@ STATE_DB_PATH=./state.db
 ENABLE_C2PA=false
 C2PA_MODE=mvp
 ```
+
+When using the secure launcher (`run-secure.ps1` / `run-secure.sh`), `PQC_PRIVATE_KEY_PATH` and `C2PA_PRIVATE_KEY_PATH` are injected by the launcher—do not add them to `.env`. For dev with keys on disk, set them manually.
 
 Only the key and API entries are strictly required for generation/signature flow. TSA and transparency publish URL are optional but recommended for long-term external auditability.
 
@@ -71,6 +72,22 @@ Windows/conda installs, you can optionally set:
 ```dotenv
 OPENSSL_BIN=openssl
 OPENSSL_CONF=C:/path/to/openssl.cnf
+```
+
+## Secure key handling (BYOV)
+
+For production, use the BYOV (Bring Your Own Vault) flow so private keys never touch disk at runtime. See [SECURITY.md](SECURITY.md) for the full threat model and procedures.
+
+**Bootstrap:** Run `python scripts/gen-mldsa-keys.py`; run `./scripts/gen-c2pa-keys.ps1` (Windows) or `./scripts/gen-c2pa-keys.sh` (Linux); then create the vault and populate it per SECURITY.md.
+
+**Runtime:** Use the launcher to run commands with keys injected from the vault:
+
+```bash
+# Windows (PowerShell as Administrator)
+./run-secure.ps1 slop-cli generate --prompt "A short brutalist micro-story." --repo-path ../my-ledger
+
+# Linux
+./run-secure.sh slop-cli generate --prompt "A short brutalist micro-story." --repo-path ../my-ledger
 ```
 
 ## Core Commands
@@ -211,11 +228,10 @@ In `sdk` mode, markdown is not signed directly as the C2PA source asset. Instead
 pipeline builds a deterministic XML bridge payload from envelope metadata plus markdown
 `payloadSha256`, and signs that XML payload to produce the detached `.c2pa` sidecar.
 
-`sdk` mode requires X.509 signer material:
+`sdk` mode requires X.509 signer material. The cert chain stays on disk; the private key is injected by the run-secure launcher when using BYOV:
 
 ```dotenv
 C2PA_SIGN_CERT_CHAIN_PATH=./keys/c2pa-cert-chain.pem
-C2PA_PRIVATE_KEY_PATH=./keys/c2pa-private-key.pem
 C2PA_SIGNING_ALG=ES256
 ```
 

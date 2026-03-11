@@ -1,4 +1,8 @@
 keys/
+*.hc
+*.tar.gpg
+keys_vault.hc
+keys_vault.tar.gpg
 state.db
 .slop-orchestrator.lock
 .deps/

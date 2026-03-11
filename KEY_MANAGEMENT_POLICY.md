@@ -2,6 +2,8 @@
 
 Operational policy for ML-DSA signing keys used by the provenance engine.
 
+For production key handling with zero-disk-exposure at runtime, see the BYOV (Bring Your Own Vault) architecture in [SECURITY.md](SECURITY.md).
+
 ## 1. Key custody
 
 - Store private keys in a dedicated secure location with strict filesystem permissions.
@@ -38,4 +40,4 @@ Operational policy for ML-DSA signing keys used by the provenance engine.
 - Keep C2PA cert-chain/key material separate from ML-DSA keys and rotate independently.
 - Validate EKU/KU and trust-chain requirements before enabling `C2PA_MODE=sdk`.
 - Treat `ENABLE_C2PA=true` with `C2PA_MODE=sdk` as fail-closed operational mode.
-- Store C2PA signer material in secure secret storage (KMS/HSM or equivalent) for production.
+- For production, store C2PA signer material in vault-based storage (BYOV); see [SECURITY.md](SECURITY.md). KMS/HSM or equivalent may be used where supported.
