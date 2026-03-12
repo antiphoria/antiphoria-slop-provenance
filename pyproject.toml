@@ -19,9 +19,6 @@ dependencies = [
     "aiokafka>=0.10.0",
 ]
 
-[project.optional-dependencies]
-ots = ["opentimestamps-client"]
-
 [project.scripts]
 slop-cli = "src.cli:main"
 slop-generator-service = "src.runtime.generator_service:main"

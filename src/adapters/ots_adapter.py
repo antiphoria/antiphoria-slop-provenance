@@ -8,12 +8,54 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
+from src.env_config import read_env_optional
+
 _logger = logging.getLogger(__name__)
+
+
+def resolve_ots_binary(env_path: Path | None = None) -> str:
+    """
+    Resolve OTS binary with precedence:
+    1. OTS_BIN env (explicit override)
+    2. Bundled bin/ots[.exe] (project default)
+    3. 'ots' (system PATH fallback)
+    """
+    # 1. Check for explicit environment override first
+    env_override = read_env_optional("OTS_BIN", env_path=env_path)
+    if env_override:
+        return env_override
+
+    # 2. Check for bundled binary
+    base = Path(__file__).resolve().parents[2]  # project root
+    exe_name = "ots.exe" if os.name == "nt" else "ots"
+    bundled_path = base / "bin" / exe_name
+
+    if bundled_path.exists():
+        # Optional: Warn if Unix binary lacks execute permissions
+        if os.name != "nt" and not os.access(bundled_path, os.X_OK):
+            _logger.warning(
+                "Bundled binary %s lacks executable permissions. "
+                "Run: git update-index --chmod=+x bin/ots",
+                bundled_path,
+            )
+        return str(bundled_path)
+
+    # 3. Fallback to system PATH
+    if shutil.which("ots"):
+        return "ots"
+
+    # No binary found
+    raise FileNotFoundError(
+        f"OTS binary not found. Missing bundled binary at {bundled_path} "
+        "and 'ots' is not in PATH. Set OTS_BIN or install ots."
+    )
 
 
 def _sanitize_for_log(raw: str, max_len: int = 200) -> str:

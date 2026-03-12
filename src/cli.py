@@ -30,7 +30,7 @@ from src.adapters.transparency_log import (
     TransparencyLogAdapter,
     build_supabase_publish_config,
 )
-from src.adapters.ots_adapter import OTSAdapter
+from src.adapters.ots_adapter import OTSAdapter, resolve_ots_binary
 from src.env_config import read_env_bool, read_env_optional
 from src.events import (
     EventBus,
@@ -412,7 +412,7 @@ def _build_provenance_services(
     key_registry = KeyRegistryAdapter(repository=repository)
     ots_adapter = None
     if _read_env_bool("ENABLE_OTS_FORGE", default=False, env_path=env_path):
-        ots_bin = _read_env_optional("OTS_BIN", env_path=env_path) or "ots"
+        ots_bin = resolve_ots_binary(env_path=env_path)
         ots_adapter = OTSAdapter(ots_bin=ots_bin)
     provenance_service = ProvenanceService(
         repository=repository,

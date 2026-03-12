@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import UUID
 
 from src.adapters.key_registry import KeyRegistryAdapter
-from src.adapters.ots_adapter import OTSAdapter
+from src.adapters.ots_adapter import OTSAdapter, resolve_ots_binary
 from src.adapters.provenance_worker import ProvenanceWorkerAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
 from src.adapters.transparency_log import (
@@ -48,7 +48,7 @@ def _build_ots_adapter(env_path: Path) -> OTSAdapter | None:
 
     if not read_env_bool("ENABLE_OTS_FORGE", default=False, env_path=env_path):
         return None
-    ots_bin = read_env_optional("OTS_BIN", env_path=env_path) or "ots"
+    ots_bin = resolve_ots_binary(env_path=env_path)
     return OTSAdapter(ots_bin=ots_bin)
 
 

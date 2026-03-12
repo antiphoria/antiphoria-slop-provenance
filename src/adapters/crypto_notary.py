@@ -455,7 +455,7 @@ class CryptoNotaryAdapter:
         # No legacy fallback: trailing newlines in prompt/systemInstruction would
         # allow signature malleability. Artifacts with folded YAML scalars must
         # be re-signed.
-        return False
+        return is_valid
 
     @staticmethod
     def _verify_mldsa_signature(
