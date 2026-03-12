@@ -19,6 +19,8 @@ Event-driven provenance engine for short-story generation, cryptographic certifi
 pip install -e .
 ```
 
+**Windows users:** The project depends on `liboqs-python`, OpenSSL, and `make`, which are painful to set up natively on Windows. See [doc/WSL2_SETUP.md](doc/WSL2_SETUP.md) for a WSL2 + Docker Desktop setup tutorial.
+
 ## Environment
 
 Copy the example environment file and fill in your values. **Never commit `.env`**—it contains secrets.
@@ -74,6 +76,9 @@ OPENSSL_BIN=openssl
 OPENSSL_CONF=C:/path/to/openssl.cnf
 ```
 
+For OpenTimestamps Bitcoin anchoring, set `ENABLE_OTS_FORGE=true` in `.env`
+and install the optional dependency: `pip install -e ".[ots]"`.
+
 ## Secure key handling (BYOV)
 
 For production, use the BYOV (Bring Your Own Vault) flow so private keys never touch disk at runtime. See [SECURITY.md](SECURITY.md) for the full threat model and procedures.
@@ -121,6 +126,12 @@ Kafka dispatch mode:
 
 ```bash
 slop-cli curate --file ../my-ledger/<request_id>.md --repo-path ../my-ledger --transport kafka
+```
+
+Human-only registration (Kafka):
+
+```bash
+slop-cli register --file ../my-ledger/human-story.md --repo-path ../my-ledger --non-interactive --transport kafka
 ```
 
 ### Request-ID attestation (recommended)
@@ -201,14 +212,42 @@ Replay failed dead-letter events:
 slop-replay-dlq --topic story.signed --max-messages 50
 ```
 
-Run an end-to-end Kafka smoke test (requires running workers):
+### Kafka Architecture
 
-```bash
-slop-smoke-kafka --bootstrap-topics --ledger-repo-path ./ledger --timeout-sec 180
+The pipeline flows through Kafka topics as follows:
+
+```mermaid
+flowchart LR
+    StoryRequested --> Generator
+    Generator --> StoryGenerated
+    StoryGenerated --> Notary
+    Notary --> StorySigned
+    StorySigned --> Ledger
+    Ledger --> StoryCommitted
 ```
 
-When workers run in Docker Compose, run smoke from the compose network so
-Kafka broker resolution stays consistent:
+**Topic layout:** Each event type maps to a primary topic (e.g. `story.requested`, `story.generated`). Failed messages are retried on `{topic}.retry` and eventually moved to `{topic}.dlq` after max retries.
+
+**Ports:** Kafka listens on `9092` (Docker internal) and `9094` (host). Use `localhost:9094` when running CLI or smoke tests from the host; use `kafka:9092` from inside Docker.
+
+**Per-service DB layout:**
+
+| Env var | Purpose |
+|---------|---------|
+| `STATE_DB_PATH` | Per-service dedup DB (e.g. `/state/ledger.db`). Each service has its own; no sharing. |
+| `ARTIFACT_DB_PATH` | Shared artifact lifecycle DB (e.g. `/state/artifacts.db`). All services that update artifact status use this. |
+
+For common failures, DLQ inspection, replay commands, and health check interpretation, see [docs/KAFKA_RUNBOOK.md](docs/KAFKA_RUNBOOK.md).
+
+Run an end-to-end Kafka smoke test (requires running workers).
+
+From host (Kafka advertises `localhost:9094` for host clients):
+
+```bash
+slop-smoke-kafka --bootstrap-topics --bootstrap-servers localhost:9094 --ledger-repo-path ./ledger --timeout-sec 180
+```
+
+Or from inside Docker (uses internal `kafka:9092`):
 
 ```bash
 docker compose run --rm --no-deps ledger-service \

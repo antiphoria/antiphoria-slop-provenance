@@ -6,6 +6,8 @@
 #
 aiokafka==0.13.0
     # via -r requirements.in
+filelock==3.16.1
+    # via -r requirements.in
 annotated-types==0.7.0
     # via pydantic
 anyio==4.12.1

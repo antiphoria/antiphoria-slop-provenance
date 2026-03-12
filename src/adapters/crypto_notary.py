@@ -15,7 +15,7 @@ from src.adapters.c2pa_manifest import (
     C2PAManifestArtifact,
     build_c2pa_sidecar_manifest,
 )
-from src.env_config import read_env_bool, read_env_required
+from src.env_config import read_env_bool, read_env_optional, read_env_required
 from src.events import (
     EventBusPort,
     StoryCurated,
@@ -183,6 +183,27 @@ class CryptoNotaryAdapter:
         if not key_path.is_absolute():
             key_path = (self._env_path.parent / key_path).resolve()
         return _load_key_bytes(key_path)
+
+    def _resolve_public_key_for_verification(self, envelope: Artifact) -> bytes:
+        """Resolve public key for verification, supporting key rotation via signer_fingerprint.
+
+        When envelope.signature.verification_anchor.signer_fingerprint is present, first
+        checks PQC_PUBLIC_KEY_<fingerprint> (fingerprint sanitized for env: colons/dashes
+        replaced with underscores). Enables historical verification after key rotation.
+        """
+        fingerprint: str | None = None
+        if envelope.signature is not None:
+            fingerprint = envelope.signature.verification_anchor.signer_fingerprint
+        if fingerprint:
+            sanitized = fingerprint.replace(":", "_").replace("-", "_")
+            env_key = f"PQC_PUBLIC_KEY_{sanitized}"
+            path_value = read_env_optional(env_key, env_path=self._env_path)
+            if path_value:
+                key_path = Path(path_value)
+                if not key_path.is_absolute():
+                    key_path = (self._env_path.parent / key_path).resolve()
+                return _load_key_bytes(key_path)
+        return self._resolve_public_key()
 
     async def _on_story_generated(self, event: StoryGenerated) -> None:
         """Sign generated content and emit a signed envelope event."""
@@ -425,37 +446,16 @@ class CryptoNotaryAdapter:
             signature_bytes = base64.b64decode(normalized_signature, validate=True)
         except binascii.Error as exc:
             raise RuntimeError("Invalid base64 signature payload in artifact.") from exc
-        public_key = self._resolve_public_key()
+        public_key = self._resolve_public_key_for_verification(envelope)
         is_valid = self._verify_mldsa_signature(
             signing_hash=signing_hash,
             signature_bytes=signature_bytes,
             public_key=public_key,
         )
-        if is_valid:
-            return True
-
-        # Legacy compatibility fallback: previously rendered artifacts used folded
-        # YAML scalars and injected trailing newlines into prompt/systemInstruction
-        # during parse-time reconstruction. Signatures created over the normalized
-        # form (rstrip) are accepted here. This broadens the set of accepted
-        # signatures; callers controlling those fields should be aware. Consider
-        # deprecating or restricting this fallback for artifacts after a cutoff.
-        normalized_envelope = self._normalize_generation_context_scalars(envelope)
-        if normalized_envelope is None:
-            return False
-        normalized_target = build_envelope_signing_target(
-            envelope=normalized_envelope,
-            payload_sha256_hex=payload_hash,
-            manifest_sha256_hex=manifest_hash,
-            prev_hash=None,
-        )
-        normalized_hash = sha256_hex(canonical_json_bytes(normalized_target))
-        fallback_valid = self._verify_mldsa_signature(
-            signing_hash=normalized_hash,
-            signature_bytes=signature_bytes,
-            public_key=public_key,
-        )
-        return fallback_valid
+        # No legacy fallback: trailing newlines in prompt/systemInstruction would
+        # allow signature malleability. Artifacts with folded YAML scalars must
+        # be re-signed.
+        return False
 
     @staticmethod
     def _verify_mldsa_signature(
@@ -473,29 +473,6 @@ class CryptoNotaryAdapter:
                     public_key,
                 )
             )
-
-    @staticmethod
-    def _normalize_generation_context_scalars(envelope: Artifact) -> Artifact | None:
-        """Normalize prompt/instruction values for legacy folded-scalar artifacts."""
-
-        generation_context = envelope.provenance.generation_context
-        normalized_prompt = generation_context.prompt.rstrip("\n")
-        normalized_system_instruction = generation_context.system_instruction.rstrip("\n")
-        if (
-            normalized_prompt == generation_context.prompt
-            and normalized_system_instruction == generation_context.system_instruction
-        ):
-            return None
-        normalized_context = generation_context.model_copy(
-            update={
-                "prompt": normalized_prompt,
-                "system_instruction": normalized_system_instruction,
-            }
-        )
-        normalized_provenance = envelope.provenance.model_copy(
-            update={"generation_context": normalized_context}
-        )
-        return envelope.model_copy(update={"provenance": normalized_provenance})
 
     def _resolve_manifest_hash_for_artifact(self, file_path: Path) -> str | None:
         """Resolve C2PA sidecar hash when a sibling .c2pa file exists."""

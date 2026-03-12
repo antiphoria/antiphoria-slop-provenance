@@ -74,12 +74,14 @@ async def _run_smoke(
     try:
         event = StoryRequested(prompt=prompt)
         await bus.emit(event)
+        print(f"Emitted StoryRequested request_id={event.request_id}")
     finally:
         await bus.stop()
 
     expected_branch = f"artifact/{event.request_id}"
     expected_path = f"{event.request_id}.md"
     deadline = asyncio.get_running_loop().time() + timeout_sec
+    poll_count = 0
     while asyncio.get_running_loop().time() < deadline:
         resolved_target = _resolve_artifact_branch_target(
             ledger_repo_path=ledger_repo_path,
@@ -95,6 +97,13 @@ async def _run_smoke(
                 f"path={artifact_path}",
             )
             return 0
+        poll_count += 1
+        if poll_count % 10 == 0:
+            elapsed = int(asyncio.get_running_loop().time() - (deadline - timeout_sec))
+            print(
+                f"Waiting for artifact (request_id={event.request_id}) "
+                f"... {elapsed}s elapsed"
+            )
         await asyncio.sleep(1.0)
 
     raise RuntimeError(
@@ -139,11 +148,16 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    ledger_path = Path(args.ledger_repo_path)
+    if not ledger_path.is_absolute():
+        project_root = Path(__file__).resolve().parents[2]
+        ledger_path = (project_root / ledger_path).resolve()
+
     return asyncio.run(
         _run_smoke(
             prompt=args.prompt,
             bootstrap_servers=args.bootstrap_servers,
-            ledger_repo_path=Path(args.ledger_repo_path).resolve(),
+            ledger_repo_path=ledger_path,
             timeout_sec=args.timeout_sec,
             bootstrap_topics=args.bootstrap_topics,
         )

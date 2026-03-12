@@ -10,6 +10,13 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 from xml.sax.saxutils import escape as _xml_escape
 
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    load_pem_private_key,
+)
+
 from src.env_config import (
     read_env_choice,
     read_env_optional,
@@ -453,11 +460,34 @@ def validate_c2pa_sidecar(
             try:
                 validation_state = reader.get_validation_state()
                 validation_results = reader.get_validation_results() or {}
+                manifest_store_json = reader.json()
             finally:
                 reader.close()
             errors = _extract_validation_errors(validation_results)
             state_ok = (validation_state or "").lower() == "valid"
             if state_ok and not errors:
+                # Run custom markdown assertion check when body provided and
+                # manifest contains org.antiphoria.markdown (prevents bypass via
+                # text/markdown format that skips SDK_CARRIER_FORMAT path).
+                if body_for_mvp is not None:
+                    try:
+                        manifest_store = json.loads(manifest_store_json)
+                    except json.JSONDecodeError:
+                        manifest_store = {}
+                    if _read_assertion_data(
+                        manifest_store=manifest_store,
+                        label=_SDK_MARKDOWN_ASSERTION_LABEL,
+                    ) is not None:
+                        markdown_errors = _validate_sdk_markdown_assertion(
+                            manifest_store_json=manifest_store_json,
+                            body=body_for_mvp,
+                        )
+                        if markdown_errors:
+                            return C2PAManifestValidation(
+                                valid=False,
+                                validation_state="invalid",
+                                errors=markdown_errors,
+                            )
                 return C2PAManifestValidation(
                     valid=True,
                     validation_state=validation_state,
@@ -624,6 +654,26 @@ def _read_assertion_data(manifest_store: Any, label: str) -> Any | None:
     return None
 
 
+def _normalize_private_key_to_pkcs8(pem: str) -> str:
+    """Normalize private key PEM to PKCS#8 for C2PA SDK compatibility.
+
+    Accepts EC PRIVATE KEY, RSA PRIVATE KEY, or PRIVATE KEY formats.
+    Returns PKCS#8 PEM (-----BEGIN PRIVATE KEY-----).
+    """
+    try:
+        key = load_pem_private_key(pem.encode("utf-8"), password=None)
+    except Exception as exc:
+        raise RuntimeError(
+            f"C2PA private key could not be loaded: {exc}"
+        ) from exc
+    pkcs8_bytes = key.private_bytes(
+        encoding=Encoding.PEM,
+        format=PrivateFormat.PKCS8,
+        encryption_algorithm=NoEncryption(),
+    )
+    return pkcs8_bytes.decode("utf-8")
+
+
 def _resolve_sdk_settings(env_path: Path | None = None) -> C2PASdkSettings:
     """Resolve and validate SDK-side C2PA signer configuration."""
 
@@ -639,10 +689,11 @@ def _resolve_sdk_settings(env_path: Path | None = None) -> C2PASdkSettings:
         cert_chain_path,
         purpose="C2PA signer certificate chain",
     )
-    private_key_pem = _read_text_required(
+    raw_key_pem = _read_text_required(
         private_key_path,
         purpose="C2PA signer private key",
     )
+    private_key_pem = _normalize_private_key_to_pkcs8(raw_key_pem)
     algorithm = read_env_choice(
         "C2PA_SIGNING_ALG",
         allowed_values=_C2PA_ALGORITHM_VALUES,

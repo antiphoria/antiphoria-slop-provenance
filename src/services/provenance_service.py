@@ -5,7 +5,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
+import re
 import tempfile
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
@@ -13,15 +16,31 @@ from uuid import UUID
 import pygit2
 from filelock import FileLock
 
-from src.env_config import read_env_optional
+from src.env_config import read_env_bool, read_env_optional
 from src.adapters.key_registry import KeyRegistryAdapter
+from src.adapters.ots_adapter import OTSAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter, TimestampVerification
 from src.adapters.transparency_log import TransparencyLogAdapter, TransparencyLogEntry
 from src.models import Artifact, sha256_hex
+from src.events import StoryOtsPending
 from src.parsing import parse_artifact_markdown, parse_artifact_markdown_text
 from src.repository import SQLiteRepository
 
+_logger = logging.getLogger(__name__)
 _BRANCH_LOG_PATH = ".provenance/transparency-log.jsonl"
+
+
+def _sanitize_for_log(raw: str, max_len: int = 200) -> str:
+    """Truncate and redact secret-like substrings before logging."""
+    if not raw:
+        return raw
+    out = re.sub(
+        r"(Bearer|apikey|Authorization)[=:\s]+[^\s]+",
+        r"\1=***",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    return out[:max_len] + "..." if len(out) > max_len else out
 _DEFAULT_LEDGER_AUTHOR_NAME = "Slop Orchestrator"
 _DEFAULT_LEDGER_AUTHOR_EMAIL = "bot@antiphoria.local"
 
@@ -47,6 +66,7 @@ class TimestampOutcome:
     digest_algorithm: str
     verification: TimestampVerification
     token_base64: str | None = None
+    story_ots_pending: StoryOtsPending | None = None
 
 
 class ProvenanceService:
@@ -58,12 +78,14 @@ class ProvenanceService:
         transparency_log_adapter: TransparencyLogAdapter,
         tsa_adapter: RFC3161TSAAdapter | None,
         key_registry: KeyRegistryAdapter,
+        ots_adapter: OTSAdapter | None = None,
         env_path: Path | None = None,
     ) -> None:
         self._repository = repository
         self._transparency_log_adapter = transparency_log_adapter
         self._tsa_adapter = tsa_adapter
         self._key_registry = key_registry
+        self._ots_adapter = ots_adapter
         self._env_path = env_path
 
     def register_signing_key(
@@ -161,7 +183,9 @@ class ProvenanceService:
                 anchored_at=last.anchored_at,
                 log_path=_BRANCH_LOG_PATH,
             )
-        previous_entry_hash = self._read_latest_entry_hash(existing_log)
+        previous_entry_hash = self._resolve_previous_entry_hash(
+            repository_path, existing_log
+        )
         entry, serializable = self._transparency_log_adapter.build_entry_record(
             artifact_hash=artifact_hash,
             artifact_id=str(envelope.id),
@@ -256,7 +280,9 @@ class ProvenanceService:
                 anchored_at=last.anchored_at,
                 log_path=_BRANCH_LOG_PATH,
             )
-        previous_entry_hash = self._read_latest_entry_hash(existing_log)
+        previous_entry_hash = self._resolve_previous_entry_hash(
+            repository_path, existing_log
+        )
         entry, serializable = self._transparency_log_adapter.build_entry_record(
             artifact_hash=artifact_hash,
             artifact_id=str(envelope.id),
@@ -347,14 +373,92 @@ class ProvenanceService:
             and request_id is not None
         ):
             ref_name = f"refs/heads/artifact/{request_id}"
+
+            # 1. Commit the TSR sidecar (legacy compat)
             ts_path = f".provenance/timestamp-{request_id}.tsr"
             self._commit_branch_file(
                 repository_path=repository_path,
                 ref_name=ref_name,
                 relative_path=ts_path,
                 payload_text=outcome.token_base64,
-                commit_message=f"provenance: add RFC3161 timestamp ({request_id})",
+                commit_message=f"provenance: add RFC3161 timestamp sidecar ({request_id})",
             )
+
+            # 2. Fast-follow: inject into the monolithic .md file
+            current_md = self._read_markdown_from_commit(
+                repository_path=repository_path,
+                commit_oid=commit_oid,
+                ledger_path=ledger_path,
+            )
+
+            # Hardened idempotency: search only in tail after signature (defeat payload injection)
+            signature_end_marker = "-----END ANTIPHORIA ARTIFACT SIGNATURE-----"
+            if signature_end_marker in current_md:
+                tail = current_md.split(signature_end_marker)[-1]
+                if "-----BEGIN RFC3161 TIMESTAMP TOKEN-----" not in tail:
+                    wrapped_token = "\n".join(
+                        textwrap.wrap(outcome.token_base64, width=76)
+                    )
+                    monolithic_md = (
+                        f"{current_md}\n"
+                        "-----BEGIN RFC3161 TIMESTAMP TOKEN-----\n"
+                        f"{wrapped_token}\n"
+                        "-----END RFC3161 TIMESTAMP TOKEN-----\n"
+                    )
+                    self._commit_branch_file(
+                        repository_path=repository_path,
+                        ref_name=ref_name,
+                        relative_path=ledger_path,
+                        payload_text=monolithic_md,
+                        commit_message=f"provenance: bake RFC3161 token into artifact ({request_id})",
+                    )
+
+            # OTS stamp (gated by ENABLE_OTS_FORGE)
+            story_ots_pending: StoryOtsPending | None = None
+            if (
+                request_id is not None
+                and self._ots_adapter is not None
+                and read_env_bool("ENABLE_OTS_FORGE", default=False, env_path=self._env_path)
+            ):
+                try:
+                    payload_bytes = payload.encode("utf-8")
+                    artifact_hash = sha256_hex(payload_bytes)
+                    ots_bytes = self._ots_adapter.request_ots_stamp(payload_bytes)
+                    pending_b64 = base64.b64encode(ots_bytes).decode("ascii")
+                    self._repository.create_ots_forge_record(
+                        request_id=request_id,
+                        artifact_hash=artifact_hash,
+                        pending_ots_b64=pending_b64,
+                    )
+                    ots_path = f".provenance/ots-{request_id}.ots"
+                    self._commit_branch_file_bytes(
+                        repository_path=repository_path,
+                        ref_name=ref_name,
+                        relative_path=ots_path,
+                        payload_bytes=ots_bytes,
+                        commit_message=f"provenance: add OTS pending proof ({request_id})",
+                    )
+                    story_ots_pending = StoryOtsPending(
+                        request_id=request_id,
+                        artifact_hash=artifact_hash,
+                        pending_ots_b64=pending_b64,
+                    )
+                except Exception as exc:
+                    _logger.warning(
+                        "OTS stamp skipped for request_id=%s (e.g. OpenSSL/bitcoinlib on Windows): %s",
+                        request_id,
+                        _sanitize_for_log(str(exc)),
+                    )
+
+            if story_ots_pending is not None:
+                return TimestampOutcome(
+                    created_at=outcome.created_at,
+                    tsa_url=outcome.tsa_url,
+                    digest_algorithm=outcome.digest_algorithm,
+                    verification=outcome.verification,
+                    token_base64=outcome.token_base64,
+                    story_ots_pending=story_ots_pending,
+                )
         return outcome
 
     def _timestamp_parsed_artifact(
@@ -439,6 +543,36 @@ class ProvenanceService:
                 "Artifact hash mismatch for transparency anchor request."
             )
 
+    def get_artifact_payload_bytes_from_branch(
+        self,
+        repository_path: Path,
+        request_id: UUID,
+        ledger_path: str,
+    ) -> bytes | None:
+        """Read artifact payload bytes from branch head for OTS verification.
+
+        Returns None if branch or artifact not found.
+        """
+        ref_name = f"refs/heads/artifact/{request_id}"
+        try:
+            repo = pygit2.Repository(str(repository_path))
+            reference = repo.lookup_reference(ref_name)
+            commit_obj = repo[reference.target]
+        except (KeyError, pygit2.GitError):
+            return None
+        if not isinstance(commit_obj, pygit2.Commit):
+            return None
+        try:
+            tree_entry = commit_obj.tree[ledger_path]
+        except KeyError:
+            return None
+        blob_obj = repo[tree_entry.id]
+        if not isinstance(blob_obj, pygit2.Blob):
+            return None
+        markdown_text = bytes(blob_obj.data).decode("utf-8")
+        _, payload = parse_artifact_markdown_text(markdown_text)
+        return payload.encode("utf-8")
+
     @staticmethod
     def _read_markdown_from_commit(
         repository_path: Path,
@@ -510,6 +644,30 @@ class ProvenanceService:
             return str(entry_hash)
         return None
 
+    def _resolve_previous_entry_hash(
+        self,
+        repository_path: Path,
+        branch_log_content: str,
+    ) -> str | None:
+        """Resolve previous entry hash from global ref, then branch-local fallback."""
+        global_ref = read_env_optional(
+            "TRANSPARENCY_LOG_GLOBAL_REF",
+            env_path=self._env_path,
+        ) or "refs/heads/main"
+        global_log = ""
+        try:
+            global_log = self._read_branch_file(
+                repository_path=repository_path,
+                ref_name=global_ref,
+                relative_path=_BRANCH_LOG_PATH,
+            )
+        except RuntimeError:
+            pass
+        return (
+            self._read_latest_entry_hash(global_log)
+            or self._read_latest_entry_hash(branch_log_content)
+        )
+
     def _commit_branch_file(
         self,
         repository_path: Path,
@@ -530,6 +688,31 @@ class ProvenanceService:
                 ref_name=ref_name,
                 relative_path=relative_path,
                 payload_text=payload_text,
+                commit_message=commit_message,
+            )
+
+    def _commit_branch_file_bytes(
+        self,
+        repository_path: Path,
+        ref_name: str,
+        relative_path: str,
+        payload_bytes: bytes,
+        commit_message: str,
+    ) -> None:
+        """Commit binary blob to branch (e.g. .ots files)."""
+
+        repo_hash = hashlib.sha256(
+            str(repository_path.resolve()).encode()
+        ).hexdigest()[:16]
+        lock_dir = Path(tempfile.gettempdir()) / "slop-orchestrator" / "locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = lock_dir / f"{repo_hash}_{ref_name.replace('/', '_')}.lock"
+        with FileLock(lock_path):
+            self._commit_branch_file_bytes_impl(
+                repository_path=repository_path,
+                ref_name=ref_name,
+                relative_path=relative_path,
+                payload_bytes=payload_bytes,
                 commit_message=commit_message,
             )
 
@@ -555,38 +738,42 @@ class ProvenanceService:
 
         path_obj = Path(relative_path)
         path_parts = path_obj.parts
-        # Constraint: relative_path must be exactly two levels (e.g. ".provenance/transparency-log.jsonl").
-        # Nested paths like ".provenance/subdir/transparency-log.jsonl" are not supported.
-        if len(path_parts) != 2:
-            raise RuntimeError(
-                f"Invalid branch log path '{relative_path}'. "
-                "Expected two levels (e.g. .provenance/transparency-log.jsonl)."
+        if not path_parts:
+            raise RuntimeError("Invalid empty branch path.")
+
+        blob_oid = repo.create_blob(payload_text.encode("utf-8"))
+
+        current_tree: pygit2.Tree | None = parent_commit.tree
+        tree_stack: list[pygit2.Tree | None] = [current_tree]
+
+        # Traverse down, guarding against NoneType when walking missing nested dirs
+        for part in path_parts[:-1]:
+            if current_tree is not None and part in current_tree:
+                entry = current_tree[part]
+                current_tree = repo[entry.id]
+                if not isinstance(current_tree, pygit2.Tree):
+                    raise RuntimeError(
+                        f"Path part '{part}' exists but is not a directory."
+                    )
+            else:
+                current_tree = None
+            tree_stack.append(current_tree)
+
+        current_oid = blob_oid
+        current_mode = pygit2.GIT_FILEMODE_BLOB
+
+        # Build back up
+        for i, part in reversed(list(enumerate(path_parts))):
+            tb = (
+                repo.TreeBuilder(tree_stack[i])
+                if tree_stack[i] is not None
+                else repo.TreeBuilder()
             )
-        directory_name, filename = path_parts
+            tb.insert(part, current_oid, current_mode)
+            current_oid = tb.write()
+            current_mode = pygit2.GIT_FILEMODE_TREE
 
-        root_tb = repo.TreeBuilder(parent_commit.tree)
-        subtree_obj: pygit2.Tree | None = None
-        try:
-            subtree_entry = parent_commit.tree[directory_name]
-            subtree_candidate = repo[subtree_entry.id]
-            if not isinstance(subtree_candidate, pygit2.Tree):
-                raise RuntimeError(
-                    f"Path '{directory_name}' exists but is not a directory tree."
-                )
-            subtree_obj = subtree_candidate
-        except KeyError:
-            subtree_obj = None
-
-        if subtree_obj is None:
-            subtree_tb = repo.TreeBuilder()
-        else:
-            subtree_tb = repo.TreeBuilder(subtree_obj)
-        payload_blob = repo.create_blob(payload_text.encode("utf-8"))
-        subtree_tb.insert(filename, payload_blob, pygit2.GIT_FILEMODE_BLOB)
-        subtree_oid = subtree_tb.write()
-        root_tb.insert(directory_name, subtree_oid, pygit2.GIT_FILEMODE_TREE)
-        tree_oid = root_tb.write()
-        if tree_oid == parent_commit.tree_id:
+        if parent_commit and current_oid == parent_commit.tree_id:
             return
 
         signature = self._resolve_commit_signature(repo, self._env_path)
@@ -595,7 +782,79 @@ class ProvenanceService:
             signature,
             signature,
             commit_message,
-            tree_oid,
+            current_oid,
+            [parent_commit.id],
+        )
+
+    def _commit_branch_file_bytes_impl(
+        self,
+        repository_path: Path,
+        ref_name: str,
+        relative_path: str,
+        payload_bytes: bytes,
+        commit_message: str,
+    ) -> None:
+        """Inner commit logic for binary blobs (caller holds FileLock)."""
+
+        try:
+            repo = pygit2.Repository(str(repository_path))
+            reference = repo.lookup_reference(ref_name)
+        except (KeyError, pygit2.GitError) as exc:
+            raise RuntimeError(
+                f"Unable to open branch ref '{ref_name}' in '{repository_path}'."
+            ) from exc
+
+        parent_commit = repo[reference.target]
+        if not isinstance(parent_commit, pygit2.Commit):
+            raise RuntimeError(f"Branch ref '{ref_name}' does not point to a commit.")
+
+        path_obj = Path(relative_path)
+        path_parts = path_obj.parts
+        if not path_parts:
+            raise RuntimeError("Invalid empty branch path.")
+
+        blob_oid = repo.create_blob(payload_bytes)
+
+        current_tree: pygit2.Tree | None = parent_commit.tree
+        tree_stack: list[pygit2.Tree | None] = [current_tree]
+
+        # Traverse down, guarding against NoneType when walking missing nested dirs
+        for part in path_parts[:-1]:
+            if current_tree is not None and part in current_tree:
+                entry = current_tree[part]
+                current_tree = repo[entry.id]
+                if not isinstance(current_tree, pygit2.Tree):
+                    raise RuntimeError(
+                        f"Path part '{part}' exists but is not a directory."
+                    )
+            else:
+                current_tree = None
+            tree_stack.append(current_tree)
+
+        current_oid = blob_oid
+        current_mode = pygit2.GIT_FILEMODE_BLOB
+
+        # Build back up
+        for i, part in reversed(list(enumerate(path_parts))):
+            tb = (
+                repo.TreeBuilder(tree_stack[i])
+                if tree_stack[i] is not None
+                else repo.TreeBuilder()
+            )
+            tb.insert(part, current_oid, current_mode)
+            current_oid = tb.write()
+            current_mode = pygit2.GIT_FILEMODE_TREE
+
+        if parent_commit and current_oid == parent_commit.tree_id:
+            return
+
+        signature = self._resolve_commit_signature(repo, self._env_path)
+        repo.create_commit(
+            ref_name,
+            signature,
+            signature,
+            commit_message,
+            current_oid,
             [parent_commit.id],
         )
 

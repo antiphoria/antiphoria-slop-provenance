@@ -15,9 +15,7 @@ async def _replay(args: argparse.Namespace) -> int:
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("aiokafka is required for DLQ replay.") from exc
 
-    bootstrap_servers = (
-        read_env_optional("KAFKA_BOOTSTRAP_SERVERS") or "localhost:9092"
-    )
+    bootstrap_servers = args.bootstrap_servers
     dlq_topic = f"{args.topic}.dlq"
     consumer = AIOKafkaConsumer(
         dlq_topic,
@@ -57,6 +55,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=100,
         help="Maximum DLQ messages to replay.",
+    )
+    parser.add_argument(
+        "--bootstrap-servers",
+        default=read_env_optional("KAFKA_BOOTSTRAP_SERVERS") or "localhost:9094",
+        help="Kafka bootstrap servers (default: localhost:9094 for host clients).",
     )
     return parser
 

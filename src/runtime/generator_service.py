@@ -22,7 +22,7 @@ async def _run() -> None:
         model_id=read_env_optional("GENERATOR_MODEL_ID") or "gemini-2.5-flash",
     )
     await adapter.start()
-    await run_until_cancelled()
+    await run_until_cancelled("generator-service")
 
 
 def main() -> int:

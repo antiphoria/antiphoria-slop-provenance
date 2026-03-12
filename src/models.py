@@ -116,6 +116,7 @@ class SignatureBlock(StrictModel):
     )
     cryptographic_signature: str = Field(alias="cryptographicSignature", min_length=1)
     verification_anchor: VerificationAnchor = Field(alias="verificationAnchor")
+    rfc3161_token: str | None = Field(alias="rfc3161Token", default=None)
 
 
 class Artifact(StrictModel):

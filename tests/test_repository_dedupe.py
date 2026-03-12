@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.repository import SQLiteRepository
+from src.repository import DedupRepository
 
 
 class RepositoryDedupeTest(unittest.TestCase):
@@ -17,7 +17,7 @@ class RepositoryDedupeTest(unittest.TestCase):
         fd, raw_path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         db_path = Path(raw_path)
-        repository = SQLiteRepository(db_path=db_path)
+        repository = DedupRepository(db_path=db_path)
         first = repository.try_mark_message_processed(
             message_id="abc",
             consumer_name="ledger-service",

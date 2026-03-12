@@ -45,12 +45,14 @@ def extract_markdown_body(markdown_text: str) -> str:
             raise RuntimeError("Invalid markdown frontmatter block.")
         body = body[second_delimiter_index + len("\n---\n"):]
 
+    # Use rfind to locate the canonical footer (last occurrence). Prevents injection
+    # attacks where an attacker embeds the marker in the body to truncate the payload.
     footer_index = -1
     for footer_marker in _FOOTER_MARKERS:
-        candidate_index = body.find(footer_marker)
+        candidate_index = body.rfind(footer_marker)
         if candidate_index == -1:
             continue
-        if footer_index == -1 or candidate_index < footer_index:
+        if footer_index == -1 or candidate_index > footer_index:
             footer_index = candidate_index
 
     if footer_index != -1:

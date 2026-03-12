@@ -4,7 +4,11 @@ docs/
 *.tar.gpg
 keys_vault.hc
 keys_vault.tar.gpg
-state.db
+state/
+*.db
+*.sqlite
+*.db-shm
+*.db-wal
 .slop-orchestrator.lock
 .deps/
 .venv-freeze/

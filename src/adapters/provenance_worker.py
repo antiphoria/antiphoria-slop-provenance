@@ -11,6 +11,7 @@ from src.events import (
     EventBusPort,
     StoryAnchored,
     StoryCommitted,
+    StoryOtsPending,
     StoryTimestamped,
 )
 from src.services.provenance_service import ProvenanceService
@@ -81,6 +82,8 @@ class ProvenanceWorkerAdapter:
                     verification_message=timestamp_outcome.verification.message,
                 )
             )
+            if timestamp_outcome.story_ots_pending is not None:
+                await self._event_bus.emit(timestamp_outcome.story_ots_pending)
         except RuntimeError as exc:
             await self._event_bus.emit(
                 StoryTimestamped(

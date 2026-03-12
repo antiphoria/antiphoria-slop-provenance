@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -40,16 +41,29 @@ def parse_artifact_markdown_text(text: str) -> tuple[Artifact, str]:
         raise RuntimeError("Artifact file has malformed YAML frontmatter.")
     frontmatter_text = text[4:delimiter_index]
     payload_text = text[delimiter_index + len("\n---\n"):]
+    # Use rfind to locate the canonical footer (last occurrence). Prevents injection
+    # attacks where an attacker embeds the marker in the body to truncate the payload.
     footer_index = -1
     for footer_marker in _FOOTER_MARKERS:
-        candidate_index = payload_text.find(footer_marker)
+        candidate_index = payload_text.rfind(footer_marker)
         if candidate_index == -1:
             continue
-        if footer_index == -1 or candidate_index < footer_index:
+        if footer_index == -1 or candidate_index > footer_index:
             footer_index = candidate_index
 
+    # Extract RFC3161 from the discarded tail; tolerate Windows CRLF mangling
+    rfc3161_token: str | None = None
     if footer_index != -1:
+        tail_text = payload_text[footer_index:]
+        match = re.search(
+            r"-----BEGIN RFC3161 TIMESTAMP TOKEN-----\s*(.*?)\s*-----END RFC3161 TIMESTAMP TOKEN-----",
+            tail_text,
+            re.DOTALL,
+        )
+        if match:
+            rfc3161_token = "".join(match.group(1).split())
         payload_text = payload_text[:footer_index]
+
     payload = payload_text.strip()
     if not payload:
         raise RuntimeError("Artifact payload is empty after metadata stripping.")
@@ -58,6 +72,11 @@ def parse_artifact_markdown_text(text: str) -> tuple[Artifact, str]:
         raise RuntimeError("Frontmatter YAML did not decode to an object.")
     try:
         envelope = Artifact.model_validate(loaded)
+        if rfc3161_token and envelope.signature is not None:
+            updated_sig = envelope.signature.model_copy(
+                update={"rfc3161_token": rfc3161_token}
+            )
+            envelope = envelope.model_copy(update={"signature": updated_sig})
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"Failed to parse Eternity envelope: {exc}") from exc
     return envelope, payload

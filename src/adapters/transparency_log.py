@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import socket
 import urllib.error
 from dataclasses import replace
 from filelock import FileLock
@@ -19,6 +21,19 @@ from src.env_config import read_env_optional
 from src.models import canonical_json_bytes, sha256_hex
 
 _logger = logging.getLogger(__name__)
+
+
+def _sanitize_for_log(raw: str, max_len: int = 200) -> str:
+    """Truncate and redact secret-like substrings before logging."""
+    if not raw:
+        return raw
+    out = re.sub(
+        r"(Bearer|apikey|Authorization)[=:\s]+[^\s]+",
+        r"\1=***",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    return out[:max_len] + "..." if len(out) > max_len else out
 
 
 def build_supabase_publish_config(
@@ -245,10 +260,17 @@ class TransparencyLogAdapter:
                 continue
         return entries
 
-    def verify_integrity_entries(self, entries: list[TransparencyLogEntry]) -> bool:
-        """Verify hash-chain integrity for already parsed entries."""
+    def verify_integrity_entries(
+        self,
+        entries: list[TransparencyLogEntry],
+        expected_first_previous: str | None = None,
+    ) -> bool:
+        """Verify hash-chain integrity for already parsed entries.
 
-        previous_entry_hash: str | None = None
+        When verifying a sub-chain (e.g. branch log chained to global), pass the
+        expected previous_entry_hash for the first entry via expected_first_previous.
+        """
+        previous_entry_hash: str | None = expected_first_previous
         for entry in entries:
             if entry.previous_entry_hash != previous_entry_hash:
                 return False
@@ -365,14 +387,27 @@ class TransparencyLogAdapter:
             headers=headers,
             data=json.dumps(body).encode("utf-8"),
         )
-        with urllib.request.urlopen(  # noqa: S310
-            request,
-            timeout=self._publish_timeout_sec,
-        ) as response:
-            raw = response.read().decode("utf-8").strip()
-            if not raw:
-                return None
-            return raw
+        aggressive_timeout = min(self._publish_timeout_sec, 3.0)
+        try:
+            with urllib.request.urlopen(  # noqa: S310
+                request,
+                timeout=aggressive_timeout,
+            ) as response:
+                raw = response.read().decode("utf-8").strip()
+                if not raw:
+                    return None
+                return raw
+        except (
+            urllib.error.URLError,
+            urllib.error.HTTPError,
+            socket.timeout,
+            ConnectionError,
+        ) as exc:
+            _logger.warning(
+                "Supabase broadcast soft-fail. Local anchor secure. Error: %s",
+                _sanitize_for_log(str(exc)),
+            )
+            return None
 
     def fetch_remote_entries_by_artifact_hash(
         self, artifact_hash: str
@@ -408,7 +443,25 @@ class TransparencyLogAdapter:
                 if not isinstance(data, list):
                     return []
                 return [row for row in data if isinstance(row, dict)]
-        except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        except urllib.error.HTTPError as exc:
+            if exc.code in (500, 502, 503, 504):
+                _logger.warning(
+                    "Remote transparency log fetch failed (HTTP %s) for artifact_hash=%s",
+                    exc.code,
+                    artifact_hash,
+                )
+                return None
+            raise RuntimeError(
+                f"Remote transparency log fetch failed for artifact_hash={artifact_hash}: {exc}"
+            ) from exc
+        except (urllib.error.URLError, socket.timeout, OSError) as exc:
+            _logger.warning(
+                "Remote transparency log fetch failed (transient) for artifact_hash=%s: %s",
+                artifact_hash,
+                _sanitize_for_log(str(exc)),
+            )
+            return None
+        except json.JSONDecodeError as exc:
             raise RuntimeError(
                 f"Remote transparency log fetch failed for artifact_hash={artifact_hash}: {exc}"
             ) from exc

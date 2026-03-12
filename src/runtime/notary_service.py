@@ -66,7 +66,7 @@ async def _run() -> None:
     await bus.subscribe(StorySigned, _record_signed)
     adapter = CryptoNotaryAdapter(event_bus=bus)
     await adapter.start()
-    await run_until_cancelled()
+    await run_until_cancelled("notary-service")
 
 
 def main() -> int:

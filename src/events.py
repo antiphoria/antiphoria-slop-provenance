@@ -156,6 +156,46 @@ class StoryAnchored(BaseModel):
     anchored_at: datetime = Field(default_factory=_utc_now)
 
 
+class StoryOtsPending(BaseModel):
+    """Event emitted when OTS stamp is requested (pending Bitcoin anchor).
+
+    Attributes:
+        request_id: Correlation ID from the generation/curation flow.
+        artifact_hash: SHA-256 payload digest.
+        pending_ots_b64: Base64-encoded pending OTS proof.
+        ots_pending_at: UTC timestamp for event creation.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    request_id: UUID
+    event_version: str = Field(default="v1")
+    artifact_hash: str = Field(min_length=64, max_length=64)
+    pending_ots_b64: str = Field(min_length=1)
+    ots_pending_at: datetime = Field(default_factory=_utc_now)
+
+
+class StoryForged(BaseModel):
+    """Event emitted when OTS proof is Bitcoin-anchored.
+
+    Attributes:
+        request_id: Correlation ID from the generation/curation flow.
+        artifact_hash: SHA-256 payload digest.
+        bitcoin_block_height: Bitcoin block number where proof was anchored.
+        final_ots_b64: Base64-encoded forged OTS proof.
+        forged_at: UTC timestamp for event creation.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    request_id: UUID
+    event_version: str = Field(default="v1")
+    artifact_hash: str = Field(min_length=64, max_length=64)
+    bitcoin_block_height: int = Field(ge=0)
+    final_ots_b64: str = Field(min_length=1)
+    forged_at: datetime = Field(default_factory=_utc_now)
+
+
 class StoryTimestamped(BaseModel):
     """Event emitted when RFC3161 timestamping is completed.
 
@@ -258,6 +298,7 @@ class EventHandlerError(BaseModel):
         handler_name: Qualified handler callable name when available.
         error_type: Exception class name raised by the handler.
         error_message: Exception message string.
+        request_id: Correlation ID when available from the event being processed.
         occurred_at: UTC timestamp for error capture.
     """
 
@@ -268,6 +309,7 @@ class EventHandlerError(BaseModel):
     handler_name: str = Field(min_length=1)
     error_type: str = Field(min_length=1)
     error_message: str = Field(min_length=1)
+    request_id: str | None = None
     occurred_at: datetime = Field(default_factory=_utc_now)
 
 

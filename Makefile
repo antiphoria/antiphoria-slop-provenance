@@ -48,7 +48,7 @@ migrate:
 	python scripts/migrate_state_v2.py --db-path state.db
 
 smoke:
-	slop-smoke-kafka --bootstrap-topics --ledger-repo-path ./ledger --timeout-sec 180
+	slop-smoke-kafka --bootstrap-topics --bootstrap-servers localhost:9094 --ledger-repo-path ./ledger --timeout-sec 180
 
 metrics:
 	slop-metrics --metrics-dir ./.metrics

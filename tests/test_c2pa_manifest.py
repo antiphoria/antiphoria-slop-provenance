@@ -9,7 +9,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+)
+
 from src.adapters.c2pa_manifest import (
+    _normalize_private_key_to_pkcs8,
     _SDK_CARRIER_FORMAT,
     _SDK_MARKDOWN_ASSERTION_LABEL,
     build_c2pa_validation_payload,
@@ -165,6 +173,25 @@ class C2PAManifestTest(unittest.TestCase):
                     env_path=env_path,
                 )
 
+    def test_normalize_private_key_accepts_ec_and_pkcs8(self) -> None:
+        """EC PRIVATE KEY and PKCS#8 formats are normalized to PKCS#8."""
+        key = ec.generate_private_key(ec.SECP256R1())
+        ec_pem = key.private_bytes(
+            Encoding.PEM,
+            PrivateFormat.TraditionalOpenSSL,
+            NoEncryption(),
+        ).decode()
+        self.assertIn("BEGIN EC PRIVATE KEY", ec_pem)
+        pkcs8 = _normalize_private_key_to_pkcs8(ec_pem)
+        self.assertIn("BEGIN PRIVATE KEY", pkcs8)
+        self.assertNotIn("EC PRIVATE KEY", pkcs8)
+        # PKCS#8 input passes through (idempotent)
+        pkcs8_pem = key.private_bytes(
+            Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()
+        ).decode()
+        normalized = _normalize_private_key_to_pkcs8(pkcs8_pem)
+        self.assertEqual(normalized, pkcs8_pem)
+
     def test_sdk_bridge_payload_is_deterministic(self) -> None:
         artifact = self._build_artifact()
         first = build_sdk_bridge_payload(artifact, "payload")
@@ -184,11 +211,12 @@ class C2PAManifestTest(unittest.TestCase):
                 "X\n"
                 "-----END CERTIFICATE-----\n"
             )
-            key_path.write_text(
-                "-----BEGIN PRIVATE KEY-----\n"
-                "X\n"
-                "-----END PRIVATE KEY-----\n"
-            )
+            # Valid EC P-256 key (PKCS#8) for C2PA ES256; normalization accepts EC or PKCS#8
+            key = ec.generate_private_key(ec.SECP256R1())
+            key_pem = key.private_bytes(
+                Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()
+            ).decode()
+            key_path.write_text(key_pem)
             env_path = temp_path / ".env"
             env_path.write_text(
                 "\n".join(

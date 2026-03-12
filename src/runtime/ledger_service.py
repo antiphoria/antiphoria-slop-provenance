@@ -47,7 +47,7 @@ async def _run() -> None:
     ).resolve()
     adapter = GitLedgerAdapter(event_bus=bus, repository_path=repository_path)
     await adapter.start()
-    await run_until_cancelled()
+    await run_until_cancelled("ledger-service")
 
 
 def main() -> int:

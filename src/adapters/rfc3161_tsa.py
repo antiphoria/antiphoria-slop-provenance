@@ -10,6 +10,8 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+_ALLOWED_DIGEST_ALGORITHMS = frozenset(("sha256", "sha384", "sha512", "md5"))
+
 
 @dataclass(frozen=True)
 class TimestampVerification:
@@ -180,6 +182,8 @@ class RFC3161TSAAdapter:
         digest_algorithm: str,
     ) -> None:
         """Build OpenSSL RFC3161 query file from digest hex."""
+        if digest_algorithm not in _ALLOWED_DIGEST_ALGORITHMS:
+            raise ValueError(f"Invalid digest_algorithm: {digest_algorithm!r}")
 
         command = [
             self._openssl_bin,
@@ -214,6 +218,8 @@ class RFC3161TSAAdapter:
         tsa_ca_cert_path: Path,
         untrusted_cert_path: Path | None,
     ) -> subprocess.CompletedProcess[str]:
+        if digest_algorithm not in _ALLOWED_DIGEST_ALGORITHMS:
+            raise ValueError(f"Invalid digest_algorithm: {digest_algorithm!r}")
         command = [
             self._openssl_bin,
             "ts",

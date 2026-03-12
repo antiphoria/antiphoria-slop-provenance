@@ -20,7 +20,7 @@ async def _run() -> None:
     repository = build_repository()
     adapter = ProvenanceTelemetryAdapter(event_bus=bus, repository=repository)
     await adapter.start()
-    await run_until_cancelled()
+    await run_until_cancelled("telemetry-service")
 
 
 def main() -> int:

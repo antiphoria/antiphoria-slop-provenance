@@ -30,7 +30,8 @@ from src.adapters.transparency_log import (
     TransparencyLogAdapter,
     build_supabase_publish_config,
 )
-from src.env_config import read_env_optional
+from src.adapters.ots_adapter import OTSAdapter
+from src.env_config import read_env_bool, read_env_optional
 from src.events import (
     EventBus,
     EventHandlerError,
@@ -58,6 +59,7 @@ from src.services.verification_service import VerificationService
 
 
 _read_env_optional = read_env_optional
+_read_env_bool = read_env_bool
 
 
 class OrchestratorLock:
@@ -159,6 +161,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--non-interactive",
         action="store_true",
         help="Skip artistic attestation wizard; use defaults (for CI/automation).",
+    )
+    register_parser.add_argument(
+        "--transport",
+        choices=("local", "kafka"),
+        default=_read_env_optional("ORCHESTRATOR_TRANSPORT") or "local",
+        help="Execution transport mode.",
     )
 
     verify_parser = subparsers.add_parser(
@@ -271,6 +279,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print full events as JSON.",
     )
 
+    forge_status_parser = subparsers.add_parser(
+        "forge-status",
+        help="List OTS forge status (PENDING/FORGED) for artifacts.",
+    )
+    forge_status_parser.add_argument(
+        "--repo-path",
+        required=True,
+        help="Ledger repo path (used to resolve state.db).",
+    )
+    forge_status_parser.add_argument(
+        "--request-id",
+        default=None,
+        help="Filter by artifact request UUID.",
+    )
+    forge_status_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print machine-readable JSON output.",
+    )
+
     admin_parser = subparsers.add_parser(
         "admin",
         help="Admin operations (key revocation, etc.).",
@@ -310,6 +338,16 @@ def _verify_git_commit(repository_path: Path, commit_oid: str) -> str:
     return str(commit.id)
 
 
+def _validate_artifact_under_repo(artifact_path: Path, repository_path: Path) -> None:
+    """Ensure artifact is under repository (prevents path traversal)."""
+    try:
+        artifact_path.resolve().relative_to(repository_path.resolve())
+    except ValueError:
+        raise RuntimeError(
+            f"Artifact path must be under repository: {artifact_path}"
+        ) from None
+
+
 def _validate_external_repo_path(repository_path: Path) -> None:
     """Ensure ledger path is external to orchestrator source repository."""
 
@@ -322,12 +360,14 @@ def _validate_external_repo_path(repository_path: Path) -> None:
 
 
 def _build_repository() -> SQLiteRepository:
-    """Build SQLite repository honoring optional shared STATE_DB_PATH."""
+    """Build SQLite repository for shared artifact lifecycle (ARTIFACT_DB_PATH)."""
 
-    state_db_path = _read_env_optional("STATE_DB_PATH")
-    if state_db_path is None:
+    artifact_db_path = _read_env_optional("ARTIFACT_DB_PATH") or _read_env_optional(
+        "STATE_DB_PATH"
+    )
+    if artifact_db_path is None:
         return SQLiteRepository()
-    return SQLiteRepository(db_path=Path(state_db_path).resolve())
+    return SQLiteRepository(db_path=Path(artifact_db_path).resolve())
 
 
 def _build_provenance_services(
@@ -370,11 +410,16 @@ def _build_provenance_services(
         )
     )
     key_registry = KeyRegistryAdapter(repository=repository)
+    ots_adapter = None
+    if _read_env_bool("ENABLE_OTS_FORGE", default=False, env_path=env_path):
+        ots_bin = _read_env_optional("OTS_BIN", env_path=env_path) or "ots"
+        ots_adapter = OTSAdapter(ots_bin=ots_bin)
     provenance_service = ProvenanceService(
         repository=repository,
         transparency_log_adapter=transparency_log_adapter,
         tsa_adapter=tsa_adapter,
         key_registry=key_registry,
+        ots_adapter=ots_adapter,
         env_path=env_path,
     )
     verification_service = VerificationService(
@@ -386,6 +431,7 @@ def _build_provenance_services(
             event_bus=EventBus(),
             require_private_key=False,
         ),
+        ots_adapter=ots_adapter,
         env_path=env_path,
     )
     return provenance_service, verification_service
@@ -611,7 +657,9 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
 
     if args.transport == "kafka":
         repository = _build_repository()
+        repository_path = Path(args.repo_path).resolve()
         artifact_path = Path(args.file).resolve()
+        _validate_artifact_under_repo(artifact_path, repository_path)
         if not artifact_path.exists():
             raise RuntimeError(f"Curated file not found: '{artifact_path}'.")
         request_id = extract_request_id_from_artifact_path(artifact_path)
@@ -670,6 +718,7 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
     )
 
     artifact_path = Path(args.file).resolve()
+    _validate_artifact_under_repo(artifact_path, repository_path)
     if not artifact_path.exists():
         raise RuntimeError(f"Curated file not found: '{artifact_path}'.")
 
@@ -943,6 +992,32 @@ async def _run_register_command(args: argparse.Namespace) -> int:
             )
         )
 
+    human_event = StoryHumanRegistered(
+        body=body,
+        title=title,
+        license=args.license,
+        attestation=attestation,
+    )
+
+    if args.transport == "kafka":
+        bootstrap_servers = (
+            _read_env_optional("KAFKA_BOOTSTRAP_SERVERS") or "localhost:9094"
+        )
+        kafka_bus = KafkaEventBus(
+            bootstrap_servers=bootstrap_servers,
+            consumer_group="cli-gateway",
+        )
+        await kafka_bus.start()
+        await kafka_bus.emit(human_event)
+        await kafka_bus.stop()
+        print(
+            "Registration request queued:",
+            f"request_id={human_event.request_id}",
+            "transport=kafka",
+        )
+        _print_attest_next_step(repository_path, human_event.request_id)
+        return 0
+
     await event_bus.subscribe(StorySigned, _record_signed)
     await event_bus.subscribe(StoryCommitted, _record_committed)
     await event_bus.subscribe_errors(_record_dispatch_error)
@@ -950,12 +1025,6 @@ async def _run_register_command(args: argparse.Namespace) -> int:
     await notary_adapter.start()
     await ledger_adapter.start()
 
-    human_event = StoryHumanRegistered(
-        body=body,
-        title=title,
-        license=args.license,
-        attestation=attestation,
-    )
     await event_bus.emit(human_event)
     committed_event = await asyncio.wait_for(completion_future, timeout=300.0)
     await _anchor_and_timestamp_committed_artifact(
@@ -1134,6 +1203,7 @@ async def _run_audit_command(args: argparse.Namespace) -> int:
     repository_path = Path(args.repo_path).resolve()
     _, verification_service = _build_provenance_services(repository, repository_path)
     artifact_path = Path(args.file).resolve()
+    _validate_artifact_under_repo(artifact_path, repository_path)
     report = await asyncio.to_thread(
         verification_service.audit_artifact,
         artifact_path,
@@ -1265,8 +1335,16 @@ async def _run_attest_command(args: argparse.Namespace) -> int:
             f"c2pa_valid={report.c2pa_valid}",
             f"timestamp_found={report.timestamp_found}",
             f"timestamp_valid={report.timestamp_valid}",
+            f"ots_forged={report.ots_forged}",
+            f"bitcoin_block_height={report.bitcoin_block_height or '—'}",
             f"key_status={report.key_status_at_signing_time}",
         )
+        if report.ots_forged and report.bitcoin_block_height is not None:
+            print(f"OTS: Anchored to Bitcoin Block {report.bitcoin_block_height:,}")
+        elif repository and request_id:
+            ots_record = repository.get_ots_forge_record(request_id)
+            if ots_record and ots_record.status == "PENDING":
+                print("OTS: Pending (descending into the Mempool)")
         if report.c2pa_validation_state is not None:
             print("C2PA state:", report.c2pa_validation_state)
         for c2pa_error in report.c2pa_errors:
@@ -1285,6 +1363,48 @@ async def _run_attest_command(args: argparse.Namespace) -> int:
     )
     await event_bus.drain()
     return exit_code
+
+
+def _run_forge_status_command(args: argparse.Namespace) -> int:
+    """List OTS forge status for PENDING and FORGED artifacts."""
+
+    repository = _build_repository()
+
+    if args.request_id:
+        request_id = UUID(str(args.request_id))
+        record = repository.get_ots_forge_record(request_id)
+        if record is None:
+            print(f"No OTS forge record for request_id={args.request_id}")
+            return 1
+        records = [record]
+    else:
+        pending = repository.list_ots_forge_records(status="PENDING", limit=100)
+        forged = repository.list_ots_forge_records(status="FORGED", limit=100)
+        records = pending + forged
+
+    if args.json:
+        output = [
+            {
+                "request_id": r.request_id,
+                "artifact_hash": r.artifact_hash,
+                "status": r.status,
+                "bitcoin_block_height": r.bitcoin_block_height,
+                "created_at": r.created_at,
+                "updated_at": r.updated_at,
+            }
+            for r in records
+        ]
+        print(json.dumps(output, indent=2, sort_keys=True))
+        return 0
+
+    if not records:
+        print("No OTS forge records found.")
+        return 0
+
+    for r in records:
+        block_str = f" block={r.bitcoin_block_height}" if r.bitcoin_block_height else ""
+        print(f"{r.request_id} {r.status}{block_str} {r.artifact_hash[:16]}...")
+    return 0
 
 
 async def _run_events_command(args: argparse.Namespace) -> int:
@@ -1352,6 +1472,8 @@ async def _dispatch(args: argparse.Namespace) -> int:
         return await _run_audit_command(args)
     if args.command == "attest":
         return await _run_attest_command(args)
+    if args.command == "forge-status":
+        return _run_forge_status_command(args)
     if args.command == "events":
         return await _run_events_command(args)
     if args.command == "admin":

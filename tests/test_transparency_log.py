@@ -228,7 +228,8 @@ class FetchRemoteEntriesTest(unittest.TestCase):
             result = adapter.fetch_remote_entries_by_artifact_hash("d" * 64)
         self.assertEqual(result, [])
 
-    def test_raises_on_http_error(self) -> None:
+    def test_returns_none_on_transient_http_5xx(self) -> None:
+        """HTTP 502/503/504 return None (transient) for attestation skip."""
         import urllib.error
 
         def fake_urlopen(request: object, timeout: float = 10.0) -> object:
@@ -243,12 +244,11 @@ class FetchRemoteEntriesTest(unittest.TestCase):
         )
 
         with patch("urllib.request.urlopen", fake_urlopen):
-            with self.assertRaises(RuntimeError) as ctx:
-                adapter.fetch_remote_entries_by_artifact_hash("c" * 64)
-        self.assertIn("Remote transparency log fetch failed", str(ctx.exception))
-        self.assertIn("500", str(ctx.exception))
+            result = adapter.fetch_remote_entries_by_artifact_hash("c" * 64)
+        self.assertIsNone(result)
 
-    def test_raises_on_urlerror(self) -> None:
+    def test_returns_none_on_urlerror(self) -> None:
+        """URLError (timeout, connection refused) returns None for attestation skip."""
         import urllib.error
 
         def fake_urlopen(request: object, timeout: float = 10.0) -> object:
@@ -260,10 +260,29 @@ class FetchRemoteEntriesTest(unittest.TestCase):
             publish_headers={"apikey": "x", "Authorization": "Bearer x"},
         )
         with patch("urllib.request.urlopen", fake_urlopen):
+            result = adapter.fetch_remote_entries_by_artifact_hash("e" * 64)
+        self.assertIsNone(result)
+
+    def test_raises_on_non_transient_http_error(self) -> None:
+        """HTTP 4xx raises RuntimeError (non-transient)."""
+        import urllib.error
+
+        def fake_urlopen(request: object, timeout: float = 10.0) -> object:
+            raise urllib.error.HTTPError(
+                "https://x", 404, "Not Found", {}, None
+            )
+
+        adapter = TransparencyLogAdapter(
+            log_path=self._log_path,
+            publish_url="https://test.supabase.co/rest/v1/transparency_log",
+            publish_headers={"apikey": "x", "Authorization": "Bearer x"},
+        )
+
+        with patch("urllib.request.urlopen", fake_urlopen):
             with self.assertRaises(RuntimeError) as ctx:
-                adapter.fetch_remote_entries_by_artifact_hash("e" * 64)
+                adapter.fetch_remote_entries_by_artifact_hash("c" * 64)
         self.assertIn("Remote transparency log fetch failed", str(ctx.exception))
-        self.assertIn("Connection refused", str(ctx.exception))
+        self.assertIn("404", str(ctx.exception))
 
     def test_raises_on_json_decode_error(self) -> None:
         def fake_urlopen(request: object, timeout: float = 10.0) -> object:

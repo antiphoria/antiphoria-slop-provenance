@@ -17,6 +17,7 @@ from src.adapters.c2pa_manifest import (
     validate_c2pa_sidecar,
 )
 from src.adapters.key_registry import KeyRegistryAdapter
+from src.adapters.ots_adapter import OTSAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
 from src.adapters.transparency_log import (
     TransparencyLogAdapter,
@@ -57,6 +58,8 @@ class AuditReport:
     branch: str | None = None
     commit_oid: str | None = None
     ledger_path: str | None = None
+    ots_forged: bool = False
+    bitcoin_block_height: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert report dataclass to serializable dictionary."""
@@ -86,6 +89,7 @@ class VerificationService:
         tsa_adapter: RFC3161TSAAdapter | None,
         key_registry: KeyRegistryAdapter,
         artifact_verifier: ArtifactVerifierPort,
+        ots_adapter: OTSAdapter | None = None,
         env_path: Path | None = None,
     ) -> None:
         self._repository = repository
@@ -93,6 +97,7 @@ class VerificationService:
         self._tsa_adapter = tsa_adapter
         self._key_registry = key_registry
         self._artifact_verifier = artifact_verifier
+        self._ots_adapter = ots_adapter
         self._env_path = env_path or Path(".env")
 
     def audit_artifact(
@@ -190,6 +195,12 @@ class VerificationService:
                     remote_anchor_verified = False
                     remote_error_message = str(remote_exc)
             manifest_hash, manifest_bytes = self._read_manifest_for_file(artifact_path)
+            ots_forged, bitcoin_block_height = self._verify_ots_from_git(
+                repository_path=repository_path,
+                request_id=request_id,
+                branch=branch,
+                payload=payload,
+            )
             report = self._build_audit_report(
                 envelope=envelope,
                 payload=payload,
@@ -206,6 +217,8 @@ class VerificationService:
                 commit_oid=commit_oid,
                 ledger_path=ledger_path,
                 token_base64_from_git=token_base64_from_git,
+                ots_forged=ots_forged,
+                bitcoin_block_height=bitcoin_block_height,
             )
         except (RuntimeError, KeyError, ValueError, FileNotFoundError, OSError) as exc:
             report = self._build_error_report(
@@ -263,6 +276,44 @@ class VerificationService:
         return bytes(blob_obj.data).decode("utf-8")
 
     @staticmethod
+    def _read_blob_bytes_from_commit(
+        repo: pygit2.Repository,
+        commit_obj: pygit2.Commit,
+        relative_path: str,
+    ) -> bytes | None:
+        """Read raw blob bytes from commit; return None if path missing."""
+        try:
+            tree_entry = commit_obj.tree[relative_path]
+            blob_obj = repo[tree_entry.id]
+        except (KeyError, pygit2.GitError):
+            return None
+        if not isinstance(blob_obj, pygit2.Blob):
+            return None
+        return bytes(blob_obj.data)
+
+    @staticmethod
+    def _read_optional_blob_bytes_from_branch(
+        repository_path: Path,
+        branch_name: str,
+        relative_path: str,
+    ) -> bytes | None:
+        """Read raw blob bytes from branch; return None if branch/path missing."""
+        ref_name = f"refs/heads/{branch_name}"
+        try:
+            repo = pygit2.Repository(str(repository_path))
+            reference = repo.lookup_reference(ref_name)
+            commit_obj = repo[reference.target]
+            if not isinstance(commit_obj, pygit2.Commit):
+                return None
+            return VerificationService._read_blob_bytes_from_commit(
+                repo=repo,
+                commit_obj=commit_obj,
+                relative_path=relative_path,
+            )
+        except (KeyError, pygit2.GitError):
+            return None
+
+    @staticmethod
     def _read_optional_blob_from_head(
         repository_path: Path,
         relative_path: str,
@@ -296,8 +347,6 @@ class VerificationService:
             digest_hex
         )
         if remote_rows is None:
-            if self._transparency_log_adapter.is_remote_configured():
-                return False
             return None
         if not remote_rows:
             return False
@@ -399,6 +448,12 @@ class VerificationService:
                 commit_obj=commit_obj,
                 relative_path=f".provenance/timestamp-{request_id}.tsr",
             ).strip()
+            ots_forged, bitcoin_block_height = self._verify_ots_from_commit(
+                repo=repo,
+                commit_obj=commit_obj,
+                request_id=str(request_id),
+                payload=payload,
+            )
             report = self._build_audit_report(
                 envelope=envelope,
                 payload=payload,
@@ -415,6 +470,8 @@ class VerificationService:
                 commit_oid=str(commit_obj.id),
                 ledger_path=ledger_path,
                 token_base64_from_git=token_base64_from_git or None,
+                ots_forged=ots_forged,
+                bitcoin_block_height=bitcoin_block_height,
             )
         except (RuntimeError, KeyError, ValueError, FileNotFoundError, OSError) as exc:
             report = self._build_error_report(
@@ -429,6 +486,49 @@ class VerificationService:
             raise
         self._persist_report(report)
         return report
+
+    def _verify_ots_from_git(
+        self,
+        repository_path: Path | None,
+        request_id: str | None,
+        branch: str | None,
+        payload: str,
+    ) -> tuple[bool, int | None]:
+        """Verify OTS proof from Git; return (ots_forged, bitcoin_block_height)."""
+        if not request_id or not repository_path or not self._ots_adapter:
+            return False, None
+        branch_name = branch or f"artifact/{request_id}"
+        ots_path = f".provenance/ots-{request_id}.ots"
+        ots_bytes = self._read_optional_blob_bytes_from_branch(
+            repository_path, branch_name, ots_path
+        )
+        if not ots_bytes:
+            return False, None
+        return self._ots_adapter.verify_ots_proof(
+            payload_bytes=payload.encode("utf-8"),
+            ots_bytes=ots_bytes,
+        )
+
+    def _verify_ots_from_commit(
+        self,
+        repo: pygit2.Repository,
+        commit_obj: pygit2.Commit,
+        request_id: str,
+        payload: str,
+    ) -> tuple[bool, int | None]:
+        """Verify OTS proof from commit; return (ots_forged, bitcoin_block_height)."""
+        if not self._ots_adapter:
+            return False, None
+        ots_path = f".provenance/ots-{request_id}.ots"
+        ots_bytes = self._read_blob_bytes_from_commit(
+            repo=repo, commit_obj=commit_obj, relative_path=ots_path
+        )
+        if not ots_bytes:
+            return False, None
+        return self._ots_adapter.verify_ots_proof(
+            payload_bytes=payload.encode("utf-8"),
+            ots_bytes=ots_bytes,
+        )
 
     def _build_audit_report(
         self,
@@ -447,6 +547,8 @@ class VerificationService:
         commit_oid: str | None = None,
         ledger_path: str | None = None,
         token_base64_from_git: str | None = None,
+        ots_forged: bool = False,
+        bitcoin_block_height: int | None = None,
     ) -> AuditReport:
         errors: list[str] = []
         signature_valid = False
@@ -509,11 +611,20 @@ class VerificationService:
         if key_status == "revoked":
             errors.append("Signing key has been revoked.")
 
-        if token_base64_from_git is not None and self._tsa_adapter is not None:
+        token_base64_to_verify = (
+            envelope.signature.rfc3161_token
+            if (
+                envelope.signature is not None
+                and envelope.signature.rfc3161_token is not None
+            )
+            else token_base64_from_git
+        )
+
+        if token_base64_to_verify is not None and self._tsa_adapter is not None:
             timestamp_found = True
             try:
                 token_bytes = base64.b64decode(
-                    token_base64_from_git.encode("ascii"), validate=True
+                    token_base64_to_verify.encode("ascii"), validate=True
                 )
                 verification = self._tsa_adapter.verify_timestamp_token(
                     digest_hex=digest_hex,
@@ -573,6 +684,8 @@ class VerificationService:
             branch=branch,
             commit_oid=commit_oid,
             ledger_path=ledger_path,
+            ots_forged=ots_forged,
+            bitcoin_block_height=bitcoin_block_height,
         )
 
     def _build_error_report(
@@ -604,6 +717,8 @@ class VerificationService:
             branch=branch,
             commit_oid=None,
             ledger_path=ledger_path,
+            ots_forged=False,
+            bitcoin_block_height=None,
         )
 
     def _persist_report(self, report: AuditReport) -> None:

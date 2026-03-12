@@ -11,6 +11,7 @@ from typing import Protocol
 from typing import cast
 from uuid import UUID, uuid4
 
+from filelock import FileLock
 from pydantic import BaseModel
 
 from src.events import (
@@ -23,7 +24,10 @@ from src.events import (
     StoryAudited,
     StoryCommitted,
     StoryCurated,
+    StoryForged,
     StoryGenerated,
+    StoryHumanRegistered,
+    StoryOtsPending,
     StoryRequested,
     StorySigned,
     StoryTimestamped,
@@ -39,6 +43,8 @@ _EVENT_TYPES: tuple[type[BaseModel], ...] = (
     StoryCurated,
     StoryAnchored,
     StoryTimestamped,
+    StoryOtsPending,
+    StoryForged,
     StoryAudited,
 )
 _EVENT_BY_NAME = {event_type.__name__: event_type for event_type in _EVENT_TYPES}
@@ -49,8 +55,11 @@ _TOPIC_BY_EVENT = {
     StorySigned: "story.signed",
     StoryCommitted: "story.committed",
     StoryCurated: "story.curated",
+    StoryHumanRegistered: "story.humanregistered",
     StoryAnchored: "story.anchored",
     StoryTimestamped: "story.timestamped",
+    StoryOtsPending: "story.otspending",
+    StoryForged: "story.forged",
     StoryAudited: "story.audited",
 }
 
@@ -66,6 +75,9 @@ class MessageDedupRepository(Protocol):
 
     def try_mark_message_processed(self, message_id: str, consumer_name: str) -> bool:
         """Return True when message id is newly marked."""
+
+    def unmark_message_processed(self, message_id: str, consumer_name: str) -> None:
+        """Remove processed mark so message can be retried after handler failure."""
 
 
 class KafkaEventBus(EventBusPort):
@@ -99,6 +111,11 @@ class KafkaEventBus(EventBusPort):
         self._metrics_dirty_updates = 0
         self._lock = asyncio.Lock()
         self._stopped = False
+
+    def _effective_group_id(self, base_topic: str) -> str:
+        """Group ID for this topic; ensures each consumer gets correct partitions."""
+        safe_topic = base_topic.replace(".", "-")
+        return f"{self._consumer_group}-{safe_topic}"
 
     async def start(self) -> None:
         """Initialize Kafka producer lazily."""
@@ -199,11 +216,18 @@ class KafkaEventBus(EventBusPort):
         }
         request_id_value = getattr(event, "request_id", None)
         key = self._build_event_key(request_id_value)
+        headers: list[tuple[str, bytes]] = [
+            ("x-message-id", str(uuid4()).encode("ascii")),
+        ]
+        if request_id_value is not None:
+            headers.append(
+                ("x-request-id", str(request_id_value).encode("ascii")),
+            )
         await self._producer.send_and_wait(
             topic=topic,
             key=key,
             value=json.dumps(event_data, sort_keys=True).encode("utf-8"),
-            headers=[("x-message-id", str(uuid4()).encode("ascii"))],
+            headers=headers,
         )
         self._increment_metric("events_emitted_total", topic)
 
@@ -222,7 +246,7 @@ class KafkaEventBus(EventBusPort):
             topic,
             retry_topic,
             bootstrap_servers=self._bootstrap_servers,
-            group_id=self._consumer_group,
+            group_id=self._effective_group_id(topic),
             enable_auto_commit=False,
             auto_offset_reset="earliest",
         )
@@ -252,17 +276,24 @@ class KafkaEventBus(EventBusPort):
     ) -> None:
         """Decode and dispatch one Kafka message for a typed event.
 
-        Mark as processed only after handler success to avoid message loss on crash.
-        Handlers must remain idempotent: the At-Least-Once delivery model can cause
-        duplicate processing when multiple consumers receive the same message before
-        either marks it processed.
+        Uses atomic try_mark_message_processed to prevent TOCTOU dedup races.
+        On handler failure, unmarks before retry so the message can be claimed again.
         """
-
+        message_id = self._extract_message_id(message)
+        effective_group = self._effective_group_id(base_topic)
+        claimed = False
+        request_id_from_headers = self._extract_request_id(message.headers)
         try:
-            if not await self._should_process_message(message):
-                self._increment_metric("events_deduplicated_total", base_topic)
-                await self._commit_message_offset(consumer, message)
-                return
+            if self._dedup_repository is not None:
+                claimed = await asyncio.to_thread(
+                    self._dedup_repository.try_mark_message_processed,
+                    message_id,
+                    effective_group,
+                )
+                if not claimed:
+                    self._increment_metric("events_deduplicated_total", base_topic)
+                    await self._commit_message_offset(consumer, message)
+                    return
             raw = json.loads(message.value.decode("utf-8"))
             event_name = str(raw["eventType"])
             payload = raw["payload"]
@@ -271,14 +302,43 @@ class KafkaEventBus(EventBusPort):
                 await self._commit_message_offset(consumer, message)
                 return
             event = event_type.model_validate(payload)
+            request_id = request_id_from_headers or getattr(event, "request_id", None)
+            LOGGER.info(
+                "Processing %s partition=%s offset=%s",
+                event_type.__name__,
+                message.partition,
+                message.offset,
+                extra={"request_id": str(request_id) if request_id else "-"},
+            )
             handlers = tuple(self._subscribers.get(event_type, []))
             for handler in handlers:
                 await handler(event)
+            LOGGER.info(
+                "Processed %s",
+                event_type.__name__,
+                extra={"request_id": str(request_id) if request_id else "-"},
+            )
             self._increment_metric("events_processed_total", base_topic)
-            await self._mark_message_processed(message)
             await self._commit_message_offset(consumer, message)
         except Exception as exc:  # noqa: BLE001
-            retry_count = self._extract_retry_count(message.headers)
+            request_id_err = request_id_from_headers
+            if request_id_err is None:
+                try:
+                    raw_err = json.loads(message.value.decode("utf-8"))
+                    payload_err = raw_err.get("payload", {})
+                    request_id_err = payload_err.get("request_id")
+                except Exception:
+                    pass
+            retry_count = min(
+                self._extract_retry_count(message.headers),
+                self._max_retries,
+            )
+            if claimed and self._dedup_repository is not None:
+                await asyncio.to_thread(
+                    self._dedup_repository.unmark_message_processed,
+                    message_id,
+                    effective_group,
+                )
             (
                 handoff_succeeded,
                 handoff_target,
@@ -299,17 +359,20 @@ class KafkaEventBus(EventBusPort):
             else:
                 self._increment_metric("handoff_failures_total", base_topic)
                 LOGGER.error(
-                    "Kafka handoff failed",
+                    "Kafka handoff failed topic=%s partition=%s offset=%s retry_count=%s handoff_target=%s handoff_error=%s",
+                    base_topic,
+                    message.partition,
+                    message.offset,
+                    retry_count,
+                    handoff_target,
+                    handoff_error,
                     extra={
-                        "topic": base_topic,
-                        "partition": message.partition,
-                        "offset": message.offset,
-                        "retry_count": retry_count,
-                        "handoff_target": handoff_target,
-                        "handoff_error": handoff_error,
+                        "request_id": str(request_id_err) if request_id_err else "-",
                     },
                 )
-            await self._publish_handler_error(event_type, exc)
+            await self._publish_handler_error(
+                event_type, exc, request_id=str(request_id_err) if request_id_err else None
+            )
             if handoff_succeeded:
                 await self._commit_message_offset(consumer, message)
 
@@ -360,6 +423,7 @@ class KafkaEventBus(EventBusPort):
         self,
         event_type: type[BaseModel],
         error: Exception,
+        request_id: str | None = None,
     ) -> None:
         """Emit structured handler errors to registered error handlers."""
 
@@ -368,6 +432,7 @@ class KafkaEventBus(EventBusPort):
             handler_name="KafkaEventBus",
             error_type=type(error).__name__,
             error_message=str(error) or "<no message>",
+            request_id=request_id,
         )
         handlers = tuple(self._error_subscribers)
         for handler in handlers:
@@ -375,10 +440,16 @@ class KafkaEventBus(EventBusPort):
                 await handler(payload)
             except Exception:
                 LOGGER.exception(
-                    "Error handler raised for %s", event_type.__name__
+                    "Error handler raised for %s",
+                    event_type.__name__,
+                    extra={"request_id": request_id or "-"},
                 )
                 continue
-        LOGGER.exception("Kafka event dispatch failed for %s", event_type.__name__)
+        LOGGER.exception(
+            "Kafka event dispatch failed for %s",
+            event_type.__name__,
+            extra={"request_id": request_id or "-"},
+        )
 
     async def _attempt_handoff(
         self,
@@ -406,11 +477,16 @@ class KafkaEventBus(EventBusPort):
 
         if self._dedup_repository is None:
             return True
+        base_topic = (
+            message.topic.removesuffix(self._retry_topic_suffix)
+            if message.topic.endswith(self._retry_topic_suffix)
+            else message.topic
+        )
         message_id = self._extract_message_id(message)
         is_processed = await asyncio.to_thread(
             self._dedup_repository.is_message_processed,
             message_id,
-            self._consumer_group,
+            self._effective_group_id(base_topic),
         )
         return not is_processed
 
@@ -419,11 +495,16 @@ class KafkaEventBus(EventBusPort):
 
         if self._dedup_repository is None:
             return
+        base_topic = (
+            message.topic.removesuffix(self._retry_topic_suffix)
+            if message.topic.endswith(self._retry_topic_suffix)
+            else message.topic
+        )
         message_id = self._extract_message_id(message)
         await asyncio.to_thread(
             self._dedup_repository.mark_message_processed,
             message_id,
-            self._consumer_group,
+            self._effective_group_id(base_topic),
         )
 
     async def _commit_message_offset(self, consumer: Any, message: Any) -> None:
@@ -473,6 +554,20 @@ class KafkaEventBus(EventBusPort):
                 return decoded
         return f"{message.topic}:{message.partition}:{message.offset}"
 
+    @staticmethod
+    def _extract_request_id(headers: list[tuple[str, bytes]] | None) -> str | None:
+        """Extract request_id from x-request-id header for log correlation."""
+
+        if headers is None:
+            return None
+        for key, value in headers:
+            if key != "x-request-id":
+                continue
+            decoded = value.decode("ascii", errors="ignore").strip()
+            if decoded:
+                return decoded
+        return None
+
     def _increment_metric(self, metric_name: str, topic: str) -> None:
         """Increment one in-memory per-topic metric counter."""
 
@@ -499,8 +594,10 @@ class KafkaEventBus(EventBusPort):
             "metrics": self.metrics_snapshot(),
         }
         self._metrics_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-        self._metrics_snapshot_path.write_text(
-            json.dumps(payload, sort_keys=True, indent=2),
-            encoding="utf-8",
-        )
+        lock_path = self._metrics_snapshot_path.with_suffix(".lock")
+        with FileLock(lock_path):
+            self._metrics_snapshot_path.write_text(
+                json.dumps(payload, sort_keys=True, indent=2),
+                encoding="utf-8",
+            )
         self._metrics_dirty_updates = 0

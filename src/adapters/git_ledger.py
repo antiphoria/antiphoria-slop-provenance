@@ -9,11 +9,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
+import tempfile
 import textwrap
 from pathlib import Path
 
 import pygit2
+from filelock import FileLock
 
 from src.adapters.c2pa_manifest import build_c2pa_sidecar_manifest
 from src.env_config import read_env_bool, read_env_optional
@@ -95,11 +98,11 @@ class GitLedgerAdapter:
         )
 
     def _resolve_c2pa_sidecar_payload(self, event: StorySigned) -> bytes | None:
-        """Resolve sidecar bytes from event payload with hash enforcement."""
+        """Resolve sidecar bytes from event payload with hash enforcement.
 
-        if not self._enable_c2pa:
-            return None
-
+        When Notary produced C2PA bytes (event.c2pa_manifest_bytes_b64), persist them
+        regardless of Ledger ENABLE_C2PA to avoid mode mismatch and corruption.
+        """
         manifest_hash = event.c2pa_manifest_hash
         if manifest_hash is None and event.c2pa_manifest_bytes_b64 is not None:
             raise RuntimeError("C2PA sidecar bytes supplied without manifest hash.")
@@ -119,7 +122,7 @@ class GitLedgerAdapter:
                     "C2PA manifest hash mismatch while writing sidecar bytes."
                 )
             return sidecar_payload
-        if manifest_hash is None:
+        if not self._enable_c2pa or manifest_hash is None:
             return None
         # Backward-compatibility path: old events only carried hash, not bytes.
         c2pa_artifact = build_c2pa_sidecar_manifest(
@@ -359,6 +362,9 @@ class GitLedgerAdapter:
     ) -> str:
         """Synchronously write blob/tree and create branch-isolated commit.
 
+        Uses FileLock keyed by repo hash + branch (same as ProvenanceService)
+        to prevent Git index deadlock when both adapters commit to same branch.
+
         Args:
             request_id: Correlation id used to derive branch name.
             relative_path: Repository-relative markdown file path.
@@ -370,6 +376,32 @@ class GitLedgerAdapter:
         """
         branch_name = f"artifact/{request_id}"
         ref_name = f"refs/heads/{branch_name}"
+        repo_hash = hashlib.sha256(
+            str(self._repository_path.resolve()).encode()
+        ).hexdigest()[:16]
+        lock_dir = Path(tempfile.gettempdir()) / "slop-orchestrator" / "locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = lock_dir / f"{repo_hash}_{ref_name.replace('/', '_')}.lock"
+        with FileLock(lock_path):
+            return self._commit_markdown_impl(
+                request_id=request_id,
+                relative_path=relative_path,
+                markdown_payload=markdown_payload,
+                c2pa_sidecar_payload=c2pa_sidecar_payload,
+                commit_message=commit_message,
+                ref_name=ref_name,
+            )
+
+    def _commit_markdown_impl(
+        self,
+        request_id: str,
+        relative_path: str,
+        markdown_payload: str,
+        c2pa_sidecar_payload: bytes | None,
+        commit_message: str,
+        ref_name: str,
+    ) -> str:
+        """Inner commit logic (caller holds FileLock)."""
         parent_commit = self._get_branch_head(ref_name)
 
         tree_id = self._build_root_tree_oid(
@@ -443,10 +475,25 @@ class GitLedgerAdapter:
             return root_tb.write()
 
         parent_tree = self._repo[parent_tree_oid] if parent_tree_oid else None
+        artifacts_parent_oid: pygit2.Oid | None = None
+        if parent_tree is not None and self._artifacts_directory:
+            parts = self._artifacts_directory.split("/")
+            current: pygit2.Tree | None = parent_tree
+            for part in parts:
+                if current is None or part not in current:
+                    break
+                entry = current[part]
+                if not entry:
+                    break
+                obj = self._repo[entry.id]
+                if isinstance(obj, pygit2.Tree):
+                    current = obj
+                    artifacts_parent_oid = obj.id
+                else:
+                    break
         artifacts_tb = (
-            self._repo.TreeBuilder(parent_tree[self._artifacts_directory].id)
-            if parent_tree is not None
-            and self._artifacts_directory in parent_tree
+            self._repo.TreeBuilder(artifacts_parent_oid)
+            if artifacts_parent_oid is not None
             else self._repo.TreeBuilder()
         )
         artifacts_tb.insert(path_obj.name, blob_oid, pygit2.GIT_FILEMODE_BLOB)

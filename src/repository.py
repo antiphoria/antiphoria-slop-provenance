@@ -1,7 +1,9 @@
 """SQLite repository adapter for artifact lifecycle persistence.
 
 This module isolates all SQL operations behind a synchronous repository that
-persists generated/signed artifact lifecycle records in `state.db`.
+persists generated/signed artifact lifecycle records. DedupRepository handles
+message-level idempotency (processed_messages) per-service; SQLiteRepository
+handles shared artifact lifecycle (artifact_records, key_registry, etc.).
 """
 
 from __future__ import annotations
@@ -17,6 +19,89 @@ from uuid import UUID, uuid4
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter, TimestampVerification
 from src.models import Artifact
 
+
+class DedupRepository:
+    """Per-service SQLite repository for message deduplication only.
+
+    Each service uses its own STATE_DB_PATH (e.g. /state/ledger.db) to avoid
+    lock contention. Implements MessageDedupRepository protocol.
+    """
+
+    def __init__(self, db_path: Path | None = None) -> None:
+        self._db_path = db_path or Path("state.db")
+        self._initialize_schema()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self._db_path)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout=30000")
+        return connection
+
+    def _initialize_schema(self) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS processed_messages (
+                    message_id TEXT PRIMARY KEY,
+                    consumer_name TEXT NOT NULL,
+                    processed_at TEXT NOT NULL
+                );
+                """
+            )
+
+    def is_message_processed(self, message_id: str, consumer_name: str) -> bool:
+        """Return True when message was already marked processed."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM processed_messages
+                WHERE message_id = ? AND consumer_name = ?;
+                """,
+                (message_id, consumer_name),
+            ).fetchone()
+            return row is not None
+
+    def mark_message_processed(self, message_id: str, consumer_name: str) -> None:
+        """Mark one message id as processed. Idempotent."""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO processed_messages (
+                    message_id, consumer_name, processed_at
+                ) VALUES (?, ?, ?);
+                """,
+                (message_id, consumer_name, _utc_now_iso()),
+            )
+
+    def try_mark_message_processed(self, message_id: str, consumer_name: str) -> bool:
+        """Try to mark one message id as processed.
+
+        Returns:
+            True when inserted for the first time, False if already processed.
+        """
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO processed_messages (
+                    message_id, consumer_name, processed_at
+                ) VALUES (?, ?, ?);
+                """,
+                (message_id, consumer_name, _utc_now_iso()),
+            )
+            return cursor.rowcount == 1
+
+    def unmark_message_processed(self, message_id: str, consumer_name: str) -> None:
+        """Remove processed mark so message can be retried after handler failure."""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                DELETE FROM processed_messages
+                WHERE message_id = ? AND consumer_name = ?;
+                """,
+                (message_id, consumer_name),
+            )
+
 ArtifactLifecycleStatus = Literal[
     "requested",
     "generated",
@@ -25,6 +110,22 @@ ArtifactLifecycleStatus = Literal[
     "committed",
     "failed",
 ]
+
+OtsForgeStatus = Literal["PENDING", "FORGED", "FAILED"]
+
+
+@dataclass(frozen=True)
+class OtsForgeRecord:
+    """OpenTimestamps forge state for one artifact."""
+
+    request_id: str
+    artifact_hash: str
+    status: str
+    pending_ots_b64: str
+    final_ots_b64: str | None
+    bitcoin_block_height: int | None
+    created_at: str
+    updated_at: str
 
 
 def _utc_now_iso() -> str:
@@ -84,6 +185,8 @@ class SQLiteRepository:
 
         connection = sqlite3.connect(self._db_path)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout=30000")
         return connection
 
     def _initialize_schema(self) -> None:
@@ -194,10 +297,15 @@ class SQLiteRepository:
             )
             connection.execute(
                 """
-                CREATE TABLE IF NOT EXISTS processed_messages (
-                    message_id TEXT PRIMARY KEY,
-                    consumer_name TEXT NOT NULL,
-                    processed_at TEXT NOT NULL
+                CREATE TABLE IF NOT EXISTS ots_forge (
+                    request_id TEXT PRIMARY KEY,
+                    artifact_hash TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    pending_ots_b64 TEXT NOT NULL,
+                    final_ots_b64 TEXT,
+                    bitcoin_block_height INTEGER,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
                 """
             )
@@ -651,46 +759,125 @@ class SQLiteRepository:
                 (str(request_id),),
             )
 
-    def is_message_processed(self, message_id: str, consumer_name: str) -> bool:
-        """Return True when message was already marked processed."""
-        with self._connect() as connection:
-            row = connection.execute(
-                """
-                SELECT 1 FROM processed_messages
-                WHERE message_id = ? AND consumer_name = ?;
-                """,
-                (message_id, consumer_name),
-            ).fetchone()
-            return row is not None
+    def create_ots_forge_record(
+        self,
+        request_id: UUID,
+        artifact_hash: str,
+        pending_ots_b64: str,
+    ) -> None:
+        """Create a PENDING OTS forge record."""
 
-    def mark_message_processed(self, message_id: str, consumer_name: str) -> None:
-        """Mark one message id as processed. Idempotent."""
+        now = _utc_now_iso()
         with self._connect() as connection:
             connection.execute(
                 """
-                INSERT OR IGNORE INTO processed_messages (
-                    message_id, consumer_name, processed_at
-                ) VALUES (?, ?, ?);
+                INSERT INTO ots_forge (
+                    request_id, artifact_hash, status, pending_ots_b64,
+                    final_ots_b64, bitcoin_block_height, created_at, updated_at
+                ) VALUES (?, ?, 'PENDING', ?, NULL, NULL, ?, ?);
                 """,
-                (message_id, consumer_name, _utc_now_iso()),
+                (str(request_id), artifact_hash, pending_ots_b64, now, now),
             )
 
-    def try_mark_message_processed(self, message_id: str, consumer_name: str) -> bool:
-        """Try to mark one message id as processed.
+    def get_pending_ots_records(self, limit: int = 100) -> list[OtsForgeRecord]:
+        """Return PENDING OTS forge records, oldest first, capped by limit."""
 
-        Returns:
-            True when inserted for the first time, False if already processed.
-        """
         with self._connect() as connection:
-            cursor = connection.execute(
+            rows = connection.execute(
+                "SELECT * FROM ots_forge WHERE status = 'PENDING' ORDER BY created_at ASC LIMIT ?;",
+                (limit,),
+            ).fetchall()
+        return [self._row_to_ots_forge_record(row) for row in rows]
+
+    def mark_ots_forged(
+        self,
+        request_id: UUID,
+        final_ots_b64: str,
+        bitcoin_block_height: int,
+    ) -> None:
+        """Update OTS forge record to FORGED."""
+
+        now = _utc_now_iso()
+        with self._connect() as connection:
+            connection.execute(
                 """
-                INSERT OR IGNORE INTO processed_messages (
-                    message_id, consumer_name, processed_at
-                ) VALUES (?, ?, ?);
+                UPDATE ots_forge
+                SET status = 'FORGED', final_ots_b64 = ?, bitcoin_block_height = ?,
+                    updated_at = ?
+                WHERE request_id = ?;
                 """,
-                (message_id, consumer_name, _utc_now_iso()),
+                (final_ots_b64, bitcoin_block_height, now, str(request_id)),
             )
-            return cursor.rowcount == 1
+
+    def mark_ots_failed(
+        self,
+        request_id: UUID,
+        failure_reason: str,
+    ) -> None:
+        """Mark OTS forge record as FAILED to stop infinite retries."""
+
+        now = _utc_now_iso()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE ots_forge
+                SET status = 'FAILED', updated_at = ?
+                WHERE request_id = ?;
+                """,
+                (now, str(request_id)),
+            )
+
+    def get_ots_forge_record(self, request_id: UUID) -> OtsForgeRecord | None:
+        """Fetch one OTS forge record by request id."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM ots_forge WHERE request_id = ?;",
+                (str(request_id),),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_ots_forge_record(row)
+
+    def list_ots_forge_records(
+        self,
+        status: OtsForgeStatus | None = None,
+        limit: int = 100,
+    ) -> list[OtsForgeRecord]:
+        """List OTS forge records, optionally filtered by status."""
+
+        if limit <= 0:
+            raise RuntimeError("list limit must be a positive integer.")
+        query = "SELECT * FROM ots_forge"
+        params: tuple[object, ...] = ()
+        if status is not None:
+            query += " WHERE status = ?"
+            params = (status,)
+        query += " ORDER BY updated_at DESC LIMIT ?;"
+        params = (*params, limit)
+
+        with self._connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+        return [self._row_to_ots_forge_record(row) for row in rows]
+
+    @staticmethod
+    def _row_to_ots_forge_record(row: sqlite3.Row) -> OtsForgeRecord:
+        """Convert a SQLite row into OtsForgeRecord."""
+
+        return OtsForgeRecord(
+            request_id=str(row["request_id"]),
+            artifact_hash=str(row["artifact_hash"]),
+            status=str(row["status"]),
+            pending_ots_b64=str(row["pending_ots_b64"]),
+            final_ots_b64=row["final_ots_b64"] if row["final_ots_b64"] else None,
+            bitcoin_block_height=(
+                int(row["bitcoin_block_height"])
+                if row["bitcoin_block_height"] is not None
+                else None
+            ),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+        )
 
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> ArtifactRecord:

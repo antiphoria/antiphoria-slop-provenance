@@ -14,8 +14,11 @@ TOPICS: tuple[str, ...] = (
     "story.signed",
     "story.committed",
     "story.curated",
+    "story.humanregistered",
     "story.anchored",
     "story.timestamped",
+    "story.otspending",
+    "story.forged",
     "story.audited",
 )
 
