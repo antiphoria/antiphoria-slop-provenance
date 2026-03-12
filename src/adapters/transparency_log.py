@@ -370,7 +370,7 @@ class TransparencyLogAdapter:
                 continue
             latest = loaded.get("entryHash")
             if latest is None:
-                return None
+                continue
             return str(latest)
         return None
 

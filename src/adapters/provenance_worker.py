@@ -26,11 +26,13 @@ class ProvenanceWorkerAdapter:
         provenance_service: ProvenanceService,
         repository_path: Path,
         tsa_ca_cert_path: Path | None,
+        env_path: Path | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._provenance_service = provenance_service
         self._repository_path = repository_path
         self._tsa_ca_cert_path = tsa_ca_cert_path
+        self._env_path = env_path
 
     async def start(self) -> None:
         """Subscribe to commit events."""
@@ -90,7 +92,10 @@ class ProvenanceWorkerAdapter:
                     request_id=event.request_id,
                     artifact_id=UUID(anchor_outcome.artifact_id),
                     artifact_hash=anchor_outcome.artifact_hash,
-                    tsa_url=read_env_optional("RFC3161_TSA_URL") or "unconfigured",
+                    tsa_url=read_env_optional(
+                        "RFC3161_TSA_URL", env_path=self._env_path
+                    )
+                    or "unconfigured",
                     digest_algorithm="sha256",
                     verification_status="failed",
                     verification_message=str(exc),

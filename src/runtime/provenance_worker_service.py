@@ -101,6 +101,14 @@ async def _process_single_ots_record(
                 payload_bytes=payload_bytes,
             )
             if not upgraded or final_ots_bytes is None:
+                try:
+                    await asyncio.to_thread(
+                        repository.mark_ots_failed,
+                        request_id,
+                        "OTS upgrade failed or proof did not verify",
+                    )
+                except (ValueError, TypeError):
+                    pass
                 return
 
             ots_path = ots_path_template.format(request_id=record.request_id)
@@ -299,6 +307,7 @@ async def _run() -> None:
         provenance_service=provenance_service,
         repository_path=ledger_repo_path,
         tsa_ca_cert_path=_resolve_tsa_ca_cert_path(env_path),
+        env_path=env_path,
     )
     await adapter.start()
 

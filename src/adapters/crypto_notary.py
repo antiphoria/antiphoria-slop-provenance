@@ -492,8 +492,11 @@ class CryptoNotaryAdapter:
     def _derive_title(body: str) -> str:
         """Derive deterministic title from artifact body content."""
 
-        first_line = body.strip().splitlines()[0].strip()
-        candidate = first_line.strip("# ").strip()
+        lines = body.strip().splitlines()
+        if not lines:
+            return "INCIDENT_UNTITLED"
+        first_line = lines[0].strip()
+        candidate = first_line.strip("# ")
         if not candidate:
             return "INCIDENT_UNTITLED"
         normalized = "_".join(candidate.split())[:80]

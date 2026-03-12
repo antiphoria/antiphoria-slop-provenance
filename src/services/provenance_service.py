@@ -640,7 +640,7 @@ class ProvenanceService:
                 continue
             entry_hash = loaded.get("entryHash")
             if entry_hash is None:
-                return None
+                continue
             return str(entry_hash)
         return None
 
