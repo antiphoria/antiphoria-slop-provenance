@@ -20,6 +20,20 @@ from src.env_config import read_env_optional
 _logger = logging.getLogger(__name__)
 
 
+def build_ots_adapter(env_path: Path | None = None) -> OTSAdapter | None:
+    """Build OTS adapter when ENABLE_OTS_FORGE is true.
+
+    Returns None when OTS forging is disabled. Used by both provenance worker
+    and CLI upgrade commands.
+    """
+    from src.env_config import read_env_bool
+
+    if not read_env_bool("ENABLE_OTS_FORGE", default=False, env_path=env_path):
+        return None
+    ots_bin = resolve_ots_binary(env_path=env_path)
+    return OTSAdapter(ots_bin=ots_bin)
+
+
 def resolve_ots_binary(env_path: Path | None = None) -> str:
     """
     Resolve OTS binary with precedence:

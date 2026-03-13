@@ -3,21 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
 from pathlib import Path
-from uuid import UUID
 
 from src.adapters.key_registry import KeyRegistryAdapter
-from src.adapters.ots_adapter import OTSAdapter, resolve_ots_binary
+from src.adapters.ots_adapter import OTSAdapter, build_ots_adapter
 from src.adapters.provenance_worker import ProvenanceWorkerAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
 from src.adapters.transparency_log import (
     TransparencyLogAdapter,
     build_supabase_publish_config,
 )
-from src.env_config import read_env_bool, read_env_int, read_env_optional
-from src.events import StoryForged
+from src.env_config import read_env_int, read_env_optional
 from src.runtime.service_runtime import (
     build_kafka_bus,
     build_repository,
@@ -43,157 +40,7 @@ def _resolve_tsa_ca_cert_path(env_path: Path) -> Path | None:
     return Path(raw_path).resolve()
 
 
-def _build_ots_adapter(env_path: Path) -> OTSAdapter | None:
-    """Build OTS adapter when ENABLE_OTS_FORGE is true."""
-
-    if not read_env_bool("ENABLE_OTS_FORGE", default=False, env_path=env_path):
-        return None
-    ots_bin = resolve_ots_binary(env_path=env_path)
-    return OTSAdapter(ots_bin=ots_bin)
-
-
-async def _process_single_ots_record(
-    semaphore: asyncio.Semaphore,
-    record,
-    repository,
-    provenance_service: ProvenanceService,
-    ots_adapter: OTSAdapter,
-    transparency_log_adapter: TransparencyLogAdapter,
-    bus,
-    repository_path: Path,
-    ots_path_template: str,
-) -> None:
-    """Process one pending OTS record; on failure, mark FAILED and return (no raise)."""
-    async with semaphore:
-        try:
-            request_id = UUID(record.request_id)
-        except (ValueError, TypeError):
-            _logger.warning(
-                "OTS furnace: invalid request_id=%s, skipping",
-                record.request_id,
-            )
-            return
-        try:
-            artifact_record = await asyncio.to_thread(
-                repository.get_artifact_record, request_id
-            )
-            ledger_path = (
-                artifact_record.ledger_path
-                if artifact_record and artifact_record.ledger_path
-                else f"{record.request_id}.md"
-            )
-            payload_bytes = await asyncio.to_thread(
-                provenance_service.get_artifact_payload_bytes_from_branch,
-                repository_path,
-                request_id,
-                ledger_path,
-            )
-            if payload_bytes is None:
-                _logger.warning(
-                    "OTS furnace: cannot read artifact for request_id=%s, skipping",
-                    record.request_id,
-                )
-                return
-
-            upgraded, final_ots_bytes, block_height = await asyncio.to_thread(
-                ots_adapter.upgrade_ots_proof,
-                record.pending_ots_b64,
-                payload_bytes=payload_bytes,
-            )
-            if not upgraded or final_ots_bytes is None:
-                try:
-                    await asyncio.to_thread(
-                        repository.mark_ots_failed,
-                        request_id,
-                        "OTS upgrade failed or proof did not verify",
-                    )
-                except (ValueError, TypeError):
-                    pass
-                return
-
-            ots_path = ots_path_template.format(request_id=record.request_id)
-            ref_name = f"refs/heads/artifact/{record.request_id}"
-            commit_message = f"provenance: OTS forged ({record.request_id})"
-
-            # 1. Git FIRST
-            await asyncio.to_thread(
-                provenance_service._commit_branch_file_bytes,
-                repository_path,
-                ref_name,
-                ots_path,
-                final_ots_bytes,
-                commit_message,
-            )
-
-            # 2. Append-Only Merkle Chain + mirror to SQLite
-            try:
-                entry = await asyncio.to_thread(
-                    transparency_log_adapter.append_entry,
-                    record.artifact_hash,
-                    str(record.request_id),
-                    ots_path,
-                    record.request_id,
-                    {
-                        "event": "ots_forged",
-                        "bitcoin_block_height": block_height,
-                    },
-                )
-                await asyncio.to_thread(
-                    repository.create_transparency_log_record,
-                    entry.entry_id,
-                    entry.artifact_hash,
-                    entry.artifact_id,
-                    entry.request_id,
-                    entry.source_file,
-                    str(transparency_log_adapter.log_path),
-                    entry.previous_entry_hash,
-                    entry.entry_hash,
-                    entry.anchored_at,
-                    entry.remote_receipt,
-                )
-            except Exception as exc:
-                _logger.warning(
-                    "OTS furnace: append_entry failed for request_id=%s: %s",
-                    record.request_id,
-                    exc,
-                )
-
-            # 3. SQLite
-            final_b64 = base64.b64encode(final_ots_bytes).decode("ascii")
-            await asyncio.to_thread(
-                repository.mark_ots_forged,
-                request_id,
-                final_b64,
-                block_height,
-            )
-
-            # 4. Emit
-            await bus.emit(
-                StoryForged(
-                    request_id=request_id,
-                    artifact_hash=record.artifact_hash,
-                    bitcoin_block_height=block_height,
-                    final_ots_b64=final_b64,
-                )
-            )
-
-        except Exception as exc:
-            _logger.warning(
-                "OTS furnace: marking request_id=%s FAILED after error: %s",
-                record.request_id,
-                exc,
-            )
-            try:
-                await asyncio.to_thread(
-                    repository.mark_ots_failed,
-                    request_id,
-                    str(exc),
-                )
-            except (ValueError, TypeError):
-                _logger.warning(
-                    "OTS furnace: cannot mark failed for invalid request_id=%s",
-                    record.request_id,
-                )
+from src.services.ots_upgrade import process_single_ots_record
 
 
 async def _ots_furnace_loop(
@@ -223,7 +70,7 @@ async def _ots_furnace_loop(
 
         if records:
             tasks = [
-                _process_single_ots_record(
+                process_single_ots_record(
                     semaphore,
                     record,
                     repository,
@@ -293,7 +140,7 @@ async def _run() -> None:
         publish_supabase_format=publish_supabase_format,
     )
 
-    ots_adapter = _build_ots_adapter(env_path)
+    ots_adapter = build_ots_adapter(env_path)
     provenance_service = ProvenanceService(
         repository=repository,
         transparency_log_adapter=transparency_log_adapter,

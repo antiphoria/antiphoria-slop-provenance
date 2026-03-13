@@ -30,7 +30,7 @@ from src.adapters.transparency_log import (
     TransparencyLogAdapter,
     build_supabase_publish_config,
 )
-from src.adapters.ots_adapter import OTSAdapter, resolve_ots_binary
+from src.adapters.ots_adapter import OTSAdapter, build_ots_adapter, resolve_ots_binary
 from src.env_config import read_env_bool, read_env_optional
 from src.events import (
     EventBus,
@@ -54,6 +54,7 @@ from src.services.curation_service import (
     extract_markdown_body,
     extract_request_id_from_artifact_path,
 )
+from src.services.ots_upgrade import process_single_ots_record
 from src.services.provenance_service import ProvenanceService
 from src.services.verification_service import VerificationService
 
@@ -297,6 +298,37 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="Print machine-readable JSON output.",
+    )
+
+    upgrade_parser = subparsers.add_parser(
+        "upgrade",
+        help="Upgrade a single PENDING OTS artifact by request ID.",
+    )
+    upgrade_parser.add_argument(
+        "--repo-path",
+        required=True,
+        help="Ledger repo path.",
+    )
+    upgrade_parser.add_argument(
+        "--request-id",
+        required=True,
+        help="Artifact request UUID to upgrade.",
+    )
+
+    process_pending_parser = subparsers.add_parser(
+        "process-pending",
+        help="Batch upgrade all PENDING OTS records.",
+    )
+    process_pending_parser.add_argument(
+        "--repo-path",
+        required=True,
+        help="Ledger repo path.",
+    )
+    process_pending_parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Max PENDING records to process (default: 100).",
     )
 
     admin_parser = subparsers.add_parser(
@@ -1365,6 +1397,116 @@ async def _run_attest_command(args: argparse.Namespace) -> int:
     return exit_code
 
 
+async def _run_upgrade_command(args: argparse.Namespace) -> int:
+    """Upgrade a single PENDING OTS artifact by request ID."""
+
+    repository_path = Path(args.repo_path).resolve()
+    _validate_external_repo_path(repository_path)
+
+    repository = _build_repository()
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    provenance_service, _ = _build_provenance_services(repository, repository_path)
+    ots_adapter = build_ots_adapter(env_path)
+    if ots_adapter is None:
+        print("OTS forging is disabled (ENABLE_OTS_FORGE=false).")
+        return 1
+
+    request_id = UUID(str(args.request_id))
+    record = repository.get_ots_forge_record(request_id)
+    if record is None:
+        print(f"No OTS forge record for request_id={args.request_id}")
+        return 1
+    if record.status != "PENDING":
+        block_str = (
+            f" block={record.bitcoin_block_height}"
+            if record.bitcoin_block_height
+            else ""
+        )
+        print(f"Already {record.status}{block_str}")
+        return 0
+
+    semaphore = asyncio.Semaphore(1)
+    await process_single_ots_record(
+        semaphore,
+        record,
+        repository,
+        provenance_service,
+        ots_adapter,
+        provenance_service.transparency_log_adapter,
+        repository_path,
+        ".provenance/ots-{request_id}.ots",
+        bus=None,
+    )
+
+    updated = repository.get_ots_forge_record(request_id)
+    if updated is None:
+        return 1
+    if updated.status == "FORGED" and updated.bitcoin_block_height is not None:
+        print(f"Forged: bitcoin_block_height={updated.bitcoin_block_height}")
+        return 0
+    if updated.status == "PENDING":
+        print("Still pending, try again later.")
+        return 0
+    if updated.status == "FAILED":
+        print("Upgrade failed.")
+        return 1
+    return 0
+
+
+async def _run_process_pending_command(args: argparse.Namespace) -> int:
+    """Batch upgrade all PENDING OTS records."""
+
+    repository_path = Path(args.repo_path).resolve()
+    _validate_external_repo_path(repository_path)
+
+    repository = _build_repository()
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    provenance_service, _ = _build_provenance_services(repository, repository_path)
+    ots_adapter = build_ots_adapter(env_path)
+    if ots_adapter is None:
+        print("OTS forging is disabled (ENABLE_OTS_FORGE=false).")
+        return 1
+
+    records = repository.get_pending_ots_records(limit=args.limit)
+    if not records:
+        print("No PENDING records.")
+        return 0
+
+    semaphore = asyncio.Semaphore(1)
+    await asyncio.gather(
+        *[
+            process_single_ots_record(
+                semaphore,
+                r,
+                repository,
+                provenance_service,
+                ots_adapter,
+                provenance_service.transparency_log_adapter,
+                repository_path,
+                ".provenance/ots-{request_id}.ots",
+                bus=None,
+            )
+            for r in records
+        ],
+        return_exceptions=True,
+    )
+
+    upgraded = 0
+    still_pending = 0
+    failed_count = 0
+    for r in records:
+        updated = repository.get_ots_forge_record(UUID(r.request_id))
+        if updated:
+            if updated.status == "FORGED":
+                upgraded += 1
+            elif updated.status == "PENDING":
+                still_pending += 1
+            elif updated.status == "FAILED":
+                failed_count += 1
+    print(f"Upgraded {upgraded}, still pending {still_pending}, failed {failed_count}")
+    return 0
+
+
 def _run_forge_status_command(args: argparse.Namespace) -> int:
     """List OTS forge status for PENDING and FORGED artifacts."""
 
@@ -1474,6 +1616,10 @@ async def _dispatch(args: argparse.Namespace) -> int:
         return await _run_attest_command(args)
     if args.command == "forge-status":
         return _run_forge_status_command(args)
+    if args.command == "upgrade":
+        return await _run_upgrade_command(args)
+    if args.command == "process-pending":
+        return await _run_process_pending_command(args)
     if args.command == "events":
         return await _run_events_command(args)
     if args.command == "admin":
@@ -1498,6 +1644,8 @@ def main() -> int:
         "audit",
         "attest",
         "events",
+        "upgrade",
+        "process-pending",
     }:
         lock_base = Path(parsed_args.repo_path).resolve()
     lock_path = lock_base / ".slop-orchestrator.lock"

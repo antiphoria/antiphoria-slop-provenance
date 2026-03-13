@@ -88,6 +88,11 @@ class ProvenanceService:
         self._ots_adapter = ots_adapter
         self._env_path = env_path
 
+    @property
+    def transparency_log_adapter(self) -> TransparencyLogAdapter:
+        """Expose transparency log adapter for OTS upgrade flow."""
+        return self._transparency_log_adapter
+
     def register_signing_key(
         self,
         signer_fingerprint: str,
