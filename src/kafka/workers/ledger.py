@@ -8,15 +8,14 @@ from pathlib import Path
 from src.adapters.git_ledger import GitLedgerAdapter
 from src.env_config import read_env_optional
 from src.events import StoryCommitted
+from src.kafka.runtime import build_kafka_bus
 from src.runtime.service_runtime import (
-    build_kafka_bus,
     build_repository,
     configure_logging,
     run_until_cancelled,
 )
 
-# Resolve .env relative to project root so config is consistent regardless of CWD.
-_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+_ENV_PATH = Path(__file__).resolve().parents[3] / ".env"
 
 
 async def _run() -> None:

@@ -19,6 +19,12 @@ Event-driven provenance engine for short-story generation, cryptographic certifi
 pip install -e .
 ```
 
+**Kafka workers (optional):** For distributed mode (`--transport kafka`) and worker services (`slop-generator-service`, `slop-notary-service`, etc.), install the Kafka extra:
+
+```bash
+pip install -e ".[kafka]"
+```
+
 **Windows users:** The project depends on `liboqs-python`, OpenSSL, and `make`, which are painful to set up natively on Windows. See [doc/WSL2_SETUP.md](doc/WSL2_SETUP.md) for a WSL2 + Docker Desktop setup tutorial.
 
 ## Environment

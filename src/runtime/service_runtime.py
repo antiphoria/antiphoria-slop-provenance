@@ -1,4 +1,4 @@
-"""Runtime helpers for long-lived Kafka-backed worker services."""
+"""Runtime helpers for worker services (shared by core and Kafka workers)."""
 
 from __future__ import annotations
 
@@ -6,12 +6,16 @@ import asyncio
 import logging
 from pathlib import Path
 
-from src.adapters.kafka_event_bus import KafkaEventBus
-from src.env_config import read_env_int, read_env_optional
+from src.env_config import (
+    read_env_optional,
+    resolve_artifact_db_path,
+    resolve_state_db_path,
+)
 from src.repository import DedupRepository, SQLiteRepository
 
 # Resolve .env relative to project root so workers get consistent config regardless of CWD.
 _ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+_PROJECT_ROOT = _ENV_PATH.parent
 
 
 def _sanitize_service_name(name: str) -> str:
@@ -45,61 +49,53 @@ def configure_logging() -> None:
 
 
 def build_repository() -> SQLiteRepository:
-    """Build SQLite repository for shared artifact lifecycle (ARTIFACT_DB_PATH)."""
+    """Build SQLite repository for shared artifact lifecycle (cache)."""
 
-    artifact_db_path = read_env_optional("ARTIFACT_DB_PATH", env_path=_ENV_PATH)
+    artifact_db_path = resolve_artifact_db_path(
+        env_path=_ENV_PATH,
+        project_root=_PROJECT_ROOT,
+    )
     if artifact_db_path is None:
-        return SQLiteRepository()
-    return SQLiteRepository(db_path=Path(artifact_db_path).resolve())
+        artifact_db_path = (
+            _PROJECT_ROOT / ".orchestrator-state" / "artifacts.db"
+        ).resolve()
+    artifact_db_path.parent.mkdir(parents=True, exist_ok=True)
+    return SQLiteRepository(db_path=artifact_db_path)
 
 
 def build_dedup_repository(service_name: str) -> DedupRepository:
-    """Build per-service dedup repository (STATE_DB_PATH)."""
+    """Build per-service dedup repository (STATE_DB_PATH or ORCHESTRATOR_STATE_DIR)."""
 
-    state_db_path = read_env_optional("STATE_DB_PATH", env_path=_ENV_PATH)
+    state_db_path = resolve_state_db_path(
+        env_path=_ENV_PATH,
+        project_root=_PROJECT_ROOT,
+        service_name=_sanitize_service_name(service_name),
+    )
     if state_db_path is None:
         safe_name = _sanitize_service_name(service_name)
-        return DedupRepository(db_path=Path(f"state/{safe_name}.db"))
-    return DedupRepository(db_path=Path(state_db_path).resolve())
-
-
-def build_kafka_bus(service_name: str) -> KafkaEventBus:
-    """Build and configure Kafka event bus for one service group."""
-
-    bootstrap_servers = (
-        read_env_optional("KAFKA_BOOTSTRAP_SERVERS", env_path=_ENV_PATH)
-        or "localhost:9092"
-    )
-    metrics_dir = Path(
-        read_env_optional("KAFKA_METRICS_DIR", env_path=_ENV_PATH) or ".metrics"
-    ).resolve()
-    safe_name = _sanitize_service_name(service_name)
-    metrics_snapshot_path = metrics_dir / f"{safe_name}.json"
-    dedup_repository = build_dedup_repository(service_name)
-    return KafkaEventBus(
-        bootstrap_servers=bootstrap_servers,
-        consumer_group=service_name,
-        max_retries=read_env_int("KAFKA_MAX_RETRIES", default=3, env_path=_ENV_PATH),
-        dedup_repository=dedup_repository,
-        metrics_snapshot_path=metrics_snapshot_path,
-        metrics_flush_every=read_env_int(
-            "KAFKA_METRICS_FLUSH_EVERY", default=100, env_path=_ENV_PATH
-        ),
-    )
+        state_db_path = (
+            _PROJECT_ROOT / ".orchestrator-state" / "dedup" / f"{safe_name}.db"
+        ).resolve()
+    state_db_path.parent.mkdir(parents=True, exist_ok=True)
+    return DedupRepository(db_path=state_db_path)
 
 
 def _resolve_health_file_path(service_name: str) -> Path | None:
-    """Resolve health file path from KAFKA_HEALTH_FILE or derive from STATE_DB_PATH."""
+    """Resolve health file path from KAFKA_HEALTH_FILE or derive from state dir."""
 
     health_file = read_env_optional("KAFKA_HEALTH_FILE", env_path=_ENV_PATH)
     if health_file:
         return Path(health_file).resolve()
     state_db = read_env_optional("STATE_DB_PATH", env_path=_ENV_PATH)
     if state_db:
-        state_dir = Path(state_db).resolve().parent
-        safe_name = _sanitize_service_name(service_name).replace(".", "-")
-        return state_dir / "health" / f"{safe_name}.ok"
-    return None
+        base = Path(state_db).resolve().parent
+    else:
+        state_dir = read_env_optional("ORCHESTRATOR_STATE_DIR", env_path=_ENV_PATH)
+        if not state_dir:
+            return None
+        base = Path(state_dir).resolve()
+    safe_name = _sanitize_service_name(service_name).replace(".", "-")
+    return base / "health" / f"{safe_name}.ok"
 
 
 async def _health_writer_loop(health_path: Path, interval_sec: float = 30.0) -> None:

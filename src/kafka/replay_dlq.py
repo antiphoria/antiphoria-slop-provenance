@@ -6,7 +6,7 @@ import argparse
 import asyncio
 import json
 
-from src.env_config import read_env_optional
+from src.env_config import get_project_env_path, read_env_optional
 
 
 async def _replay(args: argparse.Namespace) -> int:
@@ -46,6 +46,7 @@ async def _replay(args: argparse.Namespace) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    env_path = get_project_env_path()
     parser = argparse.ArgumentParser(prog="slop-replay-dlq")
     parser.add_argument(
         "--topic", required=True, help="Base topic name to replay into."
@@ -58,7 +59,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--bootstrap-servers",
-        default=read_env_optional("KAFKA_BOOTSTRAP_SERVERS") or "localhost:9094",
+        default=read_env_optional("KAFKA_BOOTSTRAP_SERVERS", env_path=env_path)
+        or "localhost:9094",
         help="Kafka bootstrap servers (default: localhost:9094 for host clients).",
     )
     return parser

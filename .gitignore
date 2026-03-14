@@ -5,6 +5,7 @@ docs/
 keys_vault.hc
 keys_vault.tar.gpg
 state/
+.orchestrator-state/
 *.db
 *.sqlite
 *.db-shm

@@ -8,8 +8,8 @@ from src.adapters.crypto_notary import CryptoNotaryAdapter
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.env_config import read_env_optional
 from src.events import StorySigned
+from src.kafka.runtime import build_kafka_bus
 from src.runtime.service_runtime import (
-    build_kafka_bus,
     build_repository,
     configure_logging,
     run_until_cancelled,

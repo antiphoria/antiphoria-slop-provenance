@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.runtime.provenance_worker_service import main
+from src.kafka.workers.provenance import main
 
 
 if __name__ == "__main__":

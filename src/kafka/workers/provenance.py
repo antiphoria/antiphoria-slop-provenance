@@ -8,6 +8,7 @@ from pathlib import Path
 
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.ots_adapter import OTSAdapter, build_ots_adapter
+from src.adapters.ots_queue import OtsQueueAdapter
 from src.adapters.provenance_worker import ProvenanceWorkerAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
 from src.adapters.transparency_log import (
@@ -15,12 +16,13 @@ from src.adapters.transparency_log import (
     build_supabase_publish_config,
 )
 from src.env_config import read_env_int, read_env_optional
+from src.kafka.runtime import build_kafka_bus
 from src.runtime.service_runtime import (
-    build_kafka_bus,
     build_repository,
     configure_logging,
     run_until_cancelled,
 )
+from src.services.ots_upgrade import process_single_ots_record
 from src.services.provenance_service import ProvenanceService
 
 _logger = logging.getLogger(__name__)
@@ -28,7 +30,7 @@ _logger = logging.getLogger(__name__)
 
 def _resolve_env_path() -> Path:
     """Resolve .env path relative to project root (invariant to CWD)."""
-    return Path(__file__).resolve().parents[2] / ".env"
+    return Path(__file__).resolve().parents[3] / ".env"
 
 
 def _resolve_tsa_ca_cert_path(env_path: Path) -> Path | None:
@@ -38,54 +40,6 @@ def _resolve_tsa_ca_cert_path(env_path: Path) -> Path | None:
     if raw_path is None:
         return None
     return Path(raw_path).resolve()
-
-
-from src.services.ots_upgrade import process_single_ots_record
-
-
-async def _ots_furnace_loop(
-    repository,
-    provenance_service: ProvenanceService,
-    ots_adapter: OTSAdapter,
-    transparency_log_adapter: TransparencyLogAdapter,
-    bus,
-    repository_path: Path,
-    interval_sec: int,
-    batch_size: int,
-    max_concurrent: int,
-) -> None:
-    """Background loop: upgrade pending OTS proofs, atomic quench (Git -> append_entry -> SQLite -> emit)."""
-
-    ots_path_template = ".provenance/ots-{request_id}.ots"
-    semaphore = asyncio.Semaphore(max_concurrent)
-    while True:
-        try:
-            records = await asyncio.to_thread(
-                repository.get_pending_ots_records, batch_size
-            )
-        except Exception as exc:
-            _logger.exception("OTS furnace: get_pending failed: %s", exc)
-            await asyncio.sleep(interval_sec)
-            continue
-
-        if records:
-            tasks = [
-                process_single_ots_record(
-                    semaphore,
-                    record,
-                    repository,
-                    provenance_service,
-                    ots_adapter,
-                    transparency_log_adapter,
-                    bus,
-                    repository_path,
-                    ots_path_template,
-                )
-                for record in records
-            ]
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-        await asyncio.sleep(interval_sec)
 
 
 def _build_tsa_adapter(env_path: Path) -> RFC3161TSAAdapter | None:
@@ -111,6 +65,53 @@ def _build_tsa_adapter(env_path: Path) -> RFC3161TSAAdapter | None:
             None if openssl_conf is None else Path(openssl_conf).resolve()
         ),
     )
+
+
+async def _ots_furnace_loop(
+    repository,
+    ots_queue: OtsQueueAdapter,
+    provenance_service: ProvenanceService,
+    ots_adapter: OTSAdapter,
+    transparency_log_adapter: TransparencyLogAdapter,
+    bus,
+    repository_path: Path,
+    interval_sec: int,
+    batch_size: int,
+    max_concurrent: int,
+) -> None:
+    """Background loop: upgrade pending OTS proofs, atomic quench (Git -> append_entry -> OTS queue -> emit)."""
+
+    ots_path_template = ".provenance/ots-{request_id}.ots"
+    semaphore = asyncio.Semaphore(max_concurrent)
+    while True:
+        try:
+            records = await asyncio.to_thread(
+                ots_queue.get_pending_records, batch_size
+            )
+        except Exception as exc:
+            _logger.exception("OTS furnace: get_pending failed: %s", exc)
+            await asyncio.sleep(interval_sec)
+            continue
+
+        if records:
+            tasks = [
+                process_single_ots_record(
+                    semaphore,
+                    record,
+                    repository,
+                    ots_queue,
+                    provenance_service,
+                    ots_adapter,
+                    transparency_log_adapter,
+                    repository_path,
+                    ots_path_template,
+                    bus,
+                )
+                for record in records
+            ]
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        await asyncio.sleep(interval_sec)
 
 
 async def _run() -> None:
@@ -159,6 +160,10 @@ async def _run() -> None:
     await adapter.start()
 
     if ots_adapter is not None:
+        ots_queue = OtsQueueAdapter(
+            repository_path=ledger_repo_path,
+            env_path=env_path,
+        )
         interval_sec = read_env_int(
             "OTS_FURNACE_INTERVAL_SEC", default=3600, env_path=env_path
         )
@@ -171,6 +176,7 @@ async def _run() -> None:
         asyncio.create_task(
             _ots_furnace_loop(
                 repository=repository,
+                ots_queue=ots_queue,
                 provenance_service=provenance_service,
                 ots_adapter=ots_adapter,
                 transparency_log_adapter=transparency_log_adapter,

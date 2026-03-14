@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 
 from src.adapters.provenance_telemetry import ProvenanceTelemetryAdapter
+from src.kafka.runtime import build_kafka_bus
 from src.runtime.service_runtime import (
-    build_kafka_bus,
     build_repository,
     configure_logging,
     run_until_cancelled,

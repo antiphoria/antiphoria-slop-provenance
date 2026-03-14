@@ -108,6 +108,57 @@ def read_env_int(
         ) from exc
 
 
+def get_project_env_path() -> Path:
+    """Return path to .env at project root (from this module's location)."""
+    return Path(__file__).resolve().parents[1] / ".env"
+
+
+def resolve_artifact_db_path(
+    env_path: Path | None = None,
+    project_root: Path | None = None,
+) -> Path | None:
+    """Resolve artifact DB path from ARTIFACT_DB_PATH or ORCHESTRATOR_STATE_DIR.
+
+    Returns None when neither is set (caller may use default).
+    """
+    raw = read_env_optional("ARTIFACT_DB_PATH", env_path=env_path)
+    if raw:
+        return Path(raw).resolve()
+    state_dir = read_env_optional("ORCHESTRATOR_STATE_DIR", env_path=env_path)
+    if state_dir:
+        return Path(state_dir).resolve() / "artifacts.db"
+    if project_root is not None:
+        return (project_root / ".orchestrator-state" / "artifacts.db").resolve()
+    return None
+
+
+def resolve_state_db_path(
+    env_path: Path | None = None,
+    project_root: Path | None = None,
+    service_name: str | None = None,
+) -> Path | None:
+    """Resolve per-service dedup DB path from STATE_DB_PATH or ORCHESTRATOR_STATE_DIR.
+
+    When service_name is given and STATE_DB_PATH is not set, uses
+    {ORCHESTRATOR_STATE_DIR}/dedup/{service_name}.db.
+    Returns None when neither is set.
+    """
+    raw = read_env_optional("STATE_DB_PATH", env_path=env_path)
+    if raw:
+        return Path(raw).resolve()
+    state_dir = read_env_optional("ORCHESTRATOR_STATE_DIR", env_path=env_path)
+    if state_dir:
+        base = Path(state_dir).resolve()
+        if service_name:
+            return base / "dedup" / f"{service_name}.db"
+        return base / "state.db"
+    if project_root is not None and service_name:
+        return (
+            project_root / ".orchestrator-state" / "dedup" / f"{service_name}.db"
+        ).resolve()
+    return None
+
+
 def read_env_choice(
     env_key: str,
     allowed_values: tuple[str, ...],

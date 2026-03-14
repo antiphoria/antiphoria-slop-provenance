@@ -16,19 +16,21 @@ dependencies = [
     "c2pa-python>=0.28.0",
     "pygit2>=1.14.0,<2.0.0",
     "PyYAML>=6.0",
-    "aiokafka>=0.10.0",
 ]
+
+[project.optional-dependencies]
+kafka = ["aiokafka>=0.10.0"]
 
 [project.scripts]
 slop-cli = "src.cli:main"
-slop-generator-service = "src.runtime.generator_service:main"
-slop-notary-service = "src.runtime.notary_service:main"
-slop-ledger-service = "src.runtime.ledger_service:main"
-slop-provenance-service = "src.runtime.provenance_worker_service:main"
-slop-telemetry-service = "src.runtime.telemetry_service:main"
-slop-replay-dlq = "src.runtime.replay_dlq:main"
-slop-bootstrap-topics = "src.runtime.bootstrap_topics:main"
-slop-smoke-kafka = "src.runtime.smoke_kafka_pipeline:main"
+slop-generator-service = "src.kafka.workers.generator:main"
+slop-notary-service = "src.kafka.workers.notary:main"
+slop-ledger-service = "src.kafka.workers.ledger:main"
+slop-provenance-service = "src.kafka.workers.provenance:main"
+slop-telemetry-service = "src.kafka.workers.telemetry:main"
+slop-replay-dlq = "src.kafka.replay_dlq:main"
+slop-bootstrap-topics = "src.kafka.bootstrap:main"
+slop-smoke-kafka = "src.kafka.smoke:main"
 slop-metrics = "src.runtime.metrics_report:main"
 
 [tool.setuptools.packages.find]

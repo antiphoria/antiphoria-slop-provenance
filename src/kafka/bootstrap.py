@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from src.env_config import read_env_optional
+from src.env_config import get_project_env_path, read_env_optional
 
 
 TOPICS: tuple[str, ...] = (
@@ -76,11 +76,12 @@ async def _bootstrap_topics(bootstrap_servers: str, partitions: int) -> int:
 def main() -> int:
     """CLI entrypoint for Kafka topic bootstrapping."""
 
+    env_path = get_project_env_path()
     parser = argparse.ArgumentParser(prog="slop-bootstrap-topics")
     parser.add_argument(
         "--bootstrap-servers",
         default=(
-            read_env_optional("KAFKA_BOOTSTRAP_SERVERS")
+            read_env_optional("KAFKA_BOOTSTRAP_SERVERS", env_path=env_path)
             or "localhost:9092"
         ),
         help="Kafka bootstrap servers.",

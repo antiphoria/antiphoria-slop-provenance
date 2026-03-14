@@ -7,48 +7,11 @@ import asyncio
 from pathlib import Path
 from uuid import UUID
 
-import pygit2
-
-from src.adapters.kafka_event_bus import KafkaEventBus
-from src.env_config import read_env_optional
+from src.env_config import get_project_env_path, read_env_optional
 from src.events import StoryRequested
-from src.runtime.bootstrap_topics import _bootstrap_topics
-
-
-def _resolve_artifact_branch_target(
-    ledger_repo_path: Path,
-    request_id: UUID,
-) -> tuple[str, str, str] | None:
-    """Return branch, commit, and path when artifact branch/blob exists."""
-
-    try:
-        repo = pygit2.Repository(str(ledger_repo_path))
-    except (KeyError, pygit2.GitError) as exc:
-        raise RuntimeError(f"Invalid ledger git repository: '{ledger_repo_path}'.") from exc
-
-    branch_name = f"artifact/{request_id}"
-    ref_name = f"refs/heads/{branch_name}"
-    try:
-        reference = repo.lookup_reference(ref_name)
-    except KeyError:
-        return None
-
-    commit_obj = repo[reference.target]
-    if not isinstance(commit_obj, pygit2.Commit):
-        raise RuntimeError(f"Branch ref '{ref_name}' does not point to a commit.")
-
-    artifact_path = f"{request_id}.md"
-    try:
-        tree_entry = commit_obj.tree[artifact_path]
-    except KeyError:
-        return None
-
-    blob_obj = repo[tree_entry.id]
-    if not isinstance(blob_obj, pygit2.Blob):
-        raise RuntimeError(
-            f"Artifact path '{artifact_path}' on '{branch_name}' is not a blob."
-        )
-    return branch_name, str(commit_obj.id), artifact_path
+from src.kafka.bootstrap import _bootstrap_topics
+from src.kafka.event_bus import KafkaEventBus
+from src.runtime.artifact_resolve import _resolve_artifact_branch_target
 
 
 async def _run_smoke(
@@ -116,6 +79,7 @@ async def _run_smoke(
 def main() -> int:
     """CLI entrypoint for Kafka smoke validation."""
 
+    env_path = get_project_env_path()
     parser = argparse.ArgumentParser(prog="slop-smoke-kafka")
     parser.add_argument(
         "--prompt",
@@ -125,14 +89,14 @@ def main() -> int:
     parser.add_argument(
         "--bootstrap-servers",
         default=(
-            read_env_optional("KAFKA_BOOTSTRAP_SERVERS")
+            read_env_optional("KAFKA_BOOTSTRAP_SERVERS", env_path=env_path)
             or "localhost:9092"
         ),
         help="Kafka bootstrap servers.",
     )
     parser.add_argument(
         "--ledger-repo-path",
-        default=read_env_optional("LEDGER_REPO_PATH") or "./ledger",
+        default=read_env_optional("LEDGER_REPO_PATH", env_path=env_path) or "./ledger",
         help="Path to ledger git repository.",
     )
     parser.add_argument(

@@ -14,6 +14,7 @@ from typing import Any
 from uuid import UUID
 
 from src.adapters.ots_adapter import OTSAdapter
+from src.adapters.ots_queue import OtsQueueAdapter
 from src.adapters.transparency_log import TransparencyLogAdapter
 from src.events import StoryForged
 from src.repository import OtsForgeRecord, SQLiteRepository
@@ -26,6 +27,7 @@ async def process_single_ots_record(
     semaphore: asyncio.Semaphore,
     record: OtsForgeRecord,
     repository: SQLiteRepository,
+    ots_queue: OtsQueueAdapter,
     provenance_service: ProvenanceService,
     ots_adapter: OTSAdapter,
     transparency_log_adapter: TransparencyLogAdapter,
@@ -82,9 +84,10 @@ async def process_single_ots_record(
             if not upgraded or final_ots_bytes is None:
                 try:
                     await asyncio.to_thread(
-                        repository.mark_ots_failed,
+                        ots_queue.append_failed,
                         request_id,
                         "OTS upgrade failed or proof did not verify",
+                        artifact_hash=record.artifact_hash,
                     )
                 except (ValueError, TypeError):
                     pass
@@ -137,13 +140,13 @@ async def process_single_ots_record(
                     exc,
                 )
 
-            # 3. SQLite
+            # 3. OTS queue (Archive)
             final_b64 = base64.b64encode(final_ots_bytes).decode("ascii")
             await asyncio.to_thread(
-                repository.mark_ots_forged,
+                ots_queue.append_forged,
                 request_id,
-                final_b64,
                 block_height,
+                artifact_hash=record.artifact_hash,
             )
 
             # 4. Emit (skip when bus is None, e.g. CLI path)
@@ -165,9 +168,10 @@ async def process_single_ots_record(
             )
             try:
                 await asyncio.to_thread(
-                    repository.mark_ots_failed,
+                    ots_queue.append_failed,
                     request_id,
                     str(exc),
+                    artifact_hash=record.artifact_hash,
                 )
             except (ValueError, TypeError):
                 _logger.warning(

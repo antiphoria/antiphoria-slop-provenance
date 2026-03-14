@@ -22,7 +22,6 @@ from src.adapters.c2pa_manifest import (
 from src.adapters.crypto_notary import CryptoNotaryAdapter
 from src.adapters.gemini_engine import GeminiEngineAdapter
 from src.adapters.git_ledger import GitLedgerAdapter
-from src.adapters.kafka_event_bus import KafkaEventBus
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.provenance_telemetry import ProvenanceTelemetryAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
@@ -31,7 +30,12 @@ from src.adapters.transparency_log import (
     build_supabase_publish_config,
 )
 from src.adapters.ots_adapter import OTSAdapter, build_ots_adapter, resolve_ots_binary
-from src.env_config import read_env_bool, read_env_optional
+from src.env_config import (
+    get_project_env_path,
+    read_env_bool,
+    read_env_optional,
+    resolve_artifact_db_path,
+)
 from src.events import (
     EventBus,
     EventHandlerError,
@@ -54,6 +58,7 @@ from src.services.curation_service import (
     extract_markdown_body,
     extract_request_id_from_artifact_path,
 )
+from src.adapters.ots_queue import OtsQueueAdapter
 from src.services.ots_upgrade import process_single_ots_record
 from src.services.provenance_service import ProvenanceService
 from src.services.verification_service import VerificationService
@@ -61,6 +66,40 @@ from src.services.verification_service import VerificationService
 
 _read_env_optional = read_env_optional
 _read_env_bool = read_env_bool
+
+
+def _default_repo_path() -> str | None:
+    """Default --repo-path from LEDGER_REPO_PATH in .env."""
+    return _read_env_optional("LEDGER_REPO_PATH", env_path=get_project_env_path())
+
+
+def _build_kafka_bus(
+    bootstrap_servers: str,
+    consumer_group: str = "cli-gateway",
+):
+    """Build KafkaEventBus. Raises RuntimeError if kafka extra not installed."""
+    try:
+        from src.kafka.event_bus import KafkaEventBus
+
+        return KafkaEventBus(
+            bootstrap_servers=bootstrap_servers,
+            consumer_group=consumer_group,
+        )
+    except ImportError as exc:
+        raise RuntimeError(
+            "Kafka transport requires the kafka extra. "
+            "Run: pip install slop-orchestrator[kafka]"
+        ) from exc
+
+
+def _require_repo_path(args: argparse.Namespace) -> Path:
+    """Resolve repo path from args or LEDGER_REPO_PATH. Raises if unset."""
+    raw = getattr(args, "repo_path", None) or _default_repo_path()
+    if not raw:
+        raise RuntimeError(
+            "Provide --repo-path or set LEDGER_REPO_PATH in .env"
+        )
+    return Path(raw).resolve()
 
 
 class OrchestratorLock:
@@ -112,7 +151,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generate, notarize, and commit a new artifact.",
     )
     generate_parser.add_argument("--prompt", required=True, help="Prompt text.")
-    generate_parser.add_argument("--repo-path", required=True, help="Ledger repo path.")
+    generate_parser.add_argument(
+        "--repo-path",
+        default=_default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
+    )
     generate_parser.add_argument(
         "--model-id",
         default=_read_env_optional("GENERATOR_MODEL_ID") or "gemini-2.5-flash",
@@ -132,7 +175,11 @@ def build_parser() -> argparse.ArgumentParser:
     curate_parser.add_argument(
         "--file", required=True, help="Edited artifact file path."
     )
-    curate_parser.add_argument("--repo-path", required=True, help="Ledger repo path.")
+    curate_parser.add_argument(
+        "--repo-path",
+        default=_default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
+    )
     curate_parser.add_argument(
         "--transport",
         choices=("local", "kafka"),
@@ -147,7 +194,11 @@ def build_parser() -> argparse.ArgumentParser:
     register_parser.add_argument(
         "--file", required=True, help="Plain markdown file path."
     )
-    register_parser.add_argument("--repo-path", required=True, help="Ledger repo path.")
+    register_parser.add_argument(
+        "--repo-path",
+        default=_default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
+    )
     register_parser.add_argument(
         "--title",
         default=None,
@@ -186,7 +237,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Anchor one artifact hash in transparency log.",
     )
     anchor_parser.add_argument("--file", required=True, help="Artifact file path.")
-    anchor_parser.add_argument("--repo-path", required=True, help="Ledger repo path.")
+    anchor_parser.add_argument(
+        "--repo-path",
+        default=_default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
+    )
 
     timestamp_parser = subparsers.add_parser(
         "timestamp",
@@ -194,7 +249,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     timestamp_parser.add_argument("--file", required=True, help="Artifact file path.")
     timestamp_parser.add_argument(
-        "--repo-path", required=True, help="Ledger repo path."
+        "--repo-path",
+        default=_default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
     )
     timestamp_parser.add_argument(
         "--tsa-url",
@@ -212,7 +269,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generate machine-readable full-chain audit report.",
     )
     audit_parser.add_argument("--file", required=True, help="Artifact file path.")
-    audit_parser.add_argument("--repo-path", required=True, help="Ledger repo path.")
+    audit_parser.add_argument(
+        "--repo-path",
+        default=_default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
+    )
     audit_parser.add_argument(
         "--tsa-ca-cert-path",
         default=None,
@@ -232,7 +293,11 @@ def build_parser() -> argparse.ArgumentParser:
         "attest",
         help="Attest one artifact branch by request_id without checkout.",
     )
-    attest_parser.add_argument("--repo-path", required=True, help="Ledger repo path.")
+    attest_parser.add_argument(
+        "--repo-path",
+        default=_default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
+    )
     attest_parser.add_argument(
         "--request-id",
         required=True,
@@ -262,7 +327,11 @@ def build_parser() -> argparse.ArgumentParser:
         "events",
         help="List recent provenance lifecycle events.",
     )
-    events_parser.add_argument("--repo-path", required=True, help="Ledger repo path.")
+    events_parser.add_argument(
+        "--repo-path",
+        default=_default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
+    )
     events_parser.add_argument(
         "--limit",
         type=int,
@@ -286,8 +355,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     forge_status_parser.add_argument(
         "--repo-path",
-        required=True,
-        help="Ledger repo path (used to resolve state.db).",
+        default=_default_repo_path(),
+        help="Ledger repo path for OTS queue (default: LEDGER_REPO_PATH from .env).",
     )
     forge_status_parser.add_argument(
         "--request-id",
@@ -306,8 +375,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     upgrade_parser.add_argument(
         "--repo-path",
-        required=True,
-        help="Ledger repo path.",
+        default=_default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
     )
     upgrade_parser.add_argument(
         "--request-id",
@@ -321,8 +390,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     process_pending_parser.add_argument(
         "--repo-path",
-        required=True,
-        help="Ledger repo path.",
+        default=_default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
     )
     process_pending_parser.add_argument(
         "--limit",
@@ -346,9 +415,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Signer fingerprint to revoke.",
     )
     revoke_parser.add_argument(
-        "--state-db-path",
+        "--db-path",
         default=None,
-        help="Path to state.db (default: STATE_DB_PATH env or ./state.db).",
+        help="Path to artifact DB (default: ARTIFACT_DB_PATH or ORCHESTRATOR_STATE_DIR).",
     )
 
     return parser
@@ -392,14 +461,18 @@ def _validate_external_repo_path(repository_path: Path) -> None:
 
 
 def _build_repository() -> SQLiteRepository:
-    """Build SQLite repository for shared artifact lifecycle (ARTIFACT_DB_PATH)."""
+    """Build SQLite repository for shared artifact lifecycle (cache)."""
 
-    artifact_db_path = _read_env_optional("ARTIFACT_DB_PATH") or _read_env_optional(
-        "STATE_DB_PATH"
+    env_path = get_project_env_path()
+    project_root = env_path.parent
+    artifact_db_path = resolve_artifact_db_path(
+        env_path=env_path,
+        project_root=project_root,
     )
     if artifact_db_path is None:
-        return SQLiteRepository()
-    return SQLiteRepository(db_path=Path(artifact_db_path).resolve())
+        artifact_db_path = (project_root / ".orchestrator-state" / "artifacts.db").resolve()
+    artifact_db_path.parent.mkdir(parents=True, exist_ok=True)
+    return SQLiteRepository(db_path=artifact_db_path)
 
 
 def _build_provenance_services(
@@ -568,12 +641,10 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
 
     if args.transport == "kafka":
         bootstrap_servers = (
-            _read_env_optional("KAFKA_BOOTSTRAP_SERVERS") or "localhost:9092"
+            _read_env_optional("KAFKA_BOOTSTRAP_SERVERS", env_path=get_project_env_path())
+            or "localhost:9092"
         )
-        kafka_bus = KafkaEventBus(
-            bootstrap_servers=bootstrap_servers,
-            consumer_group="cli-gateway",
-        )
+        kafka_bus = _build_kafka_bus(bootstrap_servers)
         await kafka_bus.start()
         request_event = StoryRequested(prompt=args.prompt)
         await kafka_bus.emit(request_event)
@@ -590,7 +661,7 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
     telemetry_adapter = ProvenanceTelemetryAdapter(
         event_bus=event_bus, repository=repository
     )
-    repository_path = Path(args.repo_path).resolve()
+    repository_path = _require_repo_path(args)
     _validate_external_repo_path(repository_path)
     provenance_service, _ = _build_provenance_services(repository, repository_path)
     completion_future: asyncio.Future[StoryCommitted] = (
@@ -689,7 +760,7 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
 
     if args.transport == "kafka":
         repository = _build_repository()
-        repository_path = Path(args.repo_path).resolve()
+        repository_path = _require_repo_path(args)
         artifact_path = Path(args.file).resolve()
         _validate_artifact_under_repo(artifact_path, repository_path)
         if not artifact_path.exists():
@@ -711,12 +782,10 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
         assert_secret_free("curation body", curated_body)
         curation_metadata = build_curation_metadata(record.body, curated_body)
         bootstrap_servers = (
-            _read_env_optional("KAFKA_BOOTSTRAP_SERVERS") or "localhost:9092"
+            _read_env_optional("KAFKA_BOOTSTRAP_SERVERS", env_path=get_project_env_path())
+            or "localhost:9092"
         )
-        kafka_bus = KafkaEventBus(
-            bootstrap_servers=bootstrap_servers,
-            consumer_group="cli-gateway",
-        )
+        kafka_bus = _build_kafka_bus(bootstrap_servers)
         await kafka_bus.start()
         await kafka_bus.emit(
             StoryCurated(
@@ -737,7 +806,7 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
     telemetry_adapter = ProvenanceTelemetryAdapter(
         event_bus=event_bus, repository=repository
     )
-    repository_path = Path(args.repo_path).resolve()
+    repository_path = _require_repo_path(args)
     _validate_external_repo_path(repository_path)
     provenance_service, _ = _build_provenance_services(repository, repository_path)
     completion_future: asyncio.Future[StoryCommitted] = (
@@ -873,7 +942,7 @@ async def _run_register_command(args: argparse.Namespace) -> int:
     telemetry_adapter = ProvenanceTelemetryAdapter(
         event_bus=event_bus, repository=repository
     )
-    repository_path = Path(args.repo_path).resolve()
+    repository_path = _require_repo_path(args)
     _validate_external_repo_path(repository_path)
     provenance_service, _ = _build_provenance_services(repository, repository_path)
     completion_future: asyncio.Future[StoryCommitted] = (
@@ -1033,12 +1102,10 @@ async def _run_register_command(args: argparse.Namespace) -> int:
 
     if args.transport == "kafka":
         bootstrap_servers = (
-            _read_env_optional("KAFKA_BOOTSTRAP_SERVERS") or "localhost:9094"
+            _read_env_optional("KAFKA_BOOTSTRAP_SERVERS", env_path=get_project_env_path())
+            or "localhost:9094"
         )
-        kafka_bus = KafkaEventBus(
-            bootstrap_servers=bootstrap_servers,
-            consumer_group="cli-gateway",
-        )
+        kafka_bus = _build_kafka_bus(bootstrap_servers)
         await kafka_bus.start()
         await kafka_bus.emit(human_event)
         await kafka_bus.stop()
@@ -1133,7 +1200,7 @@ async def _run_anchor_command(args: argparse.Namespace) -> int:
         event_bus=event_bus, repository=repository
     )
     await telemetry_adapter.start()
-    repository_path = Path(args.repo_path).resolve()
+    repository_path = _require_repo_path(args)
     provenance_service, _ = _build_provenance_services(repository, repository_path)
     artifact_path = Path(args.file).resolve()
     request_id = None
@@ -1181,7 +1248,7 @@ async def _run_timestamp_command(args: argparse.Namespace) -> int:
         event_bus=event_bus, repository=repository
     )
     await telemetry_adapter.start()
-    repository_path = Path(args.repo_path).resolve()
+    repository_path = _require_repo_path(args)
     provenance_service, _ = _build_provenance_services(
         repository,
         repository_path,
@@ -1232,7 +1299,7 @@ async def _run_audit_command(args: argparse.Namespace) -> int:
         event_bus=event_bus, repository=repository
     )
     await telemetry_adapter.start()
-    repository_path = Path(args.repo_path).resolve()
+    repository_path = _require_repo_path(args)
     _, verification_service = _build_provenance_services(repository, repository_path)
     artifact_path = Path(args.file).resolve()
     _validate_artifact_under_repo(artifact_path, repository_path)
@@ -1312,7 +1379,7 @@ async def _run_attest_command(args: argparse.Namespace) -> int:
         event_bus=event_bus, repository=repository
     )
     await telemetry_adapter.start()
-    repository_path = Path(args.repo_path).resolve()
+    repository_path = _require_repo_path(args)
     _, verification_service = _build_provenance_services(repository, repository_path)
 
     try:
@@ -1373,8 +1440,13 @@ async def _run_attest_command(args: argparse.Namespace) -> int:
         )
         if report.ots_forged and report.bitcoin_block_height is not None:
             print(f"OTS: Anchored to Bitcoin Block {report.bitcoin_block_height:,}")
-        elif repository and request_id:
-            ots_record = repository.get_ots_forge_record(request_id)
+        elif request_id:
+            env_path = Path(__file__).resolve().parents[1] / ".env"
+            ots_queue = OtsQueueAdapter(
+                repository_path=repository_path,
+                env_path=env_path,
+            )
+            ots_record = ots_queue.get_ots_forge_record(request_id)
             if ots_record and ots_record.status == "PENDING":
                 print("OTS: Pending (descending into the Mempool)")
         if report.c2pa_validation_state is not None:
@@ -1400,7 +1472,7 @@ async def _run_attest_command(args: argparse.Namespace) -> int:
 async def _run_upgrade_command(args: argparse.Namespace) -> int:
     """Upgrade a single PENDING OTS artifact by request ID."""
 
-    repository_path = Path(args.repo_path).resolve()
+    repository_path = _require_repo_path(args)
     _validate_external_repo_path(repository_path)
 
     repository = _build_repository()
@@ -1411,8 +1483,12 @@ async def _run_upgrade_command(args: argparse.Namespace) -> int:
         print("OTS forging is disabled (ENABLE_OTS_FORGE=false).")
         return 1
 
+    ots_queue = OtsQueueAdapter(
+        repository_path=repository_path,
+        env_path=env_path,
+    )
     request_id = UUID(str(args.request_id))
-    record = repository.get_ots_forge_record(request_id)
+    record = ots_queue.get_ots_forge_record(request_id)
     if record is None:
         print(f"No OTS forge record for request_id={args.request_id}")
         return 1
@@ -1430,6 +1506,7 @@ async def _run_upgrade_command(args: argparse.Namespace) -> int:
         semaphore,
         record,
         repository,
+        ots_queue,
         provenance_service,
         ots_adapter,
         provenance_service.transparency_log_adapter,
@@ -1438,7 +1515,7 @@ async def _run_upgrade_command(args: argparse.Namespace) -> int:
         bus=None,
     )
 
-    updated = repository.get_ots_forge_record(request_id)
+    updated = ots_queue.get_ots_forge_record(request_id)
     if updated is None:
         return 1
     if updated.status == "FORGED" and updated.bitcoin_block_height is not None:
@@ -1456,7 +1533,7 @@ async def _run_upgrade_command(args: argparse.Namespace) -> int:
 async def _run_process_pending_command(args: argparse.Namespace) -> int:
     """Batch upgrade all PENDING OTS records."""
 
-    repository_path = Path(args.repo_path).resolve()
+    repository_path = _require_repo_path(args)
     _validate_external_repo_path(repository_path)
 
     repository = _build_repository()
@@ -1467,7 +1544,11 @@ async def _run_process_pending_command(args: argparse.Namespace) -> int:
         print("OTS forging is disabled (ENABLE_OTS_FORGE=false).")
         return 1
 
-    records = repository.get_pending_ots_records(limit=args.limit)
+    ots_queue = OtsQueueAdapter(
+        repository_path=repository_path,
+        env_path=env_path,
+    )
+    records = ots_queue.get_pending_records(limit=args.limit)
     if not records:
         print("No PENDING records.")
         return 0
@@ -1479,6 +1560,7 @@ async def _run_process_pending_command(args: argparse.Namespace) -> int:
                 semaphore,
                 r,
                 repository,
+                ots_queue,
                 provenance_service,
                 ots_adapter,
                 provenance_service.transparency_log_adapter,
@@ -1495,7 +1577,7 @@ async def _run_process_pending_command(args: argparse.Namespace) -> int:
     still_pending = 0
     failed_count = 0
     for r in records:
-        updated = repository.get_ots_forge_record(UUID(r.request_id))
+        updated = ots_queue.get_ots_forge_record(UUID(r.request_id))
         if updated:
             if updated.status == "FORGED":
                 upgraded += 1
@@ -1510,18 +1592,24 @@ async def _run_process_pending_command(args: argparse.Namespace) -> int:
 def _run_forge_status_command(args: argparse.Namespace) -> int:
     """List OTS forge status for PENDING and FORGED artifacts."""
 
-    repository = _build_repository()
+    repository_path = _require_repo_path(args)
+    _validate_external_repo_path(repository_path)
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    ots_queue = OtsQueueAdapter(
+        repository_path=repository_path,
+        env_path=env_path,
+    )
 
     if args.request_id:
         request_id = UUID(str(args.request_id))
-        record = repository.get_ots_forge_record(request_id)
+        record = ots_queue.get_ots_forge_record(request_id)
         if record is None:
             print(f"No OTS forge record for request_id={args.request_id}")
             return 1
         records = [record]
     else:
-        pending = repository.list_ots_forge_records(status="PENDING", limit=100)
-        forged = repository.list_ots_forge_records(status="FORGED", limit=100)
+        pending = ots_queue.list_ots_forge_records(status="PENDING", limit=100)
+        forged = ots_queue.list_ots_forge_records(status="FORGED", limit=100)
         records = pending + forged
 
     if args.json:
@@ -1575,10 +1663,19 @@ async def _run_events_command(args: argparse.Namespace) -> int:
 def _run_admin_revoke_key_command(args: argparse.Namespace) -> int:
     """Revoke a signing key by fingerprint."""
 
-    db_path = args.state_db_path
+    db_path = args.db_path
     if db_path is None:
-        raw = _read_env_optional("STATE_DB_PATH")
-        db_path = Path(raw).resolve() if raw else Path("state.db").resolve()
+        env_path = get_project_env_path()
+        project_root = env_path.parent
+        resolved = resolve_artifact_db_path(
+            env_path=env_path,
+            project_root=project_root,
+        )
+        db_path = (
+            resolved
+            if resolved is not None
+            else (project_root / ".orchestrator-state" / "artifacts.db").resolve()
+        )
     else:
         db_path = Path(db_path).resolve()
 
@@ -1647,7 +1744,7 @@ def main() -> int:
         "upgrade",
         "process-pending",
     }:
-        lock_base = Path(parsed_args.repo_path).resolve()
+        lock_base = _require_repo_path(parsed_args)
     lock_path = lock_base / ".slop-orchestrator.lock"
     with OrchestratorLock(lock_path):
         return asyncio.run(_dispatch(parsed_args))

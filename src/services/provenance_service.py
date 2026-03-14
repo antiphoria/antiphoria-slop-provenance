@@ -20,6 +20,7 @@ from src.env_config import read_env_bool, read_env_optional
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.ots_adapter import OTSAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter, TimestampVerification
+from src.adapters.ots_queue import OtsQueueAdapter
 from src.adapters.transparency_log import TransparencyLogAdapter, TransparencyLogEntry
 from src.models import Artifact, sha256_hex
 from src.events import StoryOtsPending
@@ -430,7 +431,11 @@ class ProvenanceService:
                     artifact_hash = sha256_hex(payload_bytes)
                     ots_bytes = self._ots_adapter.request_ots_stamp(payload_bytes)
                     pending_b64 = base64.b64encode(ots_bytes).decode("ascii")
-                    self._repository.create_ots_forge_record(
+                    ots_queue = OtsQueueAdapter(
+                        repository_path=repository_path,
+                        env_path=self._env_path,
+                    )
+                    ots_queue.append_pending(
                         request_id=request_id,
                         artifact_hash=artifact_hash,
                         pending_ots_b64=pending_b64,

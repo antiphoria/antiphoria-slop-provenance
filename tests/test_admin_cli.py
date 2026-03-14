@@ -20,7 +20,7 @@ class AdminRevokeKeyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "nonexistent" / "state.db"
             args = cli.build_parser().parse_args(
-                ["admin", "revoke-key", "--fingerprint", "abc123", "--state-db-path", str(db_path)]
+                ["admin", "revoke-key", "--fingerprint", "abc123", "--db-path", str(db_path)]
             )
             with self.assertRaises(RuntimeError) as ctx:
                 cli._run_admin_revoke_key_command(args)
@@ -37,7 +37,7 @@ class AdminRevokeKeyTest(unittest.TestCase):
             del repository, key_registry
 
             args = cli.build_parser().parse_args(
-                ["admin", "revoke-key", "--fingerprint", "unknown-fp", "--state-db-path", str(db_path)]
+                ["admin", "revoke-key", "--fingerprint", "unknown-fp", "--db-path", str(db_path)]
             )
             with self.assertRaises(RuntimeError) as ctx:
                 cli._run_admin_revoke_key_command(args)
@@ -55,7 +55,7 @@ class AdminRevokeKeyTest(unittest.TestCase):
             del repository, key_registry
 
             args = cli.build_parser().parse_args(
-                ["admin", "revoke-key", "--fingerprint", "my-fp", "--state-db-path", str(db_path)]
+                ["admin", "revoke-key", "--fingerprint", "my-fp", "--db-path", str(db_path)]
             )
             result = cli._run_admin_revoke_key_command(args)
             self.assertEqual(result, 0)

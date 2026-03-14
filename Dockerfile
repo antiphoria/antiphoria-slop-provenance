@@ -2,14 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install pinned dependencies for deterministic builds
-COPY requirements.txt /app/
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Install the package (no-deps: already in requirements.txt)
+# Install the package with kafka extra (for Docker workers)
 COPY pyproject.toml README.md /app/
 COPY src /app/src
-RUN pip install --no-cache-dir --no-deps .
+RUN pip install --no-cache-dir ".[kafka]"
 
 # Run as non-root to limit impact of dependency vulnerabilities
 RUN useradd -m slopuser && chown -R slopuser:slopuser /app

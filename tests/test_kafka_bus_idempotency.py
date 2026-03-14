@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
-import tempfile
 
-from src.adapters.kafka_event_bus import KafkaEventBus
+import pytest
+
+pytest.importorskip("aiokafka")
+
+from src.kafka.event_bus import KafkaEventBus
 
 
 @dataclass

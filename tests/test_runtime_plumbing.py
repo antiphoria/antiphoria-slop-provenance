@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 import pygit2
 
-from src.runtime.smoke_kafka_pipeline import _resolve_artifact_branch_target
+from src.runtime.artifact_resolve import _resolve_artifact_branch_target
 
 
 def _create_branch_artifact_commit(repo_path: Path, request_id: str) -> str:
@@ -69,7 +69,10 @@ class RuntimePlumbingTest(unittest.TestCase):
             self.assertIsNone(resolved)
 
     def test_provenance_worker_entrypoint_is_importable(self) -> None:
-        worker_module = importlib.import_module("src.runtime.provenance_worker_service")
+        import pytest
+
+        pytest.importorskip("aiokafka")
+        worker_module = importlib.import_module("src.kafka.workers.provenance")
         shim_module = importlib.import_module("src.runtime.provenance_service")
 
         self.assertTrue(callable(worker_module.main))
