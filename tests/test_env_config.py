@@ -30,7 +30,8 @@ class EnvConfigTest(unittest.TestCase):
                 )
         self.assertEqual(value, "gemini-test-model")
 
-    def test_read_env_optional_prefers_dotenv_over_process_env(self) -> None:
+    def test_read_env_optional_prefers_process_env_over_dotenv(self) -> None:
+        """Process env overrides .env (12-Factor App)."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             env_file = temp_path / ".env"
@@ -47,7 +48,7 @@ class EnvConfigTest(unittest.TestCase):
                     "GENERATOR_MODEL_ID",
                     env_path=env_file,
                 )
-        self.assertEqual(value, "gemini-via-dotenv")
+        self.assertEqual(value, "gemini-via-process-env")
 
     def test_read_env_optional_falls_back_to_process_env(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

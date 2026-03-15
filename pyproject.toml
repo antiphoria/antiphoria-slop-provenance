@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 kafka = ["aiokafka>=0.10.0"]
+dev = ["pytest-httpserver>=1.0.0"]
 
 [project.scripts]
 slop-cli = "src.cli:main"

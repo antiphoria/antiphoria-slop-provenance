@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.adapters.gemini_engine import GeminiEngineAdapter
 from src.events import InMemoryEventBus, StoryGenerated, StoryRequested
@@ -71,14 +73,15 @@ class GeminiEngineDummyModeTest(unittest.IsolatedAsyncioTestCase):
                 "GENERATOR_DUMMY_MODE=false\n",
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(
-                RuntimeError,
-                "Missing required environment variable 'GOOGLE_API_KEY'",
-            ):
-                _ = GeminiEngineAdapter(
-                    event_bus=InMemoryEventBus(),
-                    env_path=env_path,
-                )
+            with patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "Missing required environment variable 'GOOGLE_API_KEY'",
+                ):
+                    _ = GeminiEngineAdapter(
+                        event_bus=InMemoryEventBus(),
+                        env_path=env_path,
+                    )
 
 
 if __name__ == "__main__":

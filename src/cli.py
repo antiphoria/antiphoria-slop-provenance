@@ -495,6 +495,8 @@ def _build_provenance_services(
         publish_supabase_format=publish_supabase_format,
     )
     tsa_url = tsa_url_override or _read_env_optional("RFC3161_TSA_URL")
+    if tsa_url is not None and not tsa_url.strip():
+        tsa_url = None
     tsa_untrusted_path = _read_env_optional("RFC3161_TSA_UNTRUSTED_CERT_PATH")
     openssl_bin = _read_env_optional("OPENSSL_BIN") or "openssl"
     openssl_conf = _read_env_optional("OPENSSL_CONF")

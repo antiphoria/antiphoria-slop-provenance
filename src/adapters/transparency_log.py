@@ -121,7 +121,7 @@ class TransparencyLogAdapter:
         """Return True when remote publish is configured (URL and auth headers)."""
 
         return (
-            self._publish_url is not None
+            bool(self._publish_url and self._publish_url.strip())
             and bool(self._publish_headers)
         )
 
@@ -377,7 +377,7 @@ class TransparencyLogAdapter:
     def _publish_entry(self, payload: dict[str, Any]) -> str | None:
         """Publish anchor payload to remote endpoint when configured."""
 
-        if self._publish_url is None:
+        if not self._publish_url or not self._publish_url.strip():
             return None
         headers: dict[str, str] = {"Content-Type": "application/json", **self._publish_headers}
         body = {"payload": payload} if self._publish_supabase_format else payload
@@ -423,7 +423,7 @@ class TransparencyLogAdapter:
                 Callers must not treat this as "skip verification" to prevent
                 network-level bypass attacks.
         """
-        if self._publish_url is None or not self._publish_headers:
+        if not (self._publish_url and self._publish_url.strip()) or not self._publish_headers:
             return None
         query = urllib.parse.urlencode(
             [("payload->>artifactHash", f"eq.{artifact_hash}")]
