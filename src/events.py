@@ -7,12 +7,19 @@ Pydantic events used to coordinate the core domain and adapters.
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Protocol, TypeVar, cast
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.logging_config import (
+    bind_log_context,
+    redact_event_for_trace,
+    should_log_route,
+)
 from src.models import (
     Artifact,
     AuthorAttestation,
@@ -27,6 +34,8 @@ EventT = TypeVar("EventT", bound=BaseModel)
 EventHandler = Callable[[EventT], Awaitable[None]]
 _RawEventHandler = Callable[[BaseModel], Awaitable[None]]
 ErrorHandler = Callable[["EventHandlerError"], Awaitable[None]]
+
+_route_logger = logging.getLogger("src.events")
 
 
 def _utc_now() -> datetime:
@@ -422,6 +431,23 @@ class InMemoryEventBus:
         Args:
             event: Concrete Pydantic event payload instance.
         """
+        event_type = type(event).__name__
+        req_id = str(getattr(event, "request_id", "")) or None
+
+        if should_log_route("coarse"):
+            _route_logger.info(
+                "emit %s request_id=%s",
+                event_type,
+                req_id or "-",
+                extra={"request_id": req_id or "-"},
+            )
+        if should_log_route("trace"):
+            redacted = redact_event_for_trace(event)
+            _route_logger.debug(
+                "emit payload %s",
+                json.dumps(redacted, default=str),
+                extra={"request_id": req_id or "-"},
+            )
 
         async with self._lock:
             handlers = tuple(self._subscribers.get(type(event), []))
@@ -440,11 +466,35 @@ class InMemoryEventBus:
         event: BaseModel,
     ) -> None:
         """Execute one handler and publish failures to the error channel."""
+        event_type = type(event).__name__
+        handler_name = getattr(handler, "__qualname__", repr(handler))
+        req_id = getattr(event, "request_id", None)
+        req_id_str = str(req_id) if req_id is not None else "-"
+
+        if should_log_route("fine"):
+            _route_logger.info(
+                "handler %s received %s request_id=%s",
+                handler_name,
+                event_type,
+                req_id_str,
+                extra={"request_id": req_id_str},
+            )
+        if req_id is not None:
+            bind_log_context(request_id=req_id)
 
         try:
             await handler(event)
         except Exception as exc:
             await self._publish_handler_error(handler, event, exc)
+        finally:
+            if should_log_route("fine"):
+                _route_logger.info(
+                    "handler %s completed %s request_id=%s",
+                    handler_name,
+                    event_type,
+                    req_id_str,
+                    extra={"request_id": req_id_str},
+                )
 
     async def _publish_handler_error(
         self,
@@ -468,11 +518,16 @@ class InMemoryEventBus:
             )
             return
 
+        req_id = getattr(event, "request_id", None)
+        if req_id is not None:
+            bind_log_context(request_id=req_id)
+
         payload = EventHandlerError(
             event_type=type(event).__name__,
             handler_name=getattr(handler, "__qualname__", repr(handler)),
             error_type=type(error).__name__,
             error_message=str(error) or "<no message>",
+            request_id=str(req_id) if req_id is not None else None,
         )
         for error_handler in error_handlers:
             try:

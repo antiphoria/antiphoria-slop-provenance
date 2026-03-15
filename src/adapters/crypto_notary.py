@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import binascii
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,8 +53,10 @@ from src.models import (
     canonical_json_bytes,
     sha256_hex,
 )
+from src.logging_config import bind_log_context, should_log_route
 from src.parsing import parse_artifact_markdown
 
+_adapter_logger = logging.getLogger("src.adapters.crypto_notary")
 _ML_DSA_ALGORITHM = "ML-DSA-44"
 _ENV_KEY_CANDIDATES = ("PQC_PRIVATE_KEY_PATH", "OQS_PRIVATE_KEY_PATH")
 _PUBLIC_ENV_KEY_CANDIDATES = ("PQC_PUBLIC_KEY_PATH", "OQS_PUBLIC_KEY_PATH")
@@ -296,6 +299,7 @@ class CryptoNotaryAdapter:
 
     async def _on_story_generated(self, event: StoryGenerated) -> None:
         """Sign generated content and emit a signed envelope event."""
+        bind_log_context(request_id=event.request_id)
 
         artifact, c2pa_manifest = await self._build_signed_artifact(
             title=event.title,
@@ -314,6 +318,12 @@ class CryptoNotaryAdapter:
             curation=None,
             author_attestation=None,
         )
+        if should_log_route("coarse"):
+            _adapter_logger.info(
+                "CryptoNotaryAdapter emitting StorySigned request_id=%s",
+                event.request_id,
+                extra={"request_id": str(event.request_id)},
+            )
         await self._event_bus.emit(
             StorySigned(
                 request_id=event.request_id,
@@ -332,6 +342,7 @@ class CryptoNotaryAdapter:
 
     async def _on_story_curated(self, event: StoryCurated) -> None:
         """Sign curated content and emit a signed envelope event."""
+        bind_log_context(request_id=event.request_id)
 
         artifact, c2pa_manifest = await self._build_signed_artifact(
             title=(
@@ -354,6 +365,12 @@ class CryptoNotaryAdapter:
             curation=event.curation_metadata,
             author_attestation=None,
         )
+        if should_log_route("coarse"):
+            _adapter_logger.info(
+                "CryptoNotaryAdapter emitting StorySigned request_id=%s",
+                event.request_id,
+                extra={"request_id": str(event.request_id)},
+            )
         await self._event_bus.emit(
             StorySigned(
                 request_id=event.request_id,
@@ -372,6 +389,7 @@ class CryptoNotaryAdapter:
 
     async def _on_story_human_registered(self, event: StoryHumanRegistered) -> None:
         """Sign human-only content and emit a signed envelope event."""
+        bind_log_context(request_id=event.request_id)
 
         artifact, c2pa_manifest = await self._build_signed_artifact(
             title=event.title,
@@ -392,6 +410,12 @@ class CryptoNotaryAdapter:
             webauthn_attestation=event.webauthn_attestation,
             registration_ceremony=event.registration_ceremony,
         )
+        if should_log_route("coarse"):
+            _adapter_logger.info(
+                "CryptoNotaryAdapter emitting StorySigned request_id=%s",
+                event.request_id,
+                extra={"request_id": str(event.request_id)},
+            )
         await self._event_bus.emit(
             StorySigned(
                 request_id=event.request_id,

@@ -16,6 +16,7 @@ import pygit2
 from filelock import FileLock
 
 from src.env_config import read_env_bool, read_env_optional
+from src.logging_config import bind_log_context, get_log_extra, should_log_route
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.ots_adapter import OTSAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter, TimestampVerification
@@ -117,6 +118,15 @@ class ProvenanceService:
         repository_path: Path | None = None,
     ) -> AnchorOutcome:
         """Anchor one artifact hash and commit to branch when request_id + repo given."""
+        if request_id is not None:
+            bind_log_context(request_id=request_id)
+        if should_log_route("fine"):
+            _logger.info(
+                "anchor_artifact path=%s request_id=%s",
+                _sanitize_for_log(str(artifact_path)),
+                request_id or "-",
+                extra=get_log_extra(),
+            )
 
         if request_id is not None and repository_path is not None:
             return self._anchor_artifact_and_commit(
@@ -250,6 +260,15 @@ class ProvenanceService:
         request_id: UUID,
     ) -> AnchorOutcome:
         """Anchor one artifact from a branch commit without touching worktree."""
+        bind_log_context(request_id=request_id)
+        if should_log_route("fine"):
+            _logger.info(
+                "anchor_committed_artifact commit_oid=%s ledger_path=%s request_id=%s",
+                commit_oid[:12] + "..." if len(commit_oid) > 12 else commit_oid,
+                ledger_path,
+                request_id,
+                extra=get_log_extra(),
+            )
 
         markdown_text = self._read_markdown_from_commit(
             repository_path=repository_path,
@@ -337,6 +356,15 @@ class ProvenanceService:
         digest_algorithm: str = "sha256",
     ) -> TimestampOutcome:
         """Acquire and verify RFC3161 token for one artifact hash."""
+        if request_id is not None:
+            bind_log_context(request_id=request_id)
+        if should_log_route("fine"):
+            _logger.info(
+                "timestamp_artifact path=%s request_id=%s",
+                _sanitize_for_log(str(artifact_path)),
+                request_id or "-",
+                extra=get_log_extra(),
+            )
 
         envelope, payload = parse_artifact_markdown(artifact_path)
         return self._timestamp_parsed_artifact(
@@ -361,6 +389,16 @@ class ProvenanceService:
         Writes the .tsr token to the Git ledger at .provenance/timestamp-<request_id>.tsr
         so verification does not depend solely on SQLite.
         """
+        if request_id is not None:
+            bind_log_context(request_id=request_id)
+        if should_log_route("fine"):
+            _logger.info(
+                "timestamp_committed_artifact commit_oid=%s ledger_path=%s request_id=%s",
+                commit_oid[:12] + "..." if len(commit_oid) > 12 else commit_oid,
+                ledger_path,
+                request_id or "-",
+                extra=get_log_extra(),
+            )
 
         markdown_text = self._read_markdown_from_commit(
             repository_path=repository_path,

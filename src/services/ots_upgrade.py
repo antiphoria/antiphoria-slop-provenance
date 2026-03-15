@@ -17,6 +17,7 @@ from src.adapters.ots_adapter import OTSAdapter
 from src.adapters.ots_queue import OtsQueueAdapter
 from src.adapters.transparency_log import TransparencyLogAdapter
 from src.events import StoryForged
+from src.logging_config import bind_log_context, get_log_extra, should_log_route
 from src.repository import OtsForgeRecord, SQLiteRepository
 from src.services.provenance_service import ProvenanceService
 
@@ -43,6 +44,14 @@ async def process_single_ots_record(
     async with semaphore:
         try:
             request_id = UUID(record.request_id)
+            bind_log_context(request_id=request_id)
+            if should_log_route("fine"):
+                _logger.info(
+                    "process_single_ots_record request_id=%s artifact_hash=%s",
+                    request_id,
+                    record.artifact_hash[:16] + "..." if len(record.artifact_hash) > 16 else record.artifact_hash,
+                    extra=get_log_extra(),
+                )
         except (ValueError, TypeError):
             _logger.warning(
                 "OTS furnace: invalid request_id=%s, skipping",

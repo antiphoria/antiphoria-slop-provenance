@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from src.events import EventBusPort, StoryAnchored, StoryAudited, StoryTimestamped
+from src.logging_config import bind_log_context
 from src.repository import SQLiteRepository
 
 
@@ -24,6 +25,10 @@ class ProvenanceTelemetryAdapter:
 
     async def _on_story_anchored(self, event: StoryAnchored) -> None:
         """Persist one anchoring event telemetry record."""
+        bind_log_context(
+            request_id=event.request_id,
+            artifact_id=event.artifact_id,
+        )
 
         self._repository.create_provenance_event_log(
             event_type=type(event).__name__,
@@ -34,6 +39,10 @@ class ProvenanceTelemetryAdapter:
 
     async def _on_story_timestamped(self, event: StoryTimestamped) -> None:
         """Persist one timestamp event telemetry record."""
+        bind_log_context(
+            request_id=event.request_id,
+            artifact_id=event.artifact_id,
+        )
 
         self._repository.create_provenance_event_log(
             event_type=type(event).__name__,
@@ -44,6 +53,10 @@ class ProvenanceTelemetryAdapter:
 
     async def _on_story_audited(self, event: StoryAudited) -> None:
         """Persist one audit event telemetry record."""
+        bind_log_context(
+            request_id=event.request_id,
+            artifact_id=event.artifact_id,
+        )
 
         self._repository.create_provenance_event_log(
             event_type=type(event).__name__,

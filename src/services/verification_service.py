@@ -29,6 +29,7 @@ from src.parsing import (
     parse_artifact_markdown,
     parse_artifact_markdown_text,
 )
+from src.logging_config import bind_log_context, get_log_extra, should_log_route
 from src.repository import SQLiteRepository
 from src.services.curation_service import extract_request_id_from_artifact_path
 
@@ -108,12 +109,19 @@ class VerificationService:
         repository_path: Path | None = None,
     ) -> AuditReport:
         """Run full-chain audit and persist report."""
+        if should_log_route("fine"):
+            _logger.info(
+                "audit_artifact path=%s",
+                str(artifact_path)[:100] + "..." if len(str(artifact_path)) > 100 else str(artifact_path),
+                extra=get_log_extra(),
+            )
 
         request_id: str | None = None
         try:
             request_id = str(
                 extract_request_id_from_artifact_path(artifact_path)
             )
+            bind_log_context(request_id=request_id)
         except RuntimeError:
             request_id = None
 
@@ -378,6 +386,13 @@ class VerificationService:
         tsa_ca_cert_path: Path | None,
     ) -> AuditReport:
         """Audit one artifact branch directly from git objects."""
+        bind_log_context(request_id=request_id)
+        if should_log_route("fine"):
+            _logger.info(
+                "audit_committed_artifact request_id=%s",
+                request_id,
+                extra=get_log_extra(),
+            )
 
         branch = f"artifact/{request_id}"
         ref_name = f"refs/heads/{branch}"

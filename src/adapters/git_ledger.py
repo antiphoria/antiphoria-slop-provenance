@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import binascii
 import hashlib
 import tempfile
@@ -19,6 +20,9 @@ from filelock import FileLock
 from src.artifact_serialization import render_artifact_markdown
 from src.env_config import read_env_bool, read_env_optional
 from src.events import EventBusPort, StoryCommitted, StorySigned
+from src.logging_config import bind_log_context, should_log_route
+
+_adapter_logger = logging.getLogger("src.adapters.git_ledger")
 from src.models import sha256_hex
 from src.secrets_guard import assert_secret_free
 
@@ -70,6 +74,7 @@ class GitLedgerAdapter:
         Args:
             event: Signed story payload emitted by the notary.
         """
+        bind_log_context(request_id=event.request_id)
 
         self._assert_publishable_content_is_secret_free(event)
         markdown_payload = self._render_markdown(event)
@@ -87,6 +92,12 @@ class GitLedgerAdapter:
             c2pa_sidecar_payload,
             commit_message,
         )
+        if should_log_route("coarse"):
+            _adapter_logger.info(
+                "GitLedgerAdapter emitting StoryCommitted request_id=%s",
+                event.request_id,
+                extra={"request_id": str(event.request_id)},
+            )
         await self._event_bus.emit(
             StoryCommitted(
                 request_id=event.request_id,

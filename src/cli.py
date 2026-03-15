@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import subprocess
 import time
@@ -18,6 +19,8 @@ from pathlib import Path
 from uuid import UUID
 
 import pygit2
+
+_cli_logger = logging.getLogger("src.cli")
 
 from src.adapters.c2pa_manifest import (
     build_c2pa_validation_payload,
@@ -67,6 +70,12 @@ from src.merkle import build_merkle_root
 from src.services.ots_upgrade import process_single_ots_record
 from src.services.provenance_service import ProvenanceService
 from src.services.verification_service import VerificationService
+from src.logging_config import (
+    bind_log_context,
+    clear_log_context,
+    should_log_route,
+)
+from src.runtime.service_runtime import configure_logging
 
 
 _read_env_optional = read_env_optional
@@ -771,6 +780,15 @@ async def _anchor_and_timestamp_committed_artifact(
 async def _run_generate_command(args: argparse.Namespace) -> int:
     """Run full async pipeline for `generate`."""
 
+    if should_log_route("coarse"):
+        repo_path = getattr(args, "repo_path", None) or _default_repo_path()
+        _cli_logger.info(
+            "command generate repo_path=%s model_id=%s",
+            repo_path,
+            getattr(args, "model_id", "-"),
+            extra={"command": "generate"},
+        )
+
     assert_secret_free("cli generate prompt", args.prompt)
 
     env_path = get_project_env_path()
@@ -858,6 +876,7 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
     await telemetry_adapter.start()
 
     request_event = StoryRequested(prompt=args.prompt)
+    bind_log_context(request_id=request_event.request_id)
     await event_bus.emit(request_event)
     committed_event = await asyncio.wait_for(completion_future, timeout=300.0)
     await _anchor_and_timestamp_committed_artifact(
@@ -879,6 +898,14 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
 
 async def _run_curate_command(args: argparse.Namespace) -> int:
     """Run curation pipeline for an edited markdown artifact file."""
+
+    if should_log_route("coarse"):
+        _cli_logger.info(
+            "command curate file=%s repo_path=%s",
+            getattr(args, "file", "-"),
+            getattr(args, "repo_path", None) or _default_repo_path(),
+            extra={"command": "curate"},
+        )
 
     env_path = get_project_env_path()
     event_bus = EventBus()
@@ -978,6 +1005,7 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
     await notary_adapter.start()
     await ledger_adapter.start()
 
+    bind_log_context(request_id=request_id)
     await event_bus.emit(
         StoryCurated(
             request_id=request_id,
@@ -1236,6 +1264,14 @@ async def _run_register_command(args: argparse.Namespace) -> int:
         registration_ceremony=ceremony,
     )
 
+    if should_log_route("coarse"):
+        _cli_logger.info(
+            "command register file=%s repo_path=%s",
+            getattr(args, "file", "-"),
+            getattr(args, "repo_path", None) or _default_repo_path(),
+            extra={"command": "register"},
+        )
+
     await event_bus.subscribe(StorySigned, _record_signed)
     await event_bus.subscribe(StoryCommitted, _record_committed)
     await event_bus.subscribe_errors(_record_dispatch_error)
@@ -1243,6 +1279,7 @@ async def _run_register_command(args: argparse.Namespace) -> int:
     await notary_adapter.start()
     await ledger_adapter.start()
 
+    bind_log_context(request_id=human_event.request_id)
     await event_bus.emit(human_event)
     committed_event = await asyncio.wait_for(completion_future, timeout=300.0)
     await _anchor_and_timestamp_committed_artifact(
@@ -1345,6 +1382,14 @@ def _run_redact_command(args: argparse.Namespace) -> int:
 async def _run_anchor_command(args: argparse.Namespace) -> int:
     """Anchor one artifact hash in local/public transparency logs."""
 
+    if should_log_route("coarse"):
+        _cli_logger.info(
+            "command anchor file=%s repo_path=%s",
+            getattr(args, "file", "-"),
+            getattr(args, "repo_path", None) or _default_repo_path(),
+            extra={"command": "anchor"},
+        )
+
     event_bus = EventBus()
     repository = _build_repository()
     telemetry_adapter = ProvenanceTelemetryAdapter(
@@ -1364,6 +1409,7 @@ async def _run_anchor_command(args: argparse.Namespace) -> int:
             "Cannot anchor: request_id could not be extracted from artifact path. "
             "Use <request_id>.md or YYYYMMDDTHHMMSSZ_<request_id>.md."
         )
+    bind_log_context(request_id=request_id)
     outcome = await asyncio.to_thread(
         provenance_service.anchor_artifact,
         artifact_path,
@@ -1393,6 +1439,14 @@ async def _run_anchor_command(args: argparse.Namespace) -> int:
 async def _run_timestamp_command(args: argparse.Namespace) -> int:
     """Acquire and verify RFC3161 timestamp token for one artifact."""
 
+    if should_log_route("coarse"):
+        _cli_logger.info(
+            "command timestamp file=%s repo_path=%s",
+            getattr(args, "file", "-"),
+            getattr(args, "repo_path", None) or _default_repo_path(),
+            extra={"command": "timestamp"},
+        )
+
     event_bus = EventBus()
     repository = _build_repository()
     telemetry_adapter = ProvenanceTelemetryAdapter(
@@ -1411,6 +1465,8 @@ async def _run_timestamp_command(args: argparse.Namespace) -> int:
         request_id = extract_request_id_from_artifact_path(artifact_path)
     except RuntimeError:
         request_id = None
+    if request_id is not None:
+        bind_log_context(request_id=request_id)
     outcome = await asyncio.to_thread(
         provenance_service.timestamp_artifact,
         artifact_path,
@@ -1443,6 +1499,14 @@ async def _run_timestamp_command(args: argparse.Namespace) -> int:
 
 async def _run_audit_command(args: argparse.Namespace) -> int:
     """Run full-chain audit and emit machine-readable report."""
+
+    if should_log_route("coarse"):
+        _cli_logger.info(
+            "command audit file=%s repo_path=%s",
+            getattr(args, "file", "-"),
+            getattr(args, "repo_path", None) or _default_repo_path(),
+            extra={"command": "audit"},
+        )
 
     event_bus = EventBus()
     repository = _build_repository()
@@ -1480,6 +1544,8 @@ async def _run_audit_command(args: argparse.Namespace) -> int:
     if args.strict_c2pa:
         passed = passed and report.c2pa_present and report.c2pa_valid
     artifact_uuid = None if not report.artifact_id else UUID(report.artifact_id)
+    if report.request_id is not None:
+        bind_log_context(request_id=report.request_id)
     await event_bus.emit(
         StoryAudited(
             request_id=(None if report.request_id is None else UUID(report.request_id)),
@@ -1524,6 +1590,14 @@ def _attestation_verdict(
 async def _run_attest_command(args: argparse.Namespace) -> int:
     """Attest one branch artifact by request_id without branch checkout."""
 
+    if should_log_route("coarse"):
+        _cli_logger.info(
+            "command attest request_id=%s repo_path=%s",
+            getattr(args, "request_id", "-"),
+            getattr(args, "repo_path", None) or _default_repo_path(),
+            extra={"command": "attest"},
+        )
+
     event_bus = EventBus()
     repository = _build_repository()
     telemetry_adapter = ProvenanceTelemetryAdapter(
@@ -1537,6 +1611,8 @@ async def _run_attest_command(args: argparse.Namespace) -> int:
         request_id = UUID(str(args.request_id))
     except ValueError as exc:
         raise RuntimeError(f"Invalid request id '{args.request_id}'.") from exc
+
+    bind_log_context(request_id=request_id)
 
     report = await asyncio.to_thread(
         verification_service.audit_committed_artifact,
@@ -2107,6 +2183,16 @@ def _run_admin_revoke_key_command(args: argparse.Namespace) -> int:
 async def _dispatch(args: argparse.Namespace) -> int:
     """Dispatch parsed CLI args to command handlers."""
 
+    bind_log_context(command=args.command)
+    try:
+        return await _dispatch_impl(args)
+    finally:
+        clear_log_context()
+
+
+async def _dispatch_impl(args: argparse.Namespace) -> int:
+    """Inner dispatch without context management."""
+
     if args.command == "generate":
         return await _run_generate_command(args)
     if args.command == "curate":
@@ -2155,6 +2241,7 @@ async def _dispatch(args: argparse.Namespace) -> int:
 def main() -> int:
     """Parse arguments and run the asynchronous CLI dispatcher."""
 
+    configure_logging()
     parser = build_parser()
     parsed_args = parser.parse_args()
     lock_base = Path.cwd()

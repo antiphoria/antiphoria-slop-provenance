@@ -11,6 +11,7 @@ from src.env_config import (
     resolve_artifact_db_path,
     resolve_state_db_path,
 )
+from src.logging_config import get_log_context
 from src.repository import DedupRepository, SQLiteRepository
 
 # Resolve .env relative to project root so workers get consistent config regardless of CWD.
@@ -33,7 +34,8 @@ def configure_logging() -> None:
     class RequestIdFormatter(logging.Formatter):
         def format(self, record: logging.LogRecord) -> str:
             if not hasattr(record, "request_id"):
-                record.request_id = "-"  # type: ignore[attr-defined]
+                ctx = get_log_context()
+                record.request_id = ctx.request_id or "-"  # type: ignore[attr-defined]
             return super().format(record)
 
     formatter = RequestIdFormatter(

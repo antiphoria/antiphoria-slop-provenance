@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from uuid import UUID
 
@@ -14,7 +15,10 @@ from src.events import (
     StoryOtsPending,
     StoryTimestamped,
 )
+from src.logging_config import bind_log_context, should_log_route
 from src.services.provenance_service import ProvenanceService
+
+_adapter_logger = logging.getLogger("src.adapters.provenance_worker")
 
 
 class ProvenanceWorkerAdapter:
@@ -43,6 +47,7 @@ class ProvenanceWorkerAdapter:
 
     async def _on_story_committed(self, event: StoryCommitted) -> None:
         """Anchor and timestamp one committed artifact."""
+        bind_log_context(request_id=event.request_id)
 
         anchor_outcome = await asyncio.to_thread(
             self._provenance_service.anchor_committed_artifact,
@@ -51,6 +56,12 @@ class ProvenanceWorkerAdapter:
             event.ledger_path,
             event.request_id,
         )
+        if should_log_route("coarse"):
+            _adapter_logger.info(
+                "ProvenanceWorkerAdapter emitting StoryAnchored request_id=%s",
+                event.request_id,
+                extra={"request_id": str(event.request_id)},
+            )
         await self._event_bus.emit(
             StoryAnchored(
                 request_id=event.request_id,
@@ -73,6 +84,12 @@ class ProvenanceWorkerAdapter:
             verification_status = (
                 "verified" if timestamp_outcome.verification.ok else "failed"
             )
+            if should_log_route("coarse"):
+                _adapter_logger.info(
+                    "ProvenanceWorkerAdapter emitting StoryTimestamped request_id=%s",
+                    event.request_id,
+                    extra={"request_id": str(event.request_id)},
+                )
             await self._event_bus.emit(
                 StoryTimestamped(
                     request_id=event.request_id,
@@ -85,6 +102,12 @@ class ProvenanceWorkerAdapter:
                 )
             )
             if timestamp_outcome.story_ots_pending is not None:
+                if should_log_route("coarse"):
+                    _adapter_logger.info(
+                        "ProvenanceWorkerAdapter emitting StoryOtsPending request_id=%s",
+                        event.request_id,
+                        extra={"request_id": str(event.request_id)},
+                    )
                 await self._event_bus.emit(timestamp_outcome.story_ots_pending)
         except RuntimeError as exc:
             await self._event_bus.emit(

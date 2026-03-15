@@ -7,11 +7,15 @@ Google AI Studio, and emits `StoryGenerated` back into the event bus.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import logging
 from pathlib import Path
+from typing import Any
 
 from src.env_config import read_env_bool, read_env_optional, read_env_required
 from src.events import EventBusPort, StoryGenerated, StoryRequested
+from src.logging_config import bind_log_context, should_log_route
+
+_adapter_logger = logging.getLogger("src.adapters.gemini_engine")
 from src.models import EmbeddedWatermark, UsageMetrics
 from src.policies.licensing import get_license_id
 
@@ -82,12 +86,19 @@ class GeminiEngineAdapter:
         Args:
             event: Input generation request event.
         """
+        bind_log_context(request_id=event.request_id)
 
         generated_text = await self._generate_text(event.prompt)
         prompt_tokens = len(event.prompt.split())
         completion_tokens = len(generated_text.split())
 
         title = self._derive_title(generated_text)
+        if should_log_route("coarse"):
+            _adapter_logger.info(
+                "GeminiEngineAdapter emitting StoryGenerated request_id=%s",
+                event.request_id,
+                extra={"request_id": str(event.request_id)},
+            )
         await self._event_bus.emit(
             StoryGenerated(
                 request_id=event.request_id,
