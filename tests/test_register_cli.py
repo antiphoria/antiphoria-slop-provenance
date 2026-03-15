@@ -79,13 +79,19 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
         self._state_temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self._state_db_path = Path(self._state_temp.name) / "state.db"
         self._old_state_db_path = os.getenv("STATE_DB_PATH")
+        self._old_enable_ots = os.getenv("ENABLE_OTS_FORGE")
         os.environ["STATE_DB_PATH"] = str(self._state_db_path)
+        os.environ["ENABLE_OTS_FORGE"] = "false"
 
     def tearDown(self) -> None:
         if self._old_state_db_path is None:
             os.environ.pop("STATE_DB_PATH", None)
         else:
             os.environ["STATE_DB_PATH"] = self._old_state_db_path
+        if self._old_enable_ots is None:
+            os.environ.pop("ENABLE_OTS_FORGE", None)
+        else:
+            os.environ["ENABLE_OTS_FORGE"] = self._old_enable_ots
         self._state_temp.cleanup()
         self._repo_temp.cleanup()
 
