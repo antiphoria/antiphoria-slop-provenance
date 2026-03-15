@@ -22,6 +22,9 @@ if (-not $TargetLetter) {
 
 $env:PQC_PRIVATE_KEY_PATH = "${TargetLetter}:\private.key"
 $env:C2PA_PRIVATE_KEY_PATH = "${TargetLetter}:\c2pa-private-key.pem"
+if (Test-Path "${TargetLetter}:\ed25519_private.pem") {
+    $env:ED25519_PRIVATE_KEY_PATH = "${TargetLetter}:\ed25519_private.pem"
+}
 
 # Prepend venv so slop-cli is found
 foreach ($venv in @(".venv-freeze", ".venv")) {

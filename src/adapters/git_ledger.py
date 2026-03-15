@@ -268,7 +268,7 @@ class GitLedgerAdapter:
         else:
             curation_block = "curation: null\n"
 
-        usage_block = ""
+        usage_block: str
         if artifact.provenance.usage_metrics is not None:
             usage = artifact.provenance.usage_metrics
             usage_block = (
@@ -277,8 +277,10 @@ class GitLedgerAdapter:
                 f"    completionTokens: {usage.completion_tokens}\n"
                 f"    totalTokens: {usage.total_tokens}\n"
             )
+        else:
+            usage_block = "  usageMetrics: null\n"
 
-        watermark_block = ""
+        watermark_block: str
         if artifact.provenance.embedded_watermark is not None:
             watermark = artifact.provenance.embedded_watermark
             watermark_block = (
@@ -286,8 +288,10 @@ class GitLedgerAdapter:
                 f"    provider: {self._yaml_quoted(watermark.provider)}\n"
                 f"    status: {self._yaml_quoted(watermark.status)}\n"
             )
+        else:
+            watermark_block = "  embeddedWatermark: null\n"
 
-        attestation_block = ""
+        attestation_block: str
         if artifact.provenance.author_attestation is not None:
             att = artifact.provenance.author_attestation
             attestation_lines = [
@@ -301,6 +305,25 @@ class GitLedgerAdapter:
                 attestation_lines.append(f"      - question: |-\n{q_block}\n")
                 attestation_lines.append(f"        answer: {self._yaml_quoted(qa.answer)}\n")
             attestation_block = "".join(attestation_lines)
+        else:
+            attestation_block = "  authorAttestation: null\n"
+
+        ceremony_block: str
+        if artifact.provenance.registration_ceremony is not None:
+            rc = artifact.provenance.registration_ceremony
+            machine_line = (
+                f"    machineIdHash: {self._yaml_quoted(rc.machine_id_hash)}\n"
+                if rc.machine_id_hash is not None
+                else "    machineIdHash: null\n"
+            )
+            ceremony_block = (
+                "  registrationCeremony:\n"
+                f"    registrationUtcMs: {rc.registration_utc_ms}\n"
+                f"    orchestratorGitCommit: {self._yaml_quoted(rc.orchestrator_git_commit)}\n"
+                f"{machine_line}"
+            )
+        else:
+            ceremony_block = "  registrationCeremony: null\n"
 
         public_key_uri_line = ""
         if artifact.signature.verification_anchor.public_key_uri is not None:
@@ -333,6 +356,7 @@ class GitLedgerAdapter:
             f"{usage_block}"
             f"{watermark_block}"
             f"{attestation_block}"
+            f"{ceremony_block}"
             f"{curation_block}"
             "signature:\n"
             f"  cryptoAlgorithm: {self._yaml_quoted(artifact.signature.crypto_algorithm)}\n"

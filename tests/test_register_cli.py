@@ -111,6 +111,10 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('source: "human"', markdown_text)
         self.assertIn("modelId: \"human\"", markdown_text)
         self.assertIn("Human-authored. No AI generation.", markdown_text)
+        self.assertIn("usageMetrics: null", markdown_text)
+        self.assertIn("embeddedWatermark: null", markdown_text)
+        self.assertIn("authorAttestation: null", markdown_text)
+        self.assertIn("registrationCeremony: null", markdown_text)
 
         envelope, payload = parse_artifact_markdown_text(markdown_text)
         self.assertEqual(envelope.provenance.source, "human")

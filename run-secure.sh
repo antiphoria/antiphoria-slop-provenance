@@ -34,6 +34,10 @@ chmod 600 "$RAMDIR/private.key" "$RAMDIR/c2pa-private-key.pem"
 
 export PQC_PRIVATE_KEY_PATH="$RAMDIR/private.key"
 export C2PA_PRIVATE_KEY_PATH="$RAMDIR/c2pa-private-key.pem"
+if [[ -f "$RAMDIR/ed25519_private.pem" ]]; then
+  chmod 600 "$RAMDIR/ed25519_private.pem"
+  export ED25519_PRIVATE_KEY_PATH="$RAMDIR/ed25519_private.pem"
+fi
 
 if [[ $# -gt 0 ]]; then
   "$@"
