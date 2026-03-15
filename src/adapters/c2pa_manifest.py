@@ -374,8 +374,11 @@ def validate_c2pa_sidecar(
 ) -> C2PAManifestValidation:
     """Validate one sidecar manifest against one payload.
 
-    Callers validating MVP mode sidecars must pass body_for_mvp (the raw artifact
-    body); otherwise validation fails with a clear error.
+    body_for_mvp is **required** when the manifest is MVP format (determined by
+    _manifest_looks_like_mvp). payload_bytes may be a JPEG dummy carrier for SDK
+    mode; for MVP, the actual markdown body must be passed via body_for_mvp for
+    payload hash validation. Third-party callers must pass body_for_mvp when
+    validating MVP sidecars; otherwise validation fails with a clear error.
     """
 
     mvp_result = _validate_mvp_manifest(manifest_bytes, body_for_mvp)

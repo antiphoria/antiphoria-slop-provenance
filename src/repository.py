@@ -477,6 +477,19 @@ class SQLiteRepository:
                 (status, ledger_path, commit_oid, now, str(request_id)),
             )
 
+    def has_transparency_log_record(self, artifact_hash: str) -> bool:
+        """Return True if a transparency log record exists for this artifact hash."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM transparency_log_records
+                WHERE artifact_hash = ?
+                LIMIT 1;
+                """,
+                (artifact_hash,),
+            ).fetchone()
+        return row is not None
+
     def create_transparency_log_record(
         self,
         entry_id: str,

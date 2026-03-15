@@ -14,9 +14,8 @@ jobs:
   quality-gate:
     uses: antiphoria/.github/.github/workflows/quality-gate.yml@main
     with:
-      policy_ref: main
-      strict_mode: true
-      require_local_preflight: true
+      policy-ref: main
+      python-version: "3.12"
 
   python-tests:
     runs-on: ubuntu-latest

@@ -164,6 +164,8 @@ slop-cli audit --file ../my-ledger/<request_id>.md --repo-path ../my-ledger --ts
 
 Kafka orchestration (distributed workers) lives in a separate repository. This certification engine exposes only `slop-cli` for local execution.
 
+**Multi-worker Kafka deployment:** Git ledger commits use process-local `FileLock` (under `tempfile.gettempdir()`). Locks do not coordinate across containers or pods. For horizontally scaled Kafka consumers, use a **single-writer topology** (one worker per ledger repo) or implement distributed locking (e.g. Redis `SETNX` keyed by Git ref) before scaling.
+
 ## C2PA implementation note
 
 When `ENABLE_C2PA=true`, the pipeline emits `.c2pa` sidecar payloads and binds their hash

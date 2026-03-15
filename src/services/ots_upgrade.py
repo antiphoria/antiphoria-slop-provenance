@@ -106,28 +106,35 @@ async def process_single_ots_record(
             ref_name = f"refs/heads/artifact/{record.request_id}"
             commit_message = f"provenance: OTS forged ({record.request_id})"
 
-            # 1. Git FIRST
-            await asyncio.to_thread(
-                provenance_service._commit_branch_file_bytes,
+            # Idempotency: if .ots already on branch (crash-after-step-1 retry), skip git
+            ots_already_on_branch = await asyncio.to_thread(
+                ProvenanceService.blob_exists_on_branch,
                 repository_path,
                 ref_name,
                 ots_path,
-                final_ots_bytes,
-                commit_message,
             )
 
-            # 2. Append-Only Merkle Chain + mirror to SQLite
-            try:
+            # 1. Git FIRST (skip if already present)
+            if not ots_already_on_branch:
+                await asyncio.to_thread(
+                    provenance_service._commit_branch_file_bytes,
+                    repository_path,
+                    ref_name,
+                    ots_path,
+                    final_ots_bytes,
+                    commit_message,
+                )
+
+            # 2. Append-Only Merkle Chain + mirror to SQLite (skip if already done)
+            if not repository.has_transparency_log_record(record.artifact_hash):
                 entry = await asyncio.to_thread(
                     transparency_log_adapter.append_entry,
                     record.artifact_hash,
                     str(record.request_id),
                     ots_path,
                     record.request_id,
-                    {
-                        "event": "ots_forged",
-                        "bitcoin_block_height": block_height,
-                    },
+                    metadata={"event": "ots_forged", "bitcoin_block_height": block_height},
+                    bitcoin_block_height=block_height,
                 )
                 await asyncio.to_thread(
                     repository.create_transparency_log_record,
@@ -141,12 +148,6 @@ async def process_single_ots_record(
                     entry.entry_hash,
                     entry.anchored_at,
                     entry.remote_receipt,
-                )
-            except Exception as exc:
-                _logger.warning(
-                    "OTS furnace: append_entry failed for request_id=%s: %s",
-                    record.request_id,
-                    exc,
                 )
 
             # 3. OTS queue (Archive)

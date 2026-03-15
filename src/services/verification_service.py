@@ -32,6 +32,7 @@ from src.parsing import (
 from src.logging_config import bind_log_context, get_log_extra, should_log_route
 from src.repository import SQLiteRepository
 from src.services.curation_service import extract_request_id_from_artifact_path
+from src.git_tree_utils import tree_get_blob
 
 _logger = logging.getLogger(__name__)
 
@@ -262,11 +263,10 @@ class VerificationService:
             commit_obj = repo[reference.target]
             if not isinstance(commit_obj, pygit2.Commit):
                 return ""
-            tree_entry = commit_obj.tree[relative_path]
-            blob_obj = repo[tree_entry.id]
+            blob_obj = tree_get_blob(repo, commit_obj.tree, relative_path)
         except (KeyError, pygit2.GitError):
             return ""
-        if not isinstance(blob_obj, pygit2.Blob):
+        if blob_obj is None:
             return ""
         return bytes(blob_obj.data).decode("utf-8")
 
@@ -277,12 +277,8 @@ class VerificationService:
         relative_path: str,
     ) -> bytes | None:
         """Read raw blob bytes from commit; return None if path missing."""
-        try:
-            tree_entry = commit_obj.tree[relative_path]
-            blob_obj = repo[tree_entry.id]
-        except (KeyError, pygit2.GitError):
-            return None
-        if not isinstance(blob_obj, pygit2.Blob):
+        blob_obj = tree_get_blob(repo, commit_obj.tree, relative_path)
+        if blob_obj is None:
             return None
         return bytes(blob_obj.data)
 
@@ -319,11 +315,10 @@ class VerificationService:
             commit_obj = repo.revparse_single("HEAD")
             if not isinstance(commit_obj, pygit2.Commit):
                 return ""
-            tree_entry = commit_obj.tree[relative_path]
-            blob_obj = repo[tree_entry.id]
+            blob_obj = tree_get_blob(repo, commit_obj.tree, relative_path)
         except (KeyError, pygit2.GitError, AttributeError, ValueError):
             return ""
-        if not isinstance(blob_obj, pygit2.Blob):
+        if blob_obj is None:
             return ""
         return bytes(blob_obj.data).decode("utf-8")
 
@@ -406,6 +401,7 @@ class VerificationService:
                     f"Branch ref '{ref_name}' does not point to a commit."
                 )
             ledger_path = self._resolve_ledger_path_from_commit(
+                repo=repo,
                 commit_obj=commit_obj,
                 request_id=str(request_id),
             )
@@ -618,8 +614,9 @@ class VerificationService:
         if token_base64_to_verify is not None and self._tsa_adapter is not None:
             timestamp_found = True
             try:
+                token_condensed = "".join(token_base64_to_verify.split())
                 token_bytes = base64.b64decode(
-                    token_base64_to_verify.encode("ascii"), validate=True
+                    token_condensed.encode("ascii"), validate=True
                 )
                 verification = self._tsa_adapter.verify_timestamp_token(
                     digest_hex=digest_hex,
@@ -704,17 +701,15 @@ class VerificationService:
 
     @staticmethod
     def _resolve_ledger_path_from_commit(
+        repo: pygit2.Repository,
         commit_obj: pygit2.Commit,
         request_id: str,
     ) -> str:
         """Resolve ledger path by trying common layouts (flat, artifacts_directory)."""
         candidates = [f"{request_id}.md", f"artifact/{request_id}.md"]
         for candidate in candidates:
-            try:
-                _ = commit_obj.tree[candidate]
+            if tree_get_blob(repo, commit_obj.tree, candidate) is not None:
                 return candidate
-            except KeyError:
-                continue
         return f"{request_id}.md"
 
     @staticmethod
@@ -731,17 +726,10 @@ class VerificationService:
         commit_obj: pygit2.Commit,
         relative_path: str,
     ) -> str:
-        try:
-            tree_entry = commit_obj.tree[relative_path]
-        except KeyError as exc:
+        blob_obj = tree_get_blob(repo, commit_obj.tree, relative_path)
+        if blob_obj is None:
             raise RuntimeError(
                 f"Branch artifact path '{relative_path}' not found in commit."
-            ) from exc
-        blob_obj = repo[tree_entry.id]
-        if not isinstance(blob_obj, pygit2.Blob):
-            raise RuntimeError(
-                f"Branch artifact path '{relative_path}' "
-                "does not resolve to a blob."
             )
         return bytes(blob_obj.data).decode("utf-8")
 
@@ -767,12 +755,8 @@ class VerificationService:
         ledger_path: str,
     ) -> tuple[str | None, bytes | None]:
         sidecar_path = str(Path(ledger_path).with_suffix(".c2pa"))
-        try:
-            tree_entry = commit_obj.tree[sidecar_path]
-        except KeyError:
-            return (None, None)
-        blob_obj = repo[tree_entry.id]
-        if not isinstance(blob_obj, pygit2.Blob):
+        blob_obj = tree_get_blob(repo, commit_obj.tree, sidecar_path)
+        if blob_obj is None:
             return (None, None)
         manifest_bytes = bytes(blob_obj.data)
         return (sha256_hex(manifest_bytes), manifest_bytes)

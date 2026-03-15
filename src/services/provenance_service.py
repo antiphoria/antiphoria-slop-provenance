@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
@@ -28,6 +29,7 @@ from src.events import StoryOtsPending
 from src.artifact_serialization import render_artifact_markdown
 from src.parsing import parse_artifact_markdown, parse_artifact_markdown_text
 from src.repository import SQLiteRepository
+from src.git_tree_utils import tree_get_blob
 
 _logger = logging.getLogger(__name__)
 _BRANCH_LOG_PATH = ".provenance/transparency-log.jsonl"
@@ -451,6 +453,13 @@ class ProvenanceService:
                     payload_bytes = canonicalize_body_for_hash(payload)
                     artifact_hash = sha256_hex(payload_bytes)
                     ots_bytes = self._ots_adapter.request_ots_stamp(payload_bytes)
+                except (OSError, ValueError) as exc:
+                    _logger.warning(
+                        "OTS stamp skipped for request_id=%s (e.g. OpenSSL/bitcoinlib on Windows): %s",
+                        request_id,
+                        _sanitize_for_log(str(exc)),
+                    )
+                else:
                     pending_b64 = base64.b64encode(ots_bytes).decode("ascii")
                     ots_queue = OtsQueueAdapter(
                         repository_path=repository_path,
@@ -473,12 +482,6 @@ class ProvenanceService:
                         request_id=request_id,
                         artifact_hash=artifact_hash,
                         pending_ots_b64=pending_b64,
-                    )
-                except Exception as exc:
-                    _logger.warning(
-                        "OTS stamp skipped for request_id=%s (e.g. OpenSSL/bitcoinlib on Windows): %s",
-                        request_id,
-                        _sanitize_for_log(str(exc)),
                     )
 
             if story_ots_pending is not None:
@@ -574,6 +577,23 @@ class ProvenanceService:
                 "Artifact hash mismatch for transparency anchor request."
             )
 
+    @staticmethod
+    def blob_exists_on_branch(
+        repository_path: Path,
+        ref_name: str,
+        relative_path: str,
+    ) -> bool:
+        """Return True if the blob exists at path on branch."""
+        try:
+            repo = pygit2.Repository(str(repository_path))
+            reference = repo.lookup_reference(ref_name)
+            commit_obj = repo[reference.target]
+        except (KeyError, pygit2.GitError):
+            return False
+        if not isinstance(commit_obj, pygit2.Commit):
+            return False
+        return tree_get_blob(repo, commit_obj.tree, relative_path) is not None
+
     def get_artifact_payload_bytes_from_branch(
         self,
         repository_path: Path,
@@ -593,12 +613,8 @@ class ProvenanceService:
             return None
         if not isinstance(commit_obj, pygit2.Commit):
             return None
-        try:
-            tree_entry = commit_obj.tree[ledger_path]
-        except KeyError:
-            return None
-        blob_obj = repo[tree_entry.id]
-        if not isinstance(blob_obj, pygit2.Blob):
+        blob_obj = tree_get_blob(repo, commit_obj.tree, ledger_path)
+        if blob_obj is None:
             return None
         markdown_text = bytes(blob_obj.data).decode("utf-8")
         _, payload = parse_artifact_markdown_text(markdown_text)
@@ -619,16 +635,10 @@ class ProvenanceService:
             ) from exc
         if not isinstance(commit_obj, pygit2.Commit):
             raise RuntimeError(f"Object '{commit_oid}' is not a commit.")
-        try:
-            tree_entry = commit_obj.tree[ledger_path]
-        except KeyError as exc:
+        blob_obj = tree_get_blob(repo, commit_obj.tree, ledger_path)
+        if blob_obj is None:
             raise RuntimeError(
                 f"Committed artifact path '{ledger_path}' not found in commit."
-            ) from exc
-        blob_obj = repo[tree_entry.id]
-        if not isinstance(blob_obj, pygit2.Blob):
-            raise RuntimeError(
-                f"Committed artifact path '{ledger_path}' does not resolve to a blob."
             )
         return bytes(blob_obj.data).decode("utf-8")
 
@@ -638,26 +648,33 @@ class ProvenanceService:
         ref_name: str,
         relative_path: str,
     ) -> str:
-        try:
-            repo = pygit2.Repository(str(repository_path))
-            reference = repo.lookup_reference(ref_name)
-        except (KeyError, pygit2.GitError) as exc:
+        repo = pygit2.Repository(str(repository_path))
+        reference = None
+        last_exc: BaseException | None = None
+        for attempt, delay in enumerate([0.0, 0.5, 1.0, 2.0]):
+            if attempt > 0:
+                time.sleep(delay)
+            try:
+                reference = repo.lookup_reference(ref_name)
+                break
+            except (KeyError, pygit2.GitError) as exc:
+                last_exc = exc
+                if attempt == 3:
+                    raise RuntimeError(
+                        f"Unable to open branch ref '{ref_name}' in '{repository_path}' "
+                        "(branch may not exist yet; Ledger creates it on StoryCommitted)."
+                    ) from last_exc
+        if reference is None:
             raise RuntimeError(
                 f"Unable to open branch ref '{ref_name}' in '{repository_path}'."
-            ) from exc
+            ) from last_exc
         commit_obj = repo[reference.target]
         if not isinstance(commit_obj, pygit2.Commit):
             raise RuntimeError(f"Branch ref '{ref_name}' does not point to a commit.")
-        try:
-            tree_entry = commit_obj.tree[relative_path]
-        except KeyError:
+        blob_obj = tree_get_blob(repo, commit_obj.tree, relative_path)
+        if blob_obj is None:
             return ""
-        blob_obj = repo[tree_entry.id]
-        if not isinstance(blob_obj, pygit2.Blob):
-            raise RuntimeError(
-                f"Branch path '{relative_path}' does not resolve to a blob."
-            )
-        return bytes(blob_obj.data).decode("utf-8")
+        return bytes(blob_obj.data).decode("utf-8", errors="replace")
 
     @staticmethod
     def _read_latest_entry_hash(log_content: str) -> str | None:
@@ -755,66 +772,12 @@ class ProvenanceService:
         payload_text: str,
         commit_message: str,
     ) -> None:
-        try:
-            repo = pygit2.Repository(str(repository_path))
-            reference = repo.lookup_reference(ref_name)
-        except (KeyError, pygit2.GitError) as exc:
-            raise RuntimeError(
-                f"Unable to open branch ref '{ref_name}' in '{repository_path}'."
-            ) from exc
-
-        parent_commit = repo[reference.target]
-        if not isinstance(parent_commit, pygit2.Commit):
-            raise RuntimeError(f"Branch ref '{ref_name}' does not point to a commit.")
-
-        path_obj = Path(relative_path)
-        path_parts = path_obj.parts
-        if not path_parts:
-            raise RuntimeError("Invalid empty branch path.")
-
-        blob_oid = repo.create_blob(payload_text.encode("utf-8"))
-
-        current_tree: pygit2.Tree | None = parent_commit.tree
-        tree_stack: list[pygit2.Tree | None] = [current_tree]
-
-        # Traverse down, guarding against NoneType when walking missing nested dirs
-        for part in path_parts[:-1]:
-            if current_tree is not None and part in current_tree:
-                entry = current_tree[part]
-                current_tree = repo[entry.id]
-                if not isinstance(current_tree, pygit2.Tree):
-                    raise RuntimeError(
-                        f"Path part '{part}' exists but is not a directory."
-                    )
-            else:
-                current_tree = None
-            tree_stack.append(current_tree)
-
-        current_oid = blob_oid
-        current_mode = pygit2.GIT_FILEMODE_BLOB
-
-        # Build back up
-        for i, part in reversed(list(enumerate(path_parts))):
-            tb = (
-                repo.TreeBuilder(tree_stack[i])
-                if tree_stack[i] is not None
-                else repo.TreeBuilder()
-            )
-            tb.insert(part, current_oid, current_mode)
-            current_oid = tb.write()
-            current_mode = pygit2.GIT_FILEMODE_TREE
-
-        if parent_commit and current_oid == parent_commit.tree_id:
-            return
-
-        signature = self._resolve_commit_signature(repo, self._env_path)
-        repo.create_commit(
-            ref_name,
-            signature,
-            signature,
-            commit_message,
-            current_oid,
-            [parent_commit.id],
+        self._commit_branch_blob_impl(
+            repository_path=repository_path,
+            ref_name=ref_name,
+            relative_path=relative_path,
+            payload_bytes=payload_text.encode("utf-8"),
+            commit_message=commit_message,
         )
 
     def _commit_branch_file_bytes_impl(
@@ -826,14 +789,45 @@ class ProvenanceService:
         commit_message: str,
     ) -> None:
         """Inner commit logic for binary blobs (caller holds FileLock)."""
+        self._commit_branch_blob_impl(
+            repository_path=repository_path,
+            ref_name=ref_name,
+            relative_path=relative_path,
+            payload_bytes=payload_bytes,
+            commit_message=commit_message,
+        )
 
-        try:
-            repo = pygit2.Repository(str(repository_path))
-            reference = repo.lookup_reference(ref_name)
-        except (KeyError, pygit2.GitError) as exc:
+    def _commit_branch_blob_impl(
+        self,
+        repository_path: Path,
+        ref_name: str,
+        relative_path: str,
+        payload_bytes: bytes,
+        commit_message: str,
+    ) -> None:
+        """Inner commit logic for blob at path (caller holds FileLock)."""
+
+        repo = pygit2.Repository(str(repository_path))
+        reference = None
+        last_exc: BaseException | None = None
+        for attempt, delay in enumerate([0.0, 0.5, 1.0, 2.0]):
+            if attempt > 0:
+                time.sleep(delay)
+            try:
+                reference = repo.lookup_reference(ref_name)
+                break
+            except (KeyError, pygit2.GitError) as exc:
+                last_exc = exc
+                if attempt == 3:
+                    raise RuntimeError(
+                        f"Unable to open branch ref '{ref_name}' in '{repository_path}' "
+                        "(branch may not exist yet; Ledger creates it on StoryCommitted)."
+                    ) from last_exc
+
+        if reference is None:
             raise RuntimeError(
                 f"Unable to open branch ref '{ref_name}' in '{repository_path}'."
-            ) from exc
+            ) from last_exc
 
         parent_commit = repo[reference.target]
         if not isinstance(parent_commit, pygit2.Commit):
@@ -899,6 +893,7 @@ class ProvenanceService:
             name = name or repo.config["user.name"]
             email = email or repo.config["user.email"]
         except KeyError:
-            name = name or _DEFAULT_LEDGER_AUTHOR_NAME
-            email = email or _DEFAULT_LEDGER_AUTHOR_EMAIL
+            pass
+        name = name or _DEFAULT_LEDGER_AUTHOR_NAME
+        email = email or _DEFAULT_LEDGER_AUTHOR_EMAIL
         return pygit2.Signature(name, email)

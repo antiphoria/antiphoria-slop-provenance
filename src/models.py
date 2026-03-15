@@ -206,7 +206,14 @@ class Artifact(StrictModel):
 
 
 def canonical_json_bytes(data: dict[str, Any]) -> bytes:
-    """Return deterministic canonical JSON bytes for signing."""
+    """Return deterministic canonical JSON bytes for signing.
+
+    Uses sort_keys + compact separators. Python json.dumps formats floats as 0.0
+    (not 0); strict RFC 8785 JCS requires 0 for integral floats. Cross-language
+    validators (Go, TypeScript) implementing JCS may produce different bytes.
+    JCS compliance is deferred; use the `jcs` library if interoperability with
+    strict JCS validators is required.
+    """
 
     return json.dumps(
         data,

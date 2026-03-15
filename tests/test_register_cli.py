@@ -182,9 +182,13 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("modelId: \"human\"", markdown_text)
             self.assertIn("My Human Story", markdown_text)
 
-            # Attest passes (patch verifier to accept fake signature)
+            # Attest passes (patch verifier to accept fake signature; skip remote anchor
+            # since the test artifact is not published to Supabase)
             with patch(
                 "src.adapters.crypto_notary.CryptoNotaryAdapter.verify_artifact_payload",
+                return_value=True,
+            ), patch(
+                "src.services.verification_service.VerificationService._verify_remote_anchor",
                 return_value=True,
             ):
                 attest_args = cli.build_parser().parse_args(

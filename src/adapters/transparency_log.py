@@ -146,6 +146,7 @@ class TransparencyLogEntry:
     anchored_at: str
     remote_receipt: str | None
     metadata: dict[str, Any]
+    bitcoin_block_height: int | None = None
 
 
 class TransparencyLogAdapter:
@@ -186,6 +187,7 @@ class TransparencyLogAdapter:
         source_file: Path | str,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        bitcoin_block_height: int | None = None,
     ) -> TransparencyLogEntry:
         """Append a new hash anchor entry and optionally publish it.
 
@@ -202,6 +204,7 @@ class TransparencyLogAdapter:
                 previous_entry_hash=previous_entry_hash,
                 request_id=request_id,
                 metadata=metadata,
+                bitcoin_block_height=bitcoin_block_height,
                 skip_remote=True,
             )
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -226,6 +229,7 @@ class TransparencyLogAdapter:
         previous_entry_hash: str | None,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        bitcoin_block_height: int | None = None,
         skip_remote: bool = False,
     ) -> tuple[TransparencyLogEntry, dict[str, Any]]:
         """Build one transparency record without writing local files."""
@@ -243,6 +247,8 @@ class TransparencyLogAdapter:
             "anchoredAt": anchored_at,
             "metadata": metadata or {},
         }
+        if bitcoin_block_height is not None:
+            payload["bitcoinBlockHeight"] = bitcoin_block_height
         entry_hash = sha256_hex(canonical_json_bytes(payload))
         full_record = {**payload, "entryHash": entry_hash}
         remote_receipt = None if skip_remote else self._publish_entry(full_record)
@@ -258,6 +264,7 @@ class TransparencyLogAdapter:
             anchored_at=anchored_at,
             remote_receipt=remote_receipt,
             metadata=metadata or {},
+            bitcoin_block_height=bitcoin_block_height,
         )
         return entry, serializable
 
@@ -362,6 +369,11 @@ class TransparencyLogAdapter:
                 else str(loaded.get("remoteReceipt"))
             ),
         }
+        bbh = loaded.get("bitcoinBlockHeight")
+        try:
+            bitcoin_block_height = int(bbh) if bbh is not None else None
+        except (TypeError, ValueError):
+            bitcoin_block_height = None
         return TransparencyLogEntry(
             entry_id=payload["entryId"],
             artifact_hash=payload["artifactHash"],
@@ -373,6 +385,7 @@ class TransparencyLogAdapter:
             anchored_at=payload["anchoredAt"],
             remote_receipt=payload["remoteReceipt"],
             metadata=payload["metadata"],
+            bitcoin_block_height=bitcoin_block_height,
         )
 
     @staticmethod
@@ -387,6 +400,8 @@ class TransparencyLogAdapter:
             "anchoredAt": entry.anchored_at,
             "metadata": entry.metadata,
         }
+        if entry.bitcoin_block_height is not None:
+            payload["bitcoinBlockHeight"] = entry.bitcoin_block_height
         return sha256_hex(canonical_json_bytes(payload))
 
     @staticmethod
@@ -406,6 +421,9 @@ class TransparencyLogAdapter:
                 else {}
             ),
         }
+        bbh = payload.get("bitcoinBlockHeight")
+        if bbh is not None:
+            hash_payload["bitcoinBlockHeight"] = bbh
         return sha256_hex(canonical_json_bytes(hash_payload))
 
     def _read_latest_entry_hash(self) -> str | None:

@@ -56,7 +56,9 @@ class GitLedgerAdapter:
         self._artifacts_directory = artifacts_directory.strip("/\\")
         self._repository_path = (repository_path or Path.cwd()).resolve()
         self._env_path = env_path or Path(".env")
-        self._repo = self._open_repository(self._repository_path)
+        # Validate repository at startup; do not store. libgit2 repo pointers are
+        # not thread-safe. Open repo inside each commit thread (see _commit_markdown_impl).
+        self._open_repository(self._repository_path)
         self._enable_c2pa = read_env_bool(
             "ENABLE_C2PA",
             default=False,
@@ -186,7 +188,7 @@ class GitLedgerAdapter:
         """Render artifact markdown with strict frontmatter schema. No PEM footers."""
         return render_artifact_markdown(event.artifact, event.body)
 
-    def _resolve_commit_signature(self) -> pygit2.Signature:
+    def _resolve_commit_signature(self, repo: pygit2.Repository) -> pygit2.Signature:
         """Resolve git author/committer signature.
 
         Priority: LEDGER_AUTHOR_NAME/EMAIL (env or .env) > git config > default bot.
@@ -198,11 +200,12 @@ class GitLedgerAdapter:
         if name and email:
             return pygit2.Signature(name, email)
         try:
-            name = name or self._repo.config["user.name"]
-            email = email or self._repo.config["user.email"]
+            name = name or repo.config["user.name"]
+            email = email or repo.config["user.email"]
         except KeyError:
-            name = name or _DEFAULT_LEDGER_AUTHOR_NAME
-            email = email or _DEFAULT_LEDGER_AUTHOR_EMAIL
+            pass
+        name = name or _DEFAULT_LEDGER_AUTHOR_NAME
+        email = email or _DEFAULT_LEDGER_AUTHOR_EMAIL
         return pygit2.Signature(name, email)
 
     def _commit_markdown_sync(
@@ -255,21 +258,23 @@ class GitLedgerAdapter:
         ref_name: str,
     ) -> str:
         """Inner commit logic (caller holds FileLock)."""
-        parent_commit = self._get_branch_head(ref_name)
+        repo = self._open_repository(self._repository_path)
+        parent_commit = self._get_branch_head(repo, ref_name)
 
         tree_id = self._build_root_tree_oid(
+            repo=repo,
             relative_path=relative_path,
             markdown_payload=markdown_payload,
             c2pa_sidecar_payload=c2pa_sidecar_payload,
             parent_tree_oid=parent_commit.tree_id if parent_commit else None,
         )
 
-        signature = self._resolve_commit_signature()
+        signature = self._resolve_commit_signature(repo)
         parents: list[pygit2.Oid] = [parent_commit.id] if parent_commit else []
         if parent_commit is not None and parent_commit.tree_id == tree_id:
             return str(parent_commit.id)
 
-        commit_id = self._repo.create_commit(
+        commit_id = repo.create_commit(
             ref_name,
             signature,
             signature,
@@ -279,20 +284,23 @@ class GitLedgerAdapter:
         )
         return str(commit_id)
 
-    def _get_branch_head(self, ref_name: str) -> pygit2.Commit | None:
+    def _get_branch_head(
+        self, repo: pygit2.Repository, ref_name: str
+    ) -> pygit2.Commit | None:
         """Return current branch head commit for a given ref name."""
 
         try:
-            reference = self._repo.lookup_reference(ref_name)
+            reference = repo.lookup_reference(ref_name)
         except KeyError:
             return None
-        target = self._repo[reference.target]
+        target = repo[reference.target]
         if not isinstance(target, pygit2.Commit):
             raise RuntimeError(f"Invalid branch head object for ref '{ref_name}'.")
         return target
 
     def _build_root_tree_oid(
         self,
+        repo: pygit2.Repository,
         relative_path: str,
         markdown_payload: str,
         c2pa_sidecar_payload: bytes | None,
@@ -301,6 +309,11 @@ class GitLedgerAdapter:
         """Build root tree with artifact files, preserving parent tree (e.g. .provenance)."""
 
         path_obj = Path(relative_path)
+        if ".." in path_obj.parts or path_obj.is_absolute():
+            raise RuntimeError(
+                f"Invalid artifact path '{relative_path}': parent traversal and "
+                "absolute paths are not allowed."
+            )
         parent_dir = path_obj.parent.as_posix()
         if self._artifacts_directory:
             if parent_dir != self._artifacts_directory:
@@ -313,21 +326,21 @@ class GitLedgerAdapter:
                 f"Invalid artifact path '{relative_path}'. Expected repository root."
             )
 
-        blob_oid = self._repo.create_blob(markdown_payload.encode("utf-8"))
+        blob_oid = repo.create_blob(markdown_payload.encode("utf-8"))
         if not self._artifacts_directory:
             root_tb = (
-                self._repo.TreeBuilder(parent_tree_oid)
+                repo.TreeBuilder(parent_tree_oid)
                 if parent_tree_oid is not None
-                else self._repo.TreeBuilder()
+                else repo.TreeBuilder()
             )
             root_tb.insert(path_obj.name, blob_oid, pygit2.GIT_FILEMODE_BLOB)
             if c2pa_sidecar_payload is not None:
-                sidecar_blob_oid = self._repo.create_blob(c2pa_sidecar_payload)
+                sidecar_blob_oid = repo.create_blob(c2pa_sidecar_payload)
                 sidecar_name = f"{path_obj.stem}.c2pa"
                 root_tb.insert(sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB)
             return root_tb.write()
 
-        parent_tree = self._repo[parent_tree_oid] if parent_tree_oid else None
+        parent_tree = repo[parent_tree_oid] if parent_tree_oid else None
         artifacts_parent_oid: pygit2.Oid | None = None
         if parent_tree is not None and self._artifacts_directory:
             parts = self._artifacts_directory.split("/")
@@ -338,31 +351,64 @@ class GitLedgerAdapter:
                 entry = current[part]
                 if not entry:
                     break
-                obj = self._repo[entry.id]
+                obj = repo[entry.id]
                 if isinstance(obj, pygit2.Tree):
                     current = obj
                     artifacts_parent_oid = obj.id
                 else:
                     break
         artifacts_tb = (
-            self._repo.TreeBuilder(artifacts_parent_oid)
+            repo.TreeBuilder(artifacts_parent_oid)
             if artifacts_parent_oid is not None
-            else self._repo.TreeBuilder()
+            else repo.TreeBuilder()
         )
         artifacts_tb.insert(path_obj.name, blob_oid, pygit2.GIT_FILEMODE_BLOB)
         if c2pa_sidecar_payload is not None:
-            sidecar_blob_oid = self._repo.create_blob(c2pa_sidecar_payload)
+            sidecar_blob_oid = repo.create_blob(c2pa_sidecar_payload)
             sidecar_name = f"{path_obj.stem}.c2pa"
-            artifacts_tb.insert(
-                sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB
+        artifacts_tb.insert(
+            sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB
             )
         artifacts_oid = artifacts_tb.write()
-        root_tb = (
-            self._repo.TreeBuilder(parent_tree_oid)
-            if parent_tree_oid is not None
-            else self._repo.TreeBuilder()
-        )
-        root_tb.insert(
-            self._artifacts_directory, artifacts_oid, pygit2.GIT_FILEMODE_TREE
-        )
-        return root_tb.write()
+
+        # Git trees are single-level; insert expects one path component.
+        # For nested artifacts_directory (e.g. docs/artifacts), build bottom-up.
+        path_parts = self._artifacts_directory.split("/")
+        if len(path_parts) == 1:
+            root_tb = (
+                repo.TreeBuilder(parent_tree_oid)
+                if parent_tree_oid is not None
+                else repo.TreeBuilder()
+            )
+            root_tb.insert(
+                self._artifacts_directory, artifacts_oid, pygit2.GIT_FILEMODE_TREE
+            )
+            return root_tb.write()
+
+        # Nested path: traverse down to build tree_stack, then build up.
+        current_tree: pygit2.Tree | None = parent_tree
+        tree_stack: list[pygit2.Tree | None] = [current_tree]
+        for part in path_parts[:-1]:
+            if current_tree is not None and part in current_tree:
+                entry = current_tree[part]
+                obj = repo[entry.id]
+                if isinstance(obj, pygit2.Tree):
+                    current_tree = obj
+                else:
+                    current_tree = None
+            else:
+                current_tree = None
+            tree_stack.append(current_tree)
+
+        current_oid = artifacts_oid
+        current_mode = pygit2.GIT_FILEMODE_TREE
+        for i, part in reversed(list(enumerate(path_parts))):
+            tb = (
+                repo.TreeBuilder(tree_stack[i])
+                if tree_stack[i] is not None
+                else repo.TreeBuilder()
+            )
+            tb.insert(part, current_oid, current_mode)
+            current_oid = tb.write()
+            current_mode = pygit2.GIT_FILEMODE_TREE
+        return current_oid

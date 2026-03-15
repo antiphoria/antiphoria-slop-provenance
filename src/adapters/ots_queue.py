@@ -3,6 +3,11 @@
 The queue lives at .provenance/ots-queue.jsonl on the default branch (e.g. main).
 Each line is a JSON event: pending, forged, or failed.
 Current state is derived by taking the latest event per request_id.
+
+Uses read-modify-commit: content is read from git ref (source of truth), new line
+appended in memory, full blob committed. Git history is preserved; branch tip is
+replaced. FileLock coordinates within a single process; for multi-worker Kafka,
+see distributed locking requirements.
 """
 
 from __future__ import annotations
@@ -55,8 +60,9 @@ class OtsQueueAdapter:
             name = name or repo.config["user.name"]
             email = email or repo.config["user.email"]
         except KeyError:
-            name = name or _DEFAULT_LEDGER_AUTHOR_NAME
-            email = email or _DEFAULT_LEDGER_AUTHOR_EMAIL
+            pass
+        name = name or _DEFAULT_LEDGER_AUTHOR_NAME
+        email = email or _DEFAULT_LEDGER_AUTHOR_EMAIL
         return pygit2.Signature(name, email)
 
     def _read_current_content(self, repo: pygit2.Repository) -> str:
@@ -101,8 +107,23 @@ class OtsQueueAdapter:
         )
         _logger.info("Created branch %s for OTS queue", self._queue_ref)
 
+    @staticmethod
+    def _validate_jsonl(content: str) -> None:
+        """Validate that content is valid JSONL (each non-empty line parses as JSON)."""
+        for i, line in enumerate(content.splitlines()):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Invalid JSONL: line {i + 1} is not valid JSON: {exc}"
+                ) from exc
+
     def _commit_content(self, content: str, message: str) -> None:
         """Commit queue content to the branch."""
+        self._validate_jsonl(content)
         repo = pygit2.Repository(str(self._repository_path))
         self._ensure_branch_exists(repo)
         ref = repo.lookup_reference(self._queue_ref)
