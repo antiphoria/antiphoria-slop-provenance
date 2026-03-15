@@ -224,6 +224,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip artistic attestation wizard; use defaults (for CI/automation).",
     )
+    register_parser.add_argument(
+        "--no-webauthn",
+        action="store_true",
+        help="Skip WebAuthn/FIDO2 attestation; use legacy (y/N) only.",
+    )
 
     verify_parser = subparsers.add_parser(
         "verify",
@@ -448,6 +453,72 @@ def build_parser() -> argparse.ArgumentParser:
         "--merkle-root",
         required=True,
         help="Expected Merkle root (hex) to compare against.",
+    )
+
+    verify_hash_parser = subparsers.add_parser(
+        "verify-hash",
+        help="Compute artifactHash from artifact file using documented canonicalization.",
+    )
+    verify_hash_parser.add_argument(
+        "--file",
+        required=True,
+        help="Artifact markdown file path.",
+    )
+
+    verify_inclusion_parser = subparsers.add_parser(
+        "verify-inclusion",
+        help="Verify artifact is included in Merkle tree via inclusion proof.",
+    )
+    verify_inclusion_parser.add_argument(
+        "--leaf-hash",
+        required=True,
+        help="Leaf hash (entry_hash from transparency log) to verify.",
+    )
+    verify_inclusion_parser.add_argument(
+        "--merkle-root",
+        required=True,
+        help="Expected Merkle root (hex).",
+    )
+    verify_inclusion_parser.add_argument(
+        "--proof",
+        required=True,
+        help="JSON array of sibling hashes from leaf to root.",
+    )
+    verify_inclusion_parser.add_argument(
+        "--leaf-index",
+        type=int,
+        required=True,
+        help="Index of the leaf in the transparency log (0-based).",
+    )
+
+    build_proof_parser = subparsers.add_parser(
+        "build-inclusion-proof",
+        help="Build Merkle inclusion proof for an artifact hash.",
+    )
+    build_proof_parser.add_argument(
+        "--repo-path",
+        default=_default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
+    )
+    build_proof_parser.add_argument(
+        "--artifact-hash",
+        required=True,
+        help="Artifact hash (payload SHA-256) or entry_hash to build proof for.",
+    )
+    build_proof_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output proof as JSON (proof array + leaf_index + merkle_root).",
+    )
+
+    webauthn_register_parser = subparsers.add_parser(
+        "webauthn-register",
+        help="Register a WebAuthn credential for author attestation (run once per device).",
+    )
+    webauthn_register_parser.add_argument(
+        "--repo-path",
+        default=_default_repo_path(),
+        help="Ledger repo path (credentials stored in repo or ~/.config).",
     )
 
     admin_parser = subparsers.add_parser(
@@ -1082,6 +1153,27 @@ async def _run_register_command(args: argparse.Namespace) -> int:
             print("\nRegistration aborted by user.")
             return 1
 
+    webauthn_attestation = None
+    if not getattr(args, "no_webauthn", False):
+        from src.canonicalization import canonicalize_body_for_hash
+        from src.webauthn_attestation import get_webauthn_assertion
+
+        challenge_bytes = canonicalize_body_for_hash(body)
+        challenge_hash = hashlib.sha256(challenge_bytes).digest()
+        print("Insert your security key and touch it to complete attestation...")
+        webauthn_attestation = get_webauthn_assertion(
+            challenge=challenge_hash,
+            repo_path=repository_path,
+            env_path=env_path,
+        )
+        if webauthn_attestation is None:
+            print(
+                "WebAuthn skipped (set WEBAUTHN_RP_ID to your production domain, "
+                "or no device/fido2). Using legacy."
+            )
+        else:
+            print("WebAuthn attestation captured.")
+
     async def _record_signed(event: StorySigned) -> None:
         if event.artifact.signature is None:
             raise RuntimeError("Signed artifact is missing signature block.")
@@ -1140,6 +1232,7 @@ async def _run_register_command(args: argparse.Namespace) -> int:
         title=title,
         license=args.license,
         attestation=attestation,
+        webauthn_attestation=webauthn_attestation,
         registration_ceremony=ceremony,
     )
 
@@ -1750,6 +1843,31 @@ def _run_anchor_merkle_root_command(args: argparse.Namespace) -> int:
     with open(snapshots_path, "a", encoding="utf-8") as f:
         f.write(line)
 
+    try:
+        publish_url = _read_env_optional("MERKLE_ANCHORS_PUBLISH_URL", env_path=env_path)
+        if not publish_url:
+            base_url = _read_env_optional("TRANSPARENCY_LOG_PUBLISH_URL", env_path=env_path)
+            if base_url and "transparency_log" in base_url:
+                publish_url = base_url.replace("transparency_log", "merkle_anchors")
+        if publish_url:
+            publish_headers, _ = build_supabase_publish_config(publish_url, env_path=env_path)
+            if publish_headers:
+                from src.adapters.transparency_log import publish_merkle_anchor
+
+                published = publish_merkle_anchor(
+                    root_hash=merkle_root,
+                    entry_count=len(entries),
+                    anchored_at=snapshot["anchored_at"],
+                    ots_path=ots_rel,
+                    bitcoin_block_height=None,
+                    publish_url=publish_url,
+                    publish_headers=publish_headers,
+                )
+                if published:
+                    print("Merkle anchor published to remote.")
+    except RuntimeError:
+        pass
+
     repo = pygit2.Repository(str(repository_path))
     repo.index.add(ots_rel)
     repo.index.add(snapshots_path.relative_to(repository_path).as_posix())
@@ -1815,6 +1933,118 @@ def _run_verify_transparency_log_command(args: argparse.Namespace) -> int:
     print(
         f"MISMATCH: computed={computed_root}, expected={expected} "
         f"({len(entries)} entries)"
+    )
+    return 1
+
+
+def _run_verify_hash_command(args: argparse.Namespace) -> int:
+    """Compute artifactHash from artifact file using documented canonicalization."""
+
+    from src.canonicalization import compute_payload_hash
+
+    artifact_path = Path(args.file).resolve()
+    if not artifact_path.exists():
+        print(f"File not found: {artifact_path}")
+        return 1
+    try:
+        envelope, payload = parse_artifact_markdown(artifact_path)
+    except RuntimeError as exc:
+        print(f"Parse error: {exc}")
+        return 1
+    digest_hex = compute_payload_hash(payload)
+    print(digest_hex)
+    return 0
+
+
+def _run_verify_inclusion_command(args: argparse.Namespace) -> int:
+    """Verify artifact is included in Merkle tree via inclusion proof."""
+
+    from src.merkle import verify_merkle_proof
+
+    try:
+        proof = json.loads(args.proof)
+    except json.JSONDecodeError as exc:
+        print(f"Invalid proof JSON: {exc}")
+        return 1
+    if not isinstance(proof, list):
+        print("Proof must be a JSON array of hex strings.")
+        return 1
+    if not all(isinstance(p, str) for p in proof):
+        print("Proof elements must be hex strings.")
+        return 1
+    valid = verify_merkle_proof(
+        leaf_hash=args.leaf_hash.strip().lower(),
+        proof=proof,
+        root=args.merkle_root.strip().lower(),
+        leaf_index=args.leaf_index,
+    )
+    if valid:
+        print("OK: Inclusion proof valid.")
+        return 0
+    print("FAIL: Inclusion proof invalid.")
+    return 1
+
+
+def _run_build_inclusion_proof_command(args: argparse.Namespace) -> int:
+    """Build Merkle inclusion proof for an artifact hash."""
+
+    from src.merkle import build_merkle_proof, build_merkle_root
+
+    repository_path = _require_repo_path(args)
+    log_path = repository_path / ".provenance" / "transparency-log.jsonl"
+    if not log_path.exists():
+        print("No transparency log found.")
+        return 1
+    transparency_log = TransparencyLogAdapter(log_path=log_path)
+    entries = transparency_log.parse_entries_from_jsonl(
+        log_path.read_text(encoding="utf-8")
+    )
+    if not entries:
+        print("Transparency log is empty.")
+        return 1
+    entry_hashes = [e.entry_hash for e in entries]
+    target = args.artifact_hash.strip().lower()
+    leaf_index = next(
+        (i for i, e in enumerate(entries) if e.entry_hash == target or e.artifact_hash == target),
+        None,
+    )
+    if leaf_index is None:
+        print(f"Hash not found in transparency log: {target[:16]}...")
+        return 1
+    leaf_hash = entry_hashes[leaf_index]
+    proof = build_merkle_proof(entry_hashes, leaf_index)
+    merkle_root = build_merkle_root(entry_hashes)
+    if getattr(args, "json", False):
+        output = {
+            "proof": proof,
+            "leaf_index": leaf_index,
+            "leaf_hash": leaf_hash,
+            "merkle_root": merkle_root,
+        }
+        print(json.dumps(output, sort_keys=True))
+    else:
+        print(f"Proof: {json.dumps(proof)}")
+        print(f"Leaf index: {leaf_index}")
+        print(f"Leaf hash: {leaf_hash}")
+        print(f"Merkle root: {merkle_root}")
+    return 0
+
+
+def _run_webauthn_register_command(args: argparse.Namespace) -> int:
+    """Register a WebAuthn credential for author attestation."""
+
+    from src.webauthn_attestation import register_webauthn_credential
+
+    repository_path = _require_repo_path(args)
+    env_path = get_project_env_path()
+    print("Insert your security key and touch it to register...")
+    if register_webauthn_credential(repo_path=repository_path, env_path=env_path):
+        print("WebAuthn credential registered successfully.")
+        return 0
+    print(
+        "WebAuthn registration failed. Set WEBAUTHN_RP_ID to your production domain "
+        "(e.g. antiphoria-archive.com), ensure fido2 is installed (pip install fido2), "
+        "and a FIDO2 device is connected."
     )
     return 1
 
@@ -1905,6 +2135,14 @@ async def _dispatch(args: argparse.Namespace) -> int:
         return _run_anchor_merkle_root_command(args)
     if args.command == "verify-transparency-log":
         return _run_verify_transparency_log_command(args)
+    if args.command == "verify-hash":
+        return _run_verify_hash_command(args)
+    if args.command == "verify-inclusion":
+        return _run_verify_inclusion_command(args)
+    if args.command == "build-inclusion-proof":
+        return _run_build_inclusion_proof_command(args)
+    if args.command == "webauthn-register":
+        return _run_webauthn_register_command(args)
     if args.command == "events":
         return await _run_events_command(args)
     if args.command == "admin":
@@ -1933,6 +2171,8 @@ def main() -> int:
         "upgrade",
         "process-pending",
         "verify-transparency-log",
+        "build-inclusion-proof",
+        "webauthn-register",
     }:
         lock_base = _require_repo_path(parsed_args)
     lock_path = lock_base / ".slop-orchestrator.lock"

@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.serialization import (
     PrivateFormat,
 )
 
+from src.canonicalization import compute_payload_hash
 from src.adapters.c2pa_manifest import (
     _normalize_private_key_to_pkcs8,
     _SDK_CARRIER_FORMAT,
@@ -31,7 +32,6 @@ from src.models import (
     GenerationContext,
     Hyperparameters,
     Provenance,
-    sha256_hex,
 )
 
 
@@ -263,7 +263,7 @@ class C2PAManifestTest(unittest.TestCase):
         self.assertEqual(markdown_assertion["data"]["content"], "payload")
         self.assertEqual(
             markdown_assertion["data"]["payloadHash"],
-            sha256_hex("payload".encode("utf-8")),
+            compute_payload_hash("payload"),
         )
 
     def test_sdk_validation_rejects_missing_markdown_assertion(self) -> None:

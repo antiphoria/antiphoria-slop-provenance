@@ -99,8 +99,18 @@ def read_env_int(
 
 
 def get_project_env_path() -> Path:
-    """Return path to .env at project root (from this module's location)."""
-    return Path(__file__).resolve().parents[1] / ".env"
+    """Return path to .env at project root. Tries module location, then CWD."""
+    candidates = [
+        Path(__file__).resolve().parents[1] / ".env",  # editable install
+        Path.cwd() / ".env",  # run from project root (e.g. non-editable install)
+    ]
+    project_root = os.getenv("PROJECT_ROOT")
+    if project_root:
+        candidates.insert(0, Path(project_root).resolve() / ".env")
+    for p in candidates:
+        if p.exists():
+            return p
+    return candidates[0]  # caller may use for project_root even if .env missing
 
 
 def resolve_artifact_db_path(

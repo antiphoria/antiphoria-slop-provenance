@@ -78,6 +78,60 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def publish_merkle_anchor(
+    root_hash: str,
+    entry_count: int,
+    anchored_at: str,
+    ots_path: str | None = None,
+    bitcoin_block_height: int | None = None,
+    publish_url: str | None = None,
+    publish_headers: dict[str, str] | None = None,
+    timeout_sec: float = 10.0,
+) -> bool:
+    """Publish Merkle anchor to Supabase merkle_anchors table.
+
+    Returns True on success, False on soft-fail (e.g. network error).
+    """
+    if not publish_url or not publish_url.strip() or not publish_headers:
+        return False
+    payload = {
+        "rootHash": root_hash,
+        "entryCount": entry_count,
+        "anchoredAt": anchored_at,
+        "otsPath": ots_path,
+        "bitcoinBlockHeight": bitcoin_block_height,
+    }
+    body = {"payload": payload}
+    headers = {
+        "Content-Type": "application/json",
+        **publish_headers,
+    }
+    request = urllib.request.Request(
+        publish_url,
+        method="POST",
+        headers=headers,
+        data=json.dumps(body).encode("utf-8"),
+    )
+    try:
+        with urllib.request.urlopen(  # noqa: S310
+            request,
+            timeout=min(timeout_sec, 5.0),
+        ) as response:
+            response.read()
+            return True
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        socket.timeout,
+        ConnectionError,
+    ) as exc:
+        _logger.warning(
+            "Merkle anchor publish soft-fail. Local anchor secure. Error: %s",
+            _sanitize_for_log(str(exc)),
+        )
+        return False
+
+
 @dataclass(frozen=True)
 class TransparencyLogEntry:
     """Immutable append-only transparency entry."""

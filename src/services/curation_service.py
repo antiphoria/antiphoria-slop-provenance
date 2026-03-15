@@ -9,10 +9,6 @@ from uuid import UUID
 
 from src.models import Curation
 
-_FOOTER_MARKERS: tuple[str, ...] = (
-    "\n-----BEGIN ANTIPHORIA ARTIFACT SIGNATURE-----",
-)
-
 
 def extract_request_id_from_artifact_path(file_path: Path) -> UUID:
     """Extract request id from curated artifact filename."""
@@ -36,28 +32,14 @@ def _sanitize_null_bytes(text: str) -> str:
 
 
 def extract_markdown_body(markdown_text: str) -> str:
-    """Remove frontmatter and signature footer, returning raw artifact body."""
-
+    """Remove frontmatter, returning raw artifact body. Body is everything after
+    the second --- delimiter. No footer."""
     body = _sanitize_null_bytes(markdown_text)
     if body.startswith("---\n"):
         second_delimiter_index = body.find("\n---\n", 4)
         if second_delimiter_index == -1:
             raise RuntimeError("Invalid markdown frontmatter block.")
         body = body[second_delimiter_index + len("\n---\n"):]
-
-    # Use rfind to locate the canonical footer (last occurrence). Prevents injection
-    # attacks where an attacker embeds the marker in the body to truncate the payload.
-    footer_index = -1
-    for footer_marker in _FOOTER_MARKERS:
-        candidate_index = body.rfind(footer_marker)
-        if candidate_index == -1:
-            continue
-        if footer_index == -1 or candidate_index > footer_index:
-            footer_index = candidate_index
-
-    if footer_index != -1:
-        body = body[:footer_index]
-
     stripped = body.strip()
     if not stripped:
         raise RuntimeError("Curated artifact body is empty after metadata stripping.")

@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest-httpserver>=1.0.0"]
+webauthn = ["fido2>=1.1.0"]
 
 [project.scripts]
 slop-cli = "src.cli:main"

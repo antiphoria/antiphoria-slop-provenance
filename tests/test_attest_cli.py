@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import io
 import json
 import os
@@ -19,6 +18,7 @@ import pygit2
 
 from src import cli
 from src.adapters.git_ledger import GitLedgerAdapter
+from src.canonicalization import compute_payload_hash
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.transparency_log import TransparencyLogAdapter
 from src.events import InMemoryEventBus, StorySigned
@@ -81,7 +81,7 @@ def _build_story_signed_event(request_id: UUID, body: str) -> StorySigned:
             ),
         ),
         signature=SignatureBlock(
-            artifactHash=hashlib.sha256(body.encode("utf-8")).hexdigest(),
+            artifactHash=compute_payload_hash(body),
             cryptographicSignature="ZmFrZS1zaWduYXR1cmU=",
             verificationAnchor=VerificationAnchor(
                 signerFingerprint="test-fingerprint"
@@ -424,7 +424,7 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
             timestamp_found=False,
             timestamp_valid=False,
             key_status_at_signing_time="active",
-            errors=["No RFC3161 timestamp token found for artifact hash."],
+            errors=["No RFC3161 timestamp token."],
             branch=f"artifact/{request_id}",
             commit_oid="abc123",
             ledger_path=f"{request_id}.md",
@@ -463,7 +463,7 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
             timestamp_found=False,
             timestamp_valid=False,
             key_status_at_signing_time="active",
-            errors=["No RFC3161 timestamp token found for artifact hash."],
+            errors=["No RFC3161 timestamp token."],
             branch=f"artifact/{request_id}",
             commit_oid="abc123",
             ledger_path=f"{request_id}.md",
@@ -502,7 +502,7 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
             timestamp_found=False,
             timestamp_valid=False,
             key_status_at_signing_time="active",
-            errors=["No RFC3161 timestamp token found for artifact hash."],
+            errors=["No RFC3161 timestamp token."],
             branch=f"artifact/{request_id}",
             commit_oid="abc123",
             ledger_path=f"{request_id}.md",

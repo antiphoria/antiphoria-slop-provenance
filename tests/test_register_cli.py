@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import io
 import os
 import tempfile
@@ -17,6 +16,7 @@ import pygit2
 
 from src import cli
 from src.adapters.git_ledger import GitLedgerAdapter
+from src.canonicalization import compute_payload_hash
 from src.events import InMemoryEventBus, StoryHumanRegistered, StorySigned
 from src.models import (
     Artifact,
@@ -34,7 +34,7 @@ def _build_human_story_signed_event(
 ) -> StorySigned:
     """Build StorySigned with source=human and sentinel provenance."""
 
-    artifact_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    artifact_hash = compute_payload_hash(body)
     artifact = Artifact(
         title=title,
         timestamp=datetime.now(timezone.utc),

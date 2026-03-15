@@ -32,6 +32,7 @@ from src.events import (
     StorySigned,
 )
 from src.policies.licensing import get_license_id
+from src.canonicalization import CANONICALIZATION_VERSION, compute_payload_hash
 from src.models import (
     Artifact,
     AuthorAttestation,
@@ -46,6 +47,7 @@ from src.models import (
     SignatureBlock,
     UsageMetrics,
     VerificationAnchor,
+    WebAuthnAttestation,
     build_envelope_signing_target,
     canonical_json_bytes,
     sha256_hex,
@@ -212,28 +214,41 @@ class CryptoNotaryAdapter:
                 return "unknown"
             return sha256_hex(self._private_key)[:32]
 
-    def _resolve_ed25519_key(
-        self,
-    ) -> tuple[bytes | None, str | None]:
-        """Resolve Ed25519 private key and fingerprint if configured."""
+    def _resolve_ed25519_key(self) -> tuple[bytes, str]:
+        """Resolve Ed25519 private key and fingerprint. Required for signing."""
 
-        path_value = read_env_optional(
+        path_value = read_env_required(
             _ED25519_PRIVATE_KEY_ENV,
             env_path=self._env_path,
         )
-        if not path_value or not path_value.strip():
-            return None, None
-        key_path = Path(path_value.strip())
+        path_value = path_value.strip()
+        if not path_value:
+            raise RuntimeError(
+                f"Missing required {_ED25519_PRIVATE_KEY_ENV}. "
+                "Set it in .env or via run-secure.ps1 (vault must contain ed25519_private.pem)."
+            )
+        key_path = Path(path_value)
         if not key_path.is_absolute():
             key_path = (self._env_path.parent / key_path).resolve()
-        key_bytes = _load_key_bytes(key_path)
+        if not key_path.exists():
+            raise RuntimeError(
+                f"Ed25519 private key not found: '{key_path}'. "
+                "Mount the vault and ensure ed25519_private.pem exists."
+            )
+        key_bytes = key_path.read_bytes()
+        if not key_bytes or not key_bytes.strip():
+            raise RuntimeError(
+                f"Ed25519 private key file is empty: '{key_path}'."
+            )
         try:
             key = _load_ed25519_private_key(key_bytes)
             pub_bytes = _ed25519_public_key_bytes(key)
             fingerprint = sha256_hex(pub_bytes)[:32]
             return key_bytes, fingerprint
-        except Exception:  # noqa: BLE001
-            return None, None
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"Failed to load Ed25519 private key from '{key_path}': {exc}"
+            ) from exc
 
     def _resolve_public_key(self) -> bytes:
         """Resolve and load ML-DSA public key bytes from configured path."""
@@ -374,6 +389,7 @@ class CryptoNotaryAdapter:
             license=event.license,
             curation=None,
             author_attestation=event.attestation,
+            webauthn_attestation=event.webauthn_attestation,
             registration_ceremony=event.registration_ceremony,
         )
         await self._event_bus.emit(
@@ -409,13 +425,14 @@ class CryptoNotaryAdapter:
         license: str,
         curation: Curation | None,
         author_attestation: AuthorAttestation | None = None,
+        webauthn_attestation: WebAuthnAttestation | None = None,
         registration_ceremony: RegistrationCeremony | None = None,
     ) -> tuple[Artifact, C2PAManifestArtifact | None]:
         """Construct unsigned envelope, sign canonical target, attach signature."""
 
         if self._private_key is None:
             raise RuntimeError("Private key is required for signing operations.")
-        payload_hash = sha256_hex(body.encode("utf-8"))
+        payload_hash = compute_payload_hash(body)
         unsigned_envelope = Artifact(
             title=title,
             timestamp=datetime.now(timezone.utc),
@@ -437,6 +454,12 @@ class CryptoNotaryAdapter:
                 usageMetrics=usage_metrics,
                 embeddedWatermark=embedded_watermark,
                 authorAttestation=author_attestation,
+                webauthnAttestation=webauthn_attestation,
+                attestationStrength=(
+                    "webauthn"
+                    if webauthn_attestation
+                    else ("legacy" if author_attestation else None)
+                ),
                 registrationCeremony=registration_ceremony,
             ),
             curation=curation,
@@ -462,6 +485,7 @@ class CryptoNotaryAdapter:
                 None if c2pa_manifest is None else c2pa_manifest.manifest_hash
             ),
             prev_hash=None,
+            canonicalization_version=CANONICALIZATION_VERSION,
         )
         signing_hash = sha256_hex(canonical_json_bytes(signing_target))
         signature_bytes = await asyncio.to_thread(
@@ -476,28 +500,30 @@ class CryptoNotaryAdapter:
             verificationAnchor=VerificationAnchor(
                 signerFingerprint=self._signer_fingerprint,
             ),
+            payloadCanonicalization=CANONICALIZATION_VERSION,
         )
-        hybrid_signature: SignatureBlock | None = None
-        if self._ed25519_private_key is not None and self._ed25519_signer_fingerprint:
-            hybrid_sig_bytes = await asyncio.to_thread(
-                _sign_ed25519,
-                self._ed25519_private_key,
-                signing_hash.encode("utf-8"),
-            )
-            hybrid_signature = SignatureBlock(
-                cryptoAlgorithm=CRYPTO_ALGORITHM_ED25519,
-                artifactHash=payload_hash,
-                cryptographicSignature=base64.b64encode(
-                    hybrid_sig_bytes
-                ).decode("ascii"),
-                verificationAnchor=VerificationAnchor(
-                    signerFingerprint=self._ed25519_signer_fingerprint,
-                ),
-            )
-        updates: dict[str, object] = {"signature": signature}
-        if hybrid_signature is not None:
-            updates["hybrid_signature"] = hybrid_signature
-        return unsigned_envelope.model_copy(update=updates), c2pa_manifest
+        hybrid_sig_bytes = await asyncio.to_thread(
+            _sign_ed25519,
+            self._ed25519_private_key,
+            signing_hash.encode("utf-8"),
+        )
+        hybrid_signature = SignatureBlock(
+            cryptoAlgorithm=CRYPTO_ALGORITHM_ED25519,
+            artifactHash=payload_hash,
+            cryptographicSignature=base64.b64encode(
+                hybrid_sig_bytes
+            ).decode("ascii"),
+            verificationAnchor=VerificationAnchor(
+                signerFingerprint=self._ed25519_signer_fingerprint,
+            ),
+            payloadCanonicalization=CANONICALIZATION_VERSION,
+        )
+        return unsigned_envelope.model_copy(
+            update={
+                "signature": signature,
+                "hybrid_signature": hybrid_signature,
+            }
+        ), c2pa_manifest
 
     def verify_artifact(
         self,
@@ -534,7 +560,7 @@ class CryptoNotaryAdapter:
 
         if envelope.signature is None:
             raise RuntimeError("Artifact envelope is missing signature block.")
-        payload_hash = sha256_hex(payload.encode("utf-8"))
+        payload_hash = compute_payload_hash(payload)
         if allow_redacted:
             payload_hash = envelope.signature.artifact_hash
         elif payload_hash != envelope.signature.artifact_hash:
@@ -544,6 +570,7 @@ class CryptoNotaryAdapter:
             payload_sha256_hex=payload_hash,
             manifest_sha256_hex=manifest_hash,
             prev_hash=None,
+            canonicalization_version=envelope.signature.payload_canonicalization,
         )
         signing_hash = sha256_hex(canonical_json_bytes(signing_target))
         try:
@@ -565,8 +592,6 @@ class CryptoNotaryAdapter:
             ed25519_pub = self._resolve_ed25519_public_key_for_verification(
                 envelope.hybrid_signature
             )
-            if ed25519_pub is None:
-                return False
             try:
                 hybrid_sig_b64 = "".join(
                     envelope.hybrid_signature.cryptographic_signature.split()
@@ -605,7 +630,7 @@ class CryptoNotaryAdapter:
     def _resolve_ed25519_public_key_for_verification(
         self,
         hybrid_sig: SignatureBlock,
-    ) -> bytes | None:
+    ) -> bytes:
         """Resolve Ed25519 public key for hybrid signature verification."""
 
         fingerprint = hybrid_sig.verification_anchor.signer_fingerprint
@@ -613,24 +638,34 @@ class CryptoNotaryAdapter:
         env_key = f"ED25519_PUBLIC_KEY_{sanitized}"
         path_value = read_env_optional(env_key, env_path=self._env_path)
         if not path_value:
-            path_value = read_env_optional(
+            path_value = read_env_required(
                 _ED25519_PUBLIC_KEY_ENV,
                 env_path=self._env_path,
             )
-        if not path_value or not path_value.strip():
-            return None
-        key_path = Path(path_value.strip())
+        path_value = path_value.strip()
+        if not path_value:
+            raise RuntimeError(
+                f"Missing {_ED25519_PUBLIC_KEY_ENV} for Ed25519 verification."
+            )
+        key_path = Path(path_value)
         if not key_path.is_absolute():
             key_path = (self._env_path.parent / key_path).resolve()
-        raw = _load_key_bytes(key_path)
+        if not key_path.exists():
+            raise RuntimeError(
+                f"Ed25519 public key not found: '{key_path}'. "
+                f"Set {_ED25519_PUBLIC_KEY_ENV} in .env."
+            )
+        raw = key_path.read_bytes()
         try:
             if raw.lstrip().startswith(b"-----BEGIN"):
                 key = load_pem_public_key(raw)
             else:
                 key = Ed25519PublicKey.from_public_bytes(raw)
             return key.public_bytes(Encoding.Raw, PublicFormat.Raw)
-        except Exception:  # noqa: BLE001
-            return None
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"Failed to load Ed25519 public key from '{key_path}': {exc}"
+            ) from exc
 
     @staticmethod
     def _verify_ed25519_signature(

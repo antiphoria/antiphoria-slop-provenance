@@ -8,7 +8,6 @@ import json
 import logging
 import re
 import tempfile
-import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
@@ -22,8 +21,10 @@ from src.adapters.ots_adapter import OTSAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter, TimestampVerification
 from src.adapters.ots_queue import OtsQueueAdapter
 from src.adapters.transparency_log import TransparencyLogAdapter, TransparencyLogEntry
+from src.canonicalization import canonicalize_body_for_hash, compute_payload_hash
 from src.models import Artifact, sha256_hex
 from src.events import StoryOtsPending
+from src.artifact_serialization import render_artifact_markdown
 from src.parsing import parse_artifact_markdown, parse_artifact_markdown_text
 from src.repository import SQLiteRepository
 
@@ -161,7 +162,7 @@ class ProvenanceService:
         """Anchor artifact from file and commit to artifact branch (idempotent)."""
 
         envelope, payload = parse_artifact_markdown(artifact_path)
-        artifact_hash = sha256_hex(payload.encode("utf-8"))
+        artifact_hash = compute_payload_hash(payload)
         self._assert_artifact_hash_matches_signature(
             artifact_hash=artifact_hash,
             signature_artifact_hash=(
@@ -256,7 +257,7 @@ class ProvenanceService:
             ledger_path=ledger_path,
         )
         envelope, payload = parse_artifact_markdown_text(markdown_text)
-        artifact_hash = sha256_hex(payload.encode("utf-8"))
+        artifact_hash = compute_payload_hash(payload)
         self._assert_artifact_hash_matches_signature(
             artifact_hash=artifact_hash,
             signature_artifact_hash=(
@@ -339,7 +340,7 @@ class ProvenanceService:
 
         envelope, payload = parse_artifact_markdown(artifact_path)
         return self._timestamp_parsed_artifact(
-            envelope_id=str(envelope.id),
+            envelope=envelope,
             payload=payload,
             request_id=request_id,
             tsa_ca_cert_path=tsa_ca_cert_path,
@@ -368,7 +369,7 @@ class ProvenanceService:
         )
         envelope, payload = parse_artifact_markdown_text(markdown_text)
         outcome = self._timestamp_parsed_artifact(
-            envelope_id=str(envelope.id),
+            envelope=envelope,
             payload=payload,
             request_id=request_id,
             tsa_ca_cert_path=tsa_ca_cert_path,
@@ -380,44 +381,26 @@ class ProvenanceService:
         ):
             ref_name = f"refs/heads/artifact/{request_id}"
 
-            # 1. Commit the TSR sidecar (legacy compat)
-            ts_path = f".provenance/timestamp-{request_id}.tsr"
-            self._commit_branch_file(
-                repository_path=repository_path,
-                ref_name=ref_name,
-                relative_path=ts_path,
-                payload_text=outcome.token_base64,
-                commit_message=f"provenance: add RFC3161 timestamp sidecar ({request_id})",
-            )
-
-            # 2. Fast-follow: inject into the monolithic .md file
+            # Bake RFC3161 token into frontmatter (pure frontmatter format)
             current_md = self._read_markdown_from_commit(
                 repository_path=repository_path,
                 commit_oid=commit_oid,
                 ledger_path=ledger_path,
             )
-
-            # Hardened idempotency: search only in tail after signature (defeat payload injection)
-            signature_end_marker = "-----END ANTIPHORIA ARTIFACT SIGNATURE-----"
-            if signature_end_marker in current_md:
-                tail = current_md.split(signature_end_marker)[-1]
-                if "-----BEGIN RFC3161 TIMESTAMP TOKEN-----" not in tail:
-                    wrapped_token = "\n".join(
-                        textwrap.wrap(outcome.token_base64, width=76)
-                    )
-                    monolithic_md = (
-                        f"{current_md}\n"
-                        "-----BEGIN RFC3161 TIMESTAMP TOKEN-----\n"
-                        f"{wrapped_token}\n"
-                        "-----END RFC3161 TIMESTAMP TOKEN-----\n"
-                    )
-                    self._commit_branch_file(
-                        repository_path=repository_path,
-                        ref_name=ref_name,
-                        relative_path=ledger_path,
-                        payload_text=monolithic_md,
-                        commit_message=f"provenance: bake RFC3161 token into artifact ({request_id})",
-                    )
+            envelope, payload = parse_artifact_markdown_text(current_md)
+            if envelope.signature is not None and envelope.signature.rfc3161_token is None:
+                updated_sig = envelope.signature.model_copy(
+                    update={"rfc3161_token": outcome.token_base64}
+                )
+                updated_envelope = envelope.model_copy(update={"signature": updated_sig})
+                monolithic_md = render_artifact_markdown(updated_envelope, payload)
+                self._commit_branch_file(
+                    repository_path=repository_path,
+                    ref_name=ref_name,
+                    relative_path=ledger_path,
+                    payload_text=monolithic_md,
+                    commit_message=f"provenance: bake RFC3161 token into artifact ({request_id})",
+                )
 
             # OTS stamp (gated by ENABLE_OTS_FORGE)
             story_ots_pending: StoryOtsPending | None = None
@@ -427,7 +410,7 @@ class ProvenanceService:
                 and read_env_bool("ENABLE_OTS_FORGE", default=False, env_path=self._env_path)
             ):
                 try:
-                    payload_bytes = payload.encode("utf-8")
+                    payload_bytes = canonicalize_body_for_hash(payload)
                     artifact_hash = sha256_hex(payload_bytes)
                     ots_bytes = self._ots_adapter.request_ots_stamp(payload_bytes)
                     pending_b64 = base64.b64encode(ots_bytes).decode("ascii")
@@ -473,7 +456,7 @@ class ProvenanceService:
 
     def _timestamp_parsed_artifact(
         self,
-        envelope_id: str,
+        envelope: Artifact,
         payload: str,
         request_id: UUID | None,
         tsa_ca_cert_path: Path | None,
@@ -483,7 +466,7 @@ class ProvenanceService:
 
         if self._tsa_adapter is None:
             raise RuntimeError("TSA adapter is not configured.")
-        artifact_hash = sha256_hex(payload.encode("utf-8"))
+        artifact_hash = compute_payload_hash(payload)
         token_bytes = self._tsa_adapter.request_timestamp_token(
             digest_hex=artifact_hash,
             digest_algorithm=digest_algorithm,
@@ -497,7 +480,7 @@ class ProvenanceService:
         encoded_token = base64.b64encode(token_bytes).decode("ascii")
         created_at = self._repository.create_timestamp_record(
             artifact_hash=artifact_hash,
-            artifact_id=envelope_id,
+            artifact_id=str(envelope.id),
             request_id=None if request_id is None else str(request_id),
             tsa_url=self._tsa_adapter.tsa_url or "",
             token_base64=encoded_token,
@@ -520,7 +503,7 @@ class ProvenanceService:
         source_file: str,
         request_id: UUID | None,
     ) -> TransparencyLogEntry:
-        artifact_hash = sha256_hex(payload.encode("utf-8"))
+        artifact_hash = compute_payload_hash(payload)
         signature_artifact_hash: str | None = None
         if envelope.signature is not None:
             signature_artifact_hash = envelope.signature.artifact_hash

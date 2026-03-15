@@ -83,6 +83,24 @@ class AuthorAttestation(StrictModel):
     attestations: list[AttestationQa] = Field(min_length=4)
 
 
+class WebAuthnAttestation(StrictModel):
+    """FIDO2/WebAuthn assertion for strong non-repudiation of author attestation."""
+
+    credential_id: str = Field(alias="credentialId", min_length=1)
+    client_data_json_hash: str = Field(
+        alias="clientDataJsonHash",
+        min_length=64,
+        max_length=64,
+        pattern=r"^[a-fA-F0-9]{64}$",
+    )
+    authenticator_data: str = Field(alias="authenticatorData", min_length=1)
+    signature: str = Field(min_length=1)
+    fmt: str = Field(min_length=1)
+
+
+AttestationStrength: TypeAlias = Literal["webauthn", "legacy"]
+
+
 class VerificationAnchor(StrictModel):
     """Public verification anchor for signature identity lookup."""
 
@@ -118,6 +136,14 @@ class Provenance(StrictModel):
         alias="authorAttestation",
         default=None,
     )
+    webauthn_attestation: WebAuthnAttestation | None = Field(
+        alias="webauthnAttestation",
+        default=None,
+    )
+    attestation_strength: AttestationStrength | None = Field(
+        alias="attestationStrength",
+        default=None,
+    )
     registration_ceremony: RegistrationCeremony | None = Field(
         alias="registrationCeremony",
         default=None,
@@ -142,6 +168,10 @@ class SignatureBlock(StrictModel):
     cryptographic_signature: str = Field(alias="cryptographicSignature", min_length=1)
     verification_anchor: VerificationAnchor = Field(alias="verificationAnchor")
     rfc3161_token: str | None = Field(alias="rfc3161Token", default=None)
+    payload_canonicalization: str | None = Field(
+        alias="payloadCanonicalization",
+        default=None,
+    )
 
 
 class Artifact(StrictModel):
@@ -191,6 +221,7 @@ def build_envelope_signing_target(
     payload_sha256_hex: str,
     manifest_sha256_hex: str | None,
     prev_hash: str | None,
+    canonicalization_version: str | None = None,
 ) -> dict[str, Any]:
     """Build canonical signing target from envelope and chain anchors."""
 
@@ -204,7 +235,7 @@ def build_envelope_signing_target(
     envelope_data.pop("signature", None)
     envelope_data.pop("hybridSignature", None)
 
-    return {
+    target: dict[str, Any] = {
         "schemaVersion": "eternity.signing-target.v1",
         "artifactId": str(envelope.id),
         "payloadHash": payload_sha256_hex,
@@ -212,6 +243,9 @@ def build_envelope_signing_target(
         "prevHash": prev_hash,
         "envelope": envelope_data,
     }
+    if canonicalization_version:
+        target["canonicalizationVersion"] = canonicalization_version
+    return target
 
 
 def sha256_hex(data: bytes) -> str:

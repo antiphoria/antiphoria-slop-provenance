@@ -23,6 +23,7 @@ from src.adapters.transparency_log import (
     TransparencyLogAdapter,
     TransparencyLogEntry,
 )
+from src.canonicalization import compute_payload_hash
 from src.models import Artifact, sha256_hex
 from src.parsing import (
     parse_artifact_markdown,
@@ -126,8 +127,7 @@ class VerificationService:
 
         try:
             envelope, payload = parse_artifact_markdown(artifact_path)
-            digest_hex = sha256_hex(payload.encode("utf-8"))
-            token_base64_from_git: str | None = None
+            digest_hex = compute_payload_hash(payload)
             if branch and commit_oid and ledger_path and repository_path is not None:
                 log_text = self._read_optional_blob_from_branch(
                     repository_path, f"artifact/{request_id}", ".provenance/transparency-log.jsonl"
@@ -151,12 +151,6 @@ class VerificationService:
                 except RuntimeError as remote_exc:
                     remote_anchor_verified = False
                     remote_error_message = str(remote_exc)
-                ts_text = self._read_optional_blob_from_branch(
-                    repository_path,
-                    f"artifact/{request_id}",
-                    f".provenance/timestamp-{request_id}.tsr",
-                )
-                token_base64_from_git = ts_text.strip() or None
             else:
                 if repository_path is not None:
                     log_text = self._read_optional_blob_from_head(
@@ -166,12 +160,6 @@ class VerificationService:
                     entries = self._transparency_log_adapter.parse_entries_from_jsonl(
                         log_text
                     )
-                    if request_id:
-                        ts_text = self._read_optional_blob_from_head(
-                            repository_path,
-                            f".provenance/timestamp-{request_id}.tsr",
-                        )
-                        token_base64_from_git = ts_text.strip() or None
                 else:
                     entries = self._transparency_log_adapter.find_entries_by_artifact_hash(
                         digest_hex
@@ -216,7 +204,6 @@ class VerificationService:
                 branch=branch,
                 commit_oid=commit_oid,
                 ledger_path=ledger_path,
-                token_base64_from_git=token_base64_from_git,
                 ots_forged=ots_forged,
                 bitcoin_block_height=bitcoin_block_height,
             )
@@ -413,7 +400,7 @@ class VerificationService:
                 relative_path=ledger_path,
             )
             envelope, payload = parse_artifact_markdown_text(markdown_text)
-            digest_hex = sha256_hex(payload.encode("utf-8"))
+            digest_hex = compute_payload_hash(payload)
             log_text = self._read_optional_blob_text_from_commit(
                 repo=repo,
                 commit_obj=commit_obj,
@@ -443,11 +430,6 @@ class VerificationService:
                 commit_obj=commit_obj,
                 ledger_path=ledger_path,
             )
-            token_base64_from_git = self._read_optional_blob_text_from_commit(
-                repo=repo,
-                commit_obj=commit_obj,
-                relative_path=f".provenance/timestamp-{request_id}.tsr",
-            ).strip()
             ots_forged, bitcoin_block_height = self._verify_ots_from_commit(
                 repo=repo,
                 commit_obj=commit_obj,
@@ -469,7 +451,6 @@ class VerificationService:
                 branch=branch,
                 commit_oid=str(commit_obj.id),
                 ledger_path=ledger_path,
-                token_base64_from_git=token_base64_from_git or None,
                 ots_forged=ots_forged,
                 bitcoin_block_height=bitcoin_block_height,
             )
@@ -546,7 +527,6 @@ class VerificationService:
         branch: str | None = None,
         commit_oid: str | None = None,
         ledger_path: str | None = None,
-        token_base64_from_git: str | None = None,
         ots_forged: bool = False,
         bitcoin_block_height: int | None = None,
     ) -> AuditReport:
@@ -561,7 +541,7 @@ class VerificationService:
         c2pa_validation_state: str | None = None
         c2pa_errors: list[str] = []
 
-        digest_hex = sha256_hex(payload.encode("utf-8"))
+        digest_hex = compute_payload_hash(payload)
         if envelope.signature is None:
             errors.append("Artifact envelope is missing signature block.")
         else:
@@ -617,7 +597,7 @@ class VerificationService:
                 envelope.signature is not None
                 and envelope.signature.rfc3161_token is not None
             )
-            else token_base64_from_git
+            else None
         )
 
         if token_base64_to_verify is not None and self._tsa_adapter is not None:
@@ -639,29 +619,8 @@ class VerificationService:
                 timestamp_valid = False
                 errors.append(f"Git timestamp verification failed: {exc}")
         else:
-            latest_timestamp = self._repository.get_latest_timestamp_record(
-                digest_hex
-            )
-            if latest_timestamp is not None:
-                timestamp_found = True
-                if self._tsa_adapter is None:
-                    timestamp_valid = False
-                    errors.append(
-                        "TSA adapter unavailable for RFC3161 verification."
-                    )
-                else:
-                    verification = self._repository.verify_latest_timestamp_record(
-                        artifact_hash=digest_hex,
-                        tsa_adapter=self._tsa_adapter,
-                        tsa_ca_cert_path=tsa_ca_cert_path,
-                    )
-                    timestamp_valid = verification.ok
-                    if not verification.ok:
-                        errors.append(verification.message)
-            else:
-                errors.append(
-                    "No RFC3161 timestamp token found for artifact hash."
-                )
+            if token_base64_to_verify is None:
+                errors.append("No RFC3161 timestamp token.")
 
         return AuditReport(
             artifact_id=str(envelope.id),

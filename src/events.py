@@ -20,6 +20,7 @@ from src.models import (
     EmbeddedWatermark,
     RegistrationCeremony,
     UsageMetrics,
+    WebAuthnAttestation,
 )
 
 EventT = TypeVar("EventT", bound=BaseModel)
@@ -108,7 +109,6 @@ class StorySigned(BaseModel):
     body: str = Field(min_length=1)
     c2pa_manifest_hash: str | None = None
     c2pa_manifest_bytes_b64: str | None = None
-    # Legacy field retained for backfill compatibility.
     c2pa_manifest_bytes_ref: str | None = None
     signed_at: datetime = Field(default_factory=_utc_now)
 
@@ -290,6 +290,7 @@ class StoryHumanRegistered(BaseModel):
     title: str = Field(min_length=1)
     license: str = Field(min_length=1, default="ARR")
     attestation: AuthorAttestation
+    webauthn_attestation: WebAuthnAttestation | None = None
     registration_ceremony: RegistrationCeremony | None = None
 
 

@@ -65,11 +65,18 @@ class CryptoNotaryC2PATest(unittest.IsolatedAsyncioTestCase):
         )
         adapter._enable_c2pa = False
         adapter._private_key = b"x" * 256
+        adapter._ed25519_private_key = b"fake-ed25519-key-32-bytes!!!!!!!"
+        adapter._ed25519_signer_fingerprint = "a" * 32
 
         def _fake_sign(_sk: bytes, _msg: bytes) -> bytes:
             return b"fake-ml-dsa-signature-bytes-for-test"
 
-        with patch("src.adapters.crypto_notary._sign_ml_dsa", _fake_sign):
+        def _fake_sign_ed25519(_sk: bytes, _msg: bytes) -> bytes:
+            return b"x" * 64  # Ed25519 sig length
+
+        with patch("src.adapters.crypto_notary._sign_ml_dsa", _fake_sign), patch(
+            "src.adapters.crypto_notary._sign_ed25519", _fake_sign_ed25519
+        ):
             artifact, _ = await adapter._build_signed_artifact(
                 title="Human Story",
                 source="human",

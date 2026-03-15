@@ -10,18 +10,16 @@ import asyncio
 import base64
 import binascii
 import hashlib
-import json
 import tempfile
-import textwrap
 from pathlib import Path
 
 import pygit2
 from filelock import FileLock
 
-from src.adapters.c2pa_manifest import build_c2pa_sidecar_manifest
+from src.artifact_serialization import render_artifact_markdown
 from src.env_config import read_env_bool, read_env_optional
 from src.events import EventBusPort, StoryCommitted, StorySigned
-from src.models import Artifact, sha256_hex
+from src.models import sha256_hex
 from src.secrets_guard import assert_secret_free
 
 _DEFAULT_LEDGER_AUTHOR_NAME = "Slop Orchestrator"
@@ -124,15 +122,9 @@ class GitLedgerAdapter:
             return sidecar_payload
         if not self._enable_c2pa or manifest_hash is None:
             return None
-        # Backward-compatibility path: old events only carried hash, not bytes.
-        c2pa_artifact = build_c2pa_sidecar_manifest(
-            event.artifact,
-            event.body,
-            env_path=self._env_path,
+        raise RuntimeError(
+            "C2PA manifest bytes required. Event must carry c2pa_manifest_bytes_b64."
         )
-        if c2pa_artifact.manifest_hash != manifest_hash:
-            raise RuntimeError("C2PA manifest hash mismatch while writing sidecar.")
-        return c2pa_artifact.manifest_bytes
 
     @staticmethod
     def _assert_publishable_content_is_secret_free(event: StorySigned) -> None:
@@ -179,204 +171,9 @@ class GitLedgerAdapter:
             return filename
         return f"{self._artifacts_directory}/{filename}"
 
-    def _hybrid_signature_block(self, artifact: Artifact) -> str:
-        """Render hybridSignature YAML block when present."""
-        if artifact.hybrid_signature is None:
-            return ""
-        hs = artifact.hybrid_signature
-        lines = self._wrap_signature_lines(hs.cryptographic_signature)
-        yaml_lines = "\n".join(f"    {line}" for line in lines)
-        return (
-            "hybridSignature:\n"
-            f"  cryptoAlgorithm: {self._yaml_quoted(hs.crypto_algorithm)}\n"
-            f"  artifactHash: {self._yaml_quoted(hs.artifact_hash)}\n"
-            "  verificationAnchor:\n"
-            f"    signerFingerprint: {self._yaml_quoted(hs.verification_anchor.signer_fingerprint)}\n"
-            "  cryptographicSignature: |\n"
-            f"{yaml_lines}\n"
-        )
-
-    @staticmethod
-    def _wrap_signature_lines(signature_base64: str, line_width: int = 76) -> list[str]:
-        """Normalize and wrap base64 signature text for YAML/footer blocks."""
-
-        condensed = "".join(signature_base64.split())
-        if not condensed:
-            raise RuntimeError("Artifact signature cannot be empty.")
-        return textwrap.wrap(condensed, width=line_width)
-
-    @staticmethod
-    def _yaml_folded_block(text: str, indent: int) -> str:
-        """Render text using YAML folded block scalar semantics."""
-
-        prefix = " " * indent
-        lines = text.splitlines() or [text]
-        return "\n".join(f"{prefix}{line}" for line in lines)
-
-    @staticmethod
-    def _yaml_literal_block(text: str, indent: int) -> str:
-        """Render text using YAML literal block scalar semantics."""
-
-        prefix = " " * indent
-        lines = text.splitlines() or [text]
-        return "\n".join(f"{prefix}{line}" for line in lines)
-
-    @staticmethod
-    def _yaml_quoted(value: str) -> str:
-        """Render one YAML-safe quoted scalar using JSON escaping rules."""
-
-        return json.dumps(value, ensure_ascii=False)
-
     def _render_markdown(self, event: StorySigned) -> str:
-        """Render artifact markdown with strict frontmatter schema.
-
-        Args:
-            event: Signed event containing frontmatter payload and body.
-
-        Returns:
-            Markdown text formatted for Astro parsing.
-        """
-
-        artifact = event.artifact
-        if artifact.signature is None:
-            raise RuntimeError("Signed artifact envelope is missing signature block.")
-        signature_lines = self._wrap_signature_lines(
-            artifact.signature.cryptographic_signature
-        )
-        signature_block_yaml = "\n".join(f"    {line}" for line in signature_lines)
-        signature_block_footer = "\n".join(signature_lines)
-        prompt_block_yaml = self._yaml_literal_block(
-            artifact.provenance.generation_context.prompt,
-            indent=6,
-        )
-        system_instruction_yaml = self._yaml_literal_block(
-            artifact.provenance.generation_context.system_instruction,
-            indent=6,
-        )
-
-        curation_block = ""
-        if artifact.curation is not None:
-            diff_block = self._yaml_literal_block(
-                artifact.curation.unified_diff, indent=6
-            )
-            curation_block = (
-                "curation:\n"
-                f"  differenceScore: {artifact.curation.difference_score:.2f}\n"
-                "  unifiedDiff: |-\n"
-                f"{diff_block}\n"
-            )
-        else:
-            curation_block = "curation: null\n"
-
-        usage_block: str
-        if artifact.provenance.usage_metrics is not None:
-            usage = artifact.provenance.usage_metrics
-            usage_block = (
-                "  usageMetrics:\n"
-                f"    promptTokens: {usage.prompt_tokens}\n"
-                f"    completionTokens: {usage.completion_tokens}\n"
-                f"    totalTokens: {usage.total_tokens}\n"
-            )
-        else:
-            usage_block = "  usageMetrics: null\n"
-
-        watermark_block: str
-        if artifact.provenance.embedded_watermark is not None:
-            watermark = artifact.provenance.embedded_watermark
-            watermark_block = (
-                "  embeddedWatermark:\n"
-                f"    provider: {self._yaml_quoted(watermark.provider)}\n"
-                f"    status: {self._yaml_quoted(watermark.status)}\n"
-            )
-        else:
-            watermark_block = "  embeddedWatermark: null\n"
-
-        attestation_block: str
-        if artifact.provenance.author_attestation is not None:
-            att = artifact.provenance.author_attestation
-            attestation_lines = [
-                "  authorAttestation:\n",
-                f"    classification: {self._yaml_quoted(att.classification)}\n",
-                "    attestations:\n",
-            ]
-            for qa in att.attestations:
-                # Content must be indented more than "question" key for valid YAML
-                q_block = self._yaml_literal_block(qa.question, indent=10)
-                attestation_lines.append(f"      - question: |-\n{q_block}\n")
-                attestation_lines.append(f"        answer: {self._yaml_quoted(qa.answer)}\n")
-            attestation_block = "".join(attestation_lines)
-        else:
-            attestation_block = "  authorAttestation: null\n"
-
-        ceremony_block: str
-        if artifact.provenance.registration_ceremony is not None:
-            rc = artifact.provenance.registration_ceremony
-            machine_line = (
-                f"    machineIdHash: {self._yaml_quoted(rc.machine_id_hash)}\n"
-                if rc.machine_id_hash is not None
-                else "    machineIdHash: null\n"
-            )
-            ceremony_block = (
-                "  registrationCeremony:\n"
-                f"    registrationUtcMs: {rc.registration_utc_ms}\n"
-                f"    orchestratorGitCommit: {self._yaml_quoted(rc.orchestrator_git_commit)}\n"
-                f"{machine_line}"
-            )
-        else:
-            ceremony_block = "  registrationCeremony: null\n"
-
-        public_key_uri_line = ""
-        if artifact.signature.verification_anchor.public_key_uri is not None:
-            public_key_uri_line = (
-                "    publicKeyUri: "
-                f"{self._yaml_quoted(str(artifact.signature.verification_anchor.public_key_uri))}\n"
-            )
-
-        return (
-            "---\n"
-            f"schemaVersion: {self._yaml_quoted(artifact.schema_version)}\n"
-            f"id: {self._yaml_quoted(str(artifact.id))}\n"
-            f"title: {self._yaml_quoted(artifact.title)}\n"
-            f"timestamp: {self._yaml_quoted(artifact.timestamp.isoformat())}\n"
-            f"contentType: {self._yaml_quoted(artifact.content_type)}\n"
-            f"license: {self._yaml_quoted(str(artifact.license))}\n"
-            "provenance:\n"
-            f"  source: {self._yaml_quoted(artifact.provenance.source)}\n"
-            f"  engineVersion: {self._yaml_quoted(artifact.provenance.engine_version)}\n"
-            f"  modelId: {self._yaml_quoted(artifact.provenance.model_id)}\n"
-            "  generationContext:\n"
-            "    systemInstruction: |-\n"
-            f"{system_instruction_yaml}\n"
-            "    prompt: |-\n"
-            f"{prompt_block_yaml}\n"
-            "    hyperparameters:\n"
-            f"      temperature: {artifact.provenance.generation_context.hyperparameters.temperature}\n"
-            f"      topP: {artifact.provenance.generation_context.hyperparameters.top_p}\n"
-            f"      topK: {artifact.provenance.generation_context.hyperparameters.top_k}\n"
-            f"{usage_block}"
-            f"{watermark_block}"
-            f"{attestation_block}"
-            f"{ceremony_block}"
-            f"{curation_block}"
-            "signature:\n"
-            f"  cryptoAlgorithm: {self._yaml_quoted(artifact.signature.crypto_algorithm)}\n"
-            f"  artifactHash: {self._yaml_quoted(artifact.signature.artifact_hash)}\n"
-            "  verificationAnchor:\n"
-            "    signerFingerprint: "
-            f"{self._yaml_quoted(artifact.signature.verification_anchor.signer_fingerprint)}\n"
-            f"{public_key_uri_line}"
-            "  cryptographicSignature: |\n"
-            f"{signature_block_yaml}\n"
-            f"{self._hybrid_signature_block(artifact)}"
-            f"recordStatus: {self._yaml_quoted(artifact.record_status)}\n"
-            "---\n"
-            f"{event.body}\n"
-            "-----BEGIN ANTIPHORIA ARTIFACT SIGNATURE-----\n"
-            "Hash: SHA256\n"
-            f"Algorithm: {artifact.signature.crypto_algorithm}\n"
-            f"{signature_block_footer}\n"
-            "-----END ANTIPHORIA ARTIFACT SIGNATURE-----\n"
-        )
+        """Render artifact markdown with strict frontmatter schema. No PEM footers."""
+        return render_artifact_markdown(event.artifact, event.body)
 
     def _resolve_commit_signature(self) -> pygit2.Signature:
         """Resolve git author/committer signature.

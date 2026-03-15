@@ -22,6 +22,7 @@ from src.env_config import (
     read_env_optional,
     read_env_required,
 )
+from src.canonicalization import compute_payload_hash
 from src.models import Artifact, canonical_json_bytes, sha256_hex
 
 _C2PA_MODE_VALUES: tuple[str, ...] = ("mvp", "sdk")
@@ -100,7 +101,7 @@ class MvpC2PAManifestProvider:
     """Deterministic JSON sidecar provider used for MVP dual-write mode."""
 
     def build(self, envelope: Artifact, body: str) -> C2PAManifestArtifact:
-        payload_hash = sha256_hex(body.encode("utf-8"))
+        payload_hash = compute_payload_hash(body)
         payload = {
             "c2paVersion": "2.3",
             "claimGenerator": envelope.provenance.engine_version,
@@ -186,7 +187,7 @@ class SdkC2PAManifestProvider:
     ) -> dict[str, Any]:
         """Build C2PA manifest JSON definition consumed by c2pa-python."""
 
-        payload_hash = sha256_hex(body.encode("utf-8"))
+        payload_hash = compute_payload_hash(body)
         return {
             "claim_generator": envelope.provenance.engine_version,
             "title": envelope.title,
@@ -319,7 +320,18 @@ def build_c2pa_validation_payload(
     if resolved_mode == "sdk":
         _ = (envelope, body)
         return _SDK_MINIMAL_JPEG_BYTES, _SDK_CARRIER_FORMAT
-    return body.encode("utf-8"), envelope.content_type
+    from src.canonicalization import canonicalize_body_for_hash
+
+    payload_bytes = (
+        canonicalize_body_for_hash(body)
+        if (
+            envelope.signature is not None
+            and envelope.signature.payload_canonicalization
+            == "eternity.canonicalization.v1"
+        )
+        else body.encode("utf-8")
+    )
+    return payload_bytes, envelope.content_type
 
 
 def build_sdk_bridge_payload(
@@ -328,7 +340,7 @@ def build_sdk_bridge_payload(
 ) -> C2PASdkBridgePayload:
     """Build deterministic XML bridge payload from markdown artifact data."""
 
-    payload_hash = sha256_hex(body.encode("utf-8"))
+    payload_hash = compute_payload_hash(body)
     bridge_xml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<slopOrchestratorBridge>"
@@ -562,7 +574,7 @@ def _validate_mvp_manifest(
     expected_hash = asset.get("payloadHash")
     if not isinstance(expected_hash, str):
         return None
-    actual_hash = sha256_hex(body.encode("utf-8"))
+    actual_hash = compute_payload_hash(body)
     if actual_hash != expected_hash:
         return C2PAManifestValidation(
             valid=False,
@@ -601,7 +613,8 @@ def _validate_sdk_markdown_assertion(
             f"'{_SDK_MARKDOWN_ASSERTION_LABEL}' missing or malformed."
         ]
     errors: list[str] = []
-    expected_hash = sha256_hex(body.encode("utf-8"))
+    expected_hash = compute_payload_hash(body)
+    stored_hash = assertion_data.get("payloadHash")
     if assertion_data.get("content") != body:
         errors.append(
             "SDK markdown assertion content mismatch against artifact payload."
