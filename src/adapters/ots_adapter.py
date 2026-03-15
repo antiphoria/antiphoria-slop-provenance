@@ -181,9 +181,10 @@ class OTSAdapter:
                     ots_bin=bin_,
                     timeout=timeout,
                 )
-                # PUNK PATCH: If it doesn't verify on Bitcoin, it's NOT FORGED YET.
+                # Upgrade succeeded; if verify fails, block not mined yet (soft failure).
+                # Return (True, bytes, None) so caller leaves record PENDING instead of FAILED.
                 if not ok or block_height is None:
-                    return False, None, None
+                    return True, final_bytes, None
 
             return True, final_bytes, block_height
 

@@ -101,6 +101,13 @@ async def process_single_ots_record(
                 except (ValueError, TypeError):
                     pass
                 return
+            if block_height is None:
+                _logger.info(
+                    "OTS for request_id=%s still pending Bitcoin confirmation; "
+                    "leaving as PENDING (will retry)",
+                    record.request_id,
+                )
+                return
 
             ots_path = ots_path_template.format(request_id=record.request_id)
             ref_name = f"refs/heads/artifact/{record.request_id}"

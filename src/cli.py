@@ -422,6 +422,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Artifact request UUID to upgrade.",
     )
+    upgrade_parser.add_argument(
+        "--retry",
+        action="store_true",
+        help="Retry a FAILED record (otherwise upgrade only processes PENDING).",
+    )
 
     process_pending_parser = subparsers.add_parser(
         "process-pending",
@@ -437,6 +442,26 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=100,
         help="Maximum PENDING records to process.",
+    )
+    process_pending_parser.add_argument(
+        "--retry",
+        action="store_true",
+        help="Include FAILED records for retry (otherwise only PENDING).",
+    )
+
+    recover_failed_parser = subparsers.add_parser(
+        "recover-failed",
+        help="Append a pending event to a FAILED record (integrity-preserving reset).",
+    )
+    recover_failed_parser.add_argument(
+        "--repo-path",
+        default=_default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
+    )
+    recover_failed_parser.add_argument(
+        "--request-id",
+        required=True,
+        help="Artifact request UUID to recover.",
     )
 
     anchor_merkle_parser = subparsers.add_parser(
@@ -1719,7 +1744,7 @@ async def _run_upgrade_command(args: argparse.Namespace) -> int:
     if record is None:
         print(f"No OTS forge record for request_id={args.request_id}")
         return 1
-    if record.status != "PENDING":
+    if record.status == "FORGED":
         block_str = (
             f" block={record.bitcoin_block_height}"
             if record.bitcoin_block_height
@@ -1727,6 +1752,12 @@ async def _run_upgrade_command(args: argparse.Namespace) -> int:
         )
         print(f"Already {record.status}{block_str}")
         return 0
+    if record.status == "FAILED" and not getattr(args, "retry", False):
+        print("Already FAILED (use --retry to retry)")
+        return 0
+    if record.status != "PENDING" and record.status != "FAILED":
+        print(f"Unexpected status: {record.status}")
+        return 1
 
     semaphore = asyncio.Semaphore(1)
     await process_single_ots_record(
@@ -1775,9 +1806,13 @@ async def _run_process_pending_command(args: argparse.Namespace) -> int:
         repository_path=repository_path,
         env_path=env_path,
     )
-    records = ots_queue.get_pending_records(limit=args.limit)
+    records = list(ots_queue.get_pending_records(limit=args.limit))
+    if getattr(args, "retry", False):
+        failed = ots_queue.list_ots_forge_records(status="FAILED", limit=args.limit)
+        records = (records + failed)[: args.limit]
     if not records:
-        print("No PENDING records.")
+        msg = "No PENDING or FAILED records." if getattr(args, "retry", False) else "No PENDING records. (Use --retry to include FAILED.)"
+        print(msg)
         return 0
 
     semaphore = asyncio.Semaphore(1)
@@ -1813,6 +1848,43 @@ async def _run_process_pending_command(args: argparse.Namespace) -> int:
             elif updated.status == "FAILED":
                 failed_count += 1
     print(f"Upgraded {upgraded}, still pending {still_pending}, failed {failed_count}")
+    return 0
+
+
+def _run_recover_failed_command(args: argparse.Namespace) -> int:
+    """Append a pending event to a FAILED record (append-only, preserves integrity)."""
+    repository_path = _require_repo_path(args)
+    _validate_external_repo_path(repository_path)
+
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    ots_queue = OtsQueueAdapter(
+        repository_path=repository_path,
+        env_path=env_path,
+    )
+
+    request_id = UUID(str(args.request_id))
+    record = ots_queue.get_ots_forge_record(request_id)
+
+    if record is None:
+        print(f"No OTS forge record found for request_id={args.request_id}")
+        return 1
+
+    if record.status != "FAILED":
+        print(f"Record is not FAILED (current status: {record.status}). No action taken.")
+        return 0
+
+    if not record.pending_ots_b64:
+        print("Cannot recover: FAILED record is missing pending_ots_b64 data.")
+        return 1
+
+    # The magic step: append a new pending event using the old data
+    ots_queue.append_pending(
+        request_id=request_id,
+        artifact_hash=record.artifact_hash,
+        pending_ots_b64=record.pending_ots_b64,
+    )
+
+    print(f"Successfully appended new PENDING event for {request_id}. It will be retried on the next process-pending run.")
     return 0
 
 
@@ -2217,6 +2289,8 @@ async def _dispatch_impl(args: argparse.Namespace) -> int:
         return await _run_upgrade_command(args)
     if args.command == "process-pending":
         return await _run_process_pending_command(args)
+    if args.command == "recover-failed":
+        return _run_recover_failed_command(args)
     if args.command == "anchor-merkle-root":
         return _run_anchor_merkle_root_command(args)
     if args.command == "verify-transparency-log":
@@ -2257,6 +2331,7 @@ def main() -> int:
         "events",
         "upgrade",
         "process-pending",
+        "recover-failed",
         "verify-transparency-log",
         "build-inclusion-proof",
         "webauthn-register",
