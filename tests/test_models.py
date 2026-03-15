@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from src.models import (
+    AttestationQa,
     AuthorAttestation,
     GenerationContext,
     Hyperparameters,
@@ -12,35 +13,37 @@ from src.models import (
 )
 
 
+def _sample_attestations() -> list[AttestationQa]:
+    """Four canonical Q&A pairs for tests."""
+    return [
+        AttestationQa(question="Are you human?", answer="y"),
+        AttestationQa(question="Is this original?", answer="y"),
+        AttestationQa(question="Is it accurate?", answer="y"),
+        AttestationQa(question="Do you understand permanence?", answer="y"),
+    ]
+
+
 class AuthorAttestationTest(unittest.TestCase):
     """Validate AuthorAttestation serialization and aliases."""
 
-    def test_serializes_with_camelcase_aliases(self) -> None:
+    def test_serializes_with_attestations(self) -> None:
         att = AuthorAttestation(
             classification="fiction",
-            is_human=True,
-            is_original_creation=True,
-            is_independent_and_accurate=True,
-            understands_cryptographic_permanence=True,
+            attestations=_sample_attestations(),
         )
         dumped = att.model_dump(by_alias=True)
         self.assertIn("classification", dumped)
-        self.assertIn("isHuman", dumped)
-        self.assertIn("isOriginalCreation", dumped)
-        self.assertIn("isIndependentAndAccurate", dumped)
-        self.assertIn("understandsCryptographicPermanence", dumped)
-        self.assertNotIn("is_human", dumped)
+        self.assertIn("attestations", dumped)
         self.assertEqual(dumped["classification"], "fiction")
-        self.assertIs(dumped["isHuman"], True)
+        self.assertEqual(len(dumped["attestations"]), 4)
+        self.assertEqual(dumped["attestations"][0]["question"], "Are you human?")
+        self.assertEqual(dumped["attestations"][0]["answer"], "y")
 
     def test_accepts_all_artistic_classifications(self) -> None:
         for classification in ("fact", "opinion", "fiction", "satire"):
             att = AuthorAttestation(
                 classification=classification,
-                is_human=True,
-                is_original_creation=True,
-                is_independent_and_accurate=True,
-                understands_cryptographic_permanence=True,
+                attestations=_sample_attestations(),
             )
             self.assertEqual(att.classification, classification)
 
@@ -51,10 +54,7 @@ class ProvenanceAuthorAttestationTest(unittest.TestCase):
     def test_provenance_accepts_author_attestation(self) -> None:
         att = AuthorAttestation(
             classification="opinion",
-            is_human=True,
-            is_original_creation=True,
-            is_independent_and_accurate=True,
-            understands_cryptographic_permanence=True,
+            attestations=_sample_attestations(),
         )
         prov = Provenance(
             source="human",

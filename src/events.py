@@ -18,6 +18,7 @@ from src.models import (
     AuthorAttestation,
     Curation,
     EmbeddedWatermark,
+    RegistrationCeremony,
     UsageMetrics,
 )
 
@@ -278,6 +279,7 @@ class StoryHumanRegistered(BaseModel):
         title: Artifact title for the envelope.
         license: Content license to apply (e.g. ARR, CC-BY-4.0).
         attestation: Artistic declarations from the wizard.
+        registration_ceremony: Proof-of-environment metadata (optional).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -288,6 +290,7 @@ class StoryHumanRegistered(BaseModel):
     title: str = Field(min_length=1)
     license: str = Field(min_length=1, default="ARR")
     attestation: AuthorAttestation
+    registration_ceremony: RegistrationCeremony | None = None
 
 
 class EventHandlerError(BaseModel):

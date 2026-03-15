@@ -8,8 +8,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
+import subprocess
+import time
+import uuid as uuid_module
 from pathlib import Path
 from uuid import UUID
 
@@ -48,8 +52,8 @@ from src.events import (
     StorySigned,
     StoryTimestamped,
 )
-from src.models import AuthorAttestation, sha256_hex
-from src.parsing import parse_artifact_markdown
+from src.models import AttestationQa, AuthorAttestation, RegistrationCeremony, sha256_hex
+from src.parsing import parse_artifact_markdown, produce_redacted_artifact
 from src.ports import ProvenanceServicePort
 from src.repository import SQLiteRepository
 from src.secrets_guard import assert_secret_free
@@ -59,6 +63,7 @@ from src.services.curation_service import (
     extract_request_id_from_artifact_path,
 )
 from src.adapters.ots_queue import OtsQueueAdapter
+from src.merkle import build_merkle_root
 from src.services.ots_upgrade import process_single_ots_record
 from src.services.provenance_service import ProvenanceService
 from src.services.verification_service import VerificationService
@@ -71,6 +76,38 @@ _read_env_bool = read_env_bool
 def _default_repo_path() -> str | None:
     """Default --repo-path from LEDGER_REPO_PATH in .env."""
     return _read_env_optional("LEDGER_REPO_PATH", env_path=get_project_env_path())
+
+
+def _capture_registration_ceremony(env_path: Path) -> RegistrationCeremony:
+    """Capture proof-of-environment metadata for human registration."""
+    registration_utc_ms = int(time.time() * 1000)
+    project_root = env_path.parent
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=5,
+        )
+        git_commit = result.stdout.strip() if result.returncode == 0 else "unknown"
+    except Exception:  # noqa: BLE001
+        git_commit = "unknown"
+    machine_id_hash: str | None = None
+    if read_env_bool("CAPTURE_MACHINE_ID", default=False, env_path=env_path):
+        try:
+            node = uuid_module.getnode()
+            machine_id_hash = hashlib.sha256(
+                str(node).encode("utf-8")
+            ).hexdigest()
+        except Exception:  # noqa: BLE001
+            pass
+    return RegistrationCeremony(
+        registrationUtcMs=registration_utc_ms,
+        orchestratorGitCommit=git_commit,
+        machineIdHash=machine_id_hash,
+    )
 
 
 def _require_repo_path(args: argparse.Namespace) -> Path:
@@ -100,7 +137,8 @@ class OrchestratorLock:
         except FileExistsError as exc:
             raise RuntimeError(
                 "Another orchestrator instance is already running "
-                f"(lock: '{self._lock_path}')."
+                f"(lock: '{self._lock_path}'). "
+                "If the previous process crashed, remove the lock file manually and retry."
             ) from exc
         if self._fd is None:
             raise RuntimeError(
@@ -139,7 +177,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     generate_parser.add_argument(
         "--model-id",
-        default=_read_env_optional("GENERATOR_MODEL_ID") or "gemini-2.5-flash",
+        default=_read_env_optional(
+            "GENERATOR_MODEL_ID", env_path=get_project_env_path()
+        )
+        or "gemini-2.5-flash",
         help="Google AI Studio model identifier.",
     )
 
@@ -193,6 +234,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--strict-c2pa",
         action="store_true",
         help="Require sidecar presence and valid C2PA semantic verification.",
+    )
+    verify_parser.add_argument(
+        "--allow-redacted",
+        action="store_true",
+        help="Verify metadata and signatures only; skip payload hash check (for redacted artifacts).",
+    )
+
+    redact_parser = subparsers.add_parser(
+        "redact",
+        help="Produce a redacted copy with body replaced by placeholder; metadata and signatures unchanged.",
+    )
+    redact_parser.add_argument("--file", required=True, help="Artifact file path.")
+    redact_parser.add_argument(
+        "--placeholder",
+        default="[REDACTED UNTIL EXHIBITION OPENING]",
+        help="Placeholder text for redacted body (default: [REDACTED UNTIL EXHIBITION OPENING]).",
+    )
+    redact_parser.add_argument(
+        "--output",
+        required=True,
+        help="Output path for redacted artifact.",
     )
 
     anchor_parser = subparsers.add_parser(
@@ -360,7 +422,32 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit",
         type=int,
         default=100,
-        help="Max PENDING records to process (default: 100).",
+        help="Maximum PENDING records to process.",
+    )
+
+    anchor_merkle_parser = subparsers.add_parser(
+        "anchor-merkle-root",
+        help="Compute Merkle root of transparency log and OTS-stamp it (CT-style).",
+    )
+    anchor_merkle_parser.add_argument(
+        "--repo-path",
+        default=_default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
+    )
+
+    verify_tlog_parser = subparsers.add_parser(
+        "verify-transparency-log",
+        help="Recompute Merkle root from transparency log and compare to expected.",
+    )
+    verify_tlog_parser.add_argument(
+        "--repo-path",
+        default=_default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
+    )
+    verify_tlog_parser.add_argument(
+        "--merkle-root",
+        required=True,
+        help="Expected Merkle root (hex) to compare against.",
     )
 
     admin_parser = subparsers.add_parser(
@@ -457,12 +544,16 @@ def _build_provenance_services(
         publish_headers=publish_headers if publish_headers else None,
         publish_supabase_format=publish_supabase_format,
     )
-    tsa_url = tsa_url_override or _read_env_optional("RFC3161_TSA_URL")
+    tsa_url = tsa_url_override or _read_env_optional(
+        "RFC3161_TSA_URL", env_path=env_path
+    )
     if tsa_url is not None and not tsa_url.strip():
         tsa_url = None
-    tsa_untrusted_path = _read_env_optional("RFC3161_TSA_UNTRUSTED_CERT_PATH")
-    openssl_bin = _read_env_optional("OPENSSL_BIN") or "openssl"
-    openssl_conf = _read_env_optional("OPENSSL_CONF")
+    tsa_untrusted_path = _read_env_optional(
+        "RFC3161_TSA_UNTRUSTED_CERT_PATH", env_path=env_path
+    )
+    openssl_bin = _read_env_optional("OPENSSL_BIN", env_path=env_path) or "openssl"
+    openssl_conf = _read_env_optional("OPENSSL_CONF", env_path=env_path)
     tsa_adapter = (
         None
         if tsa_url is None
@@ -499,6 +590,7 @@ def _build_provenance_services(
         key_registry=key_registry,
         artifact_verifier=CryptoNotaryAdapter(
             event_bus=EventBus(),
+            env_path=env_path,
             require_private_key=False,
         ),
         ots_adapter=ots_adapter,
@@ -507,10 +599,16 @@ def _build_provenance_services(
     return provenance_service, verification_service
 
 
-def _resolve_tsa_ca_cert_path(explicit_path: str | None) -> Path | None:
+def _resolve_tsa_ca_cert_path(
+    explicit_path: str | None,
+    env_path: Path | None = None,
+) -> Path | None:
     """Resolve optional TSA CA cert path from arg or env."""
 
-    raw_path = explicit_path or _read_env_optional("RFC3161_CA_CERT_PATH")
+    resolved_env = env_path or get_project_env_path()
+    raw_path = explicit_path or _read_env_optional(
+        "RFC3161_CA_CERT_PATH", env_path=resolved_env
+    )
     if raw_path is None:
         return None
     return Path(raw_path).resolve()
@@ -604,6 +702,7 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
 
     assert_secret_free("cli generate prompt", args.prompt)
 
+    env_path = get_project_env_path()
     event_bus = EventBus()
     repository = _build_repository()
     telemetry_adapter = ProvenanceTelemetryAdapter(
@@ -616,10 +715,14 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
         asyncio.get_running_loop().create_future()
     )
 
-    gemini_adapter = GeminiEngineAdapter(event_bus=event_bus, model_id=args.model_id)
-    notary_adapter = CryptoNotaryAdapter(event_bus=event_bus)
+    gemini_adapter = GeminiEngineAdapter(
+        event_bus=event_bus, model_id=args.model_id, env_path=env_path
+    )
+    notary_adapter = CryptoNotaryAdapter(event_bus=event_bus, env_path=env_path)
     ledger_adapter = GitLedgerAdapter(
-        event_bus=event_bus, repository_path=repository_path
+        event_bus=event_bus,
+        repository_path=repository_path,
+        env_path=env_path,
     )
 
     async def _record_signed(event: StorySigned) -> None:
@@ -637,7 +740,7 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
         await asyncio.to_thread(
             provenance_service.register_signing_key,
             event.artifact.signature.verification_anchor.signer_fingerprint,
-            _read_env_optional("SIGNING_KEY_VERSION"),
+            _read_env_optional("SIGNING_KEY_VERSION", env_path=env_path),
         )
 
     async def _record_committed(event: StoryCommitted) -> None:
@@ -706,6 +809,7 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
 async def _run_curate_command(args: argparse.Namespace) -> int:
     """Run curation pipeline for an edited markdown artifact file."""
 
+    env_path = get_project_env_path()
     event_bus = EventBus()
     repository = _build_repository()
     telemetry_adapter = ProvenanceTelemetryAdapter(
@@ -718,9 +822,11 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
         asyncio.get_running_loop().create_future()
     )
 
-    notary_adapter = CryptoNotaryAdapter(event_bus=event_bus)
+    notary_adapter = CryptoNotaryAdapter(event_bus=event_bus, env_path=env_path)
     ledger_adapter = GitLedgerAdapter(
-        event_bus=event_bus, repository_path=repository_path
+        event_bus=event_bus,
+        repository_path=repository_path,
+        env_path=env_path,
     )
 
     artifact_path = Path(args.file).resolve()
@@ -757,7 +863,7 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
         await asyncio.to_thread(
             provenance_service.register_signing_key,
             event.artifact.signature.verification_anchor.signer_fingerprint,
-            _read_env_optional("SIGNING_KEY_VERSION"),
+            _read_env_optional("SIGNING_KEY_VERSION", env_path=env_path),
         )
 
     async def _record_committed(event: StoryCommitted) -> None:
@@ -839,9 +945,46 @@ def _derive_register_title(body: str, filename: str) -> str:
     return Path(filename).stem or "Untitled"
 
 
+# Canonical attestation questions for human registration. Stored verbatim in
+# artifact frontmatter for legal record. Do not truncate or normalize.
+_REGISTER_QUESTION_1 = (
+    "Do you affirm that you are a human acting on your own behalf, "
+    "and that you possess the artistic capacity to make these declarations?"
+)
+_REGISTER_QUESTION_2 = (
+    "Do you publicly declare ownership of this text, "
+    "affirming that it is your original creation?"
+)
+_REGISTER_QUESTION_3_TEMPLATE = (
+    "Do you declare in good faith that this text is your independent creation, "
+    "and that its content accurately reflects the classification ({}) "
+    "you selected above?"
+)
+_REGISTER_QUESTION_4 = (
+    "Do you fully understand and consent that this declaration will be "
+    "cryptographically sealed into a public, append-only ledger, and that any future "
+    "attempt to alter or delete this record will deliberately break the cryptographic "
+    "chain of trust?"
+)
+
+
+def _build_attestation_qa(
+    classification: str,
+) -> list[tuple[str, str]]:
+    """Return (question, answer) pairs for non-interactive default attestation."""
+    q3 = _REGISTER_QUESTION_3_TEMPLATE.format(classification.upper())
+    return [
+        (_REGISTER_QUESTION_1, "y"),
+        (_REGISTER_QUESTION_2, "y"),
+        (q3, "y"),
+        (_REGISTER_QUESTION_4, "y"),
+    ]
+
+
 async def _run_register_command(args: argparse.Namespace) -> int:
     """Run human-only certification pipeline."""
 
+    env_path = get_project_env_path()
     event_bus = EventBus()
     repository = _build_repository()
     telemetry_adapter = ProvenanceTelemetryAdapter(
@@ -854,9 +997,11 @@ async def _run_register_command(args: argparse.Namespace) -> int:
         asyncio.get_running_loop().create_future()
     )
 
-    notary_adapter = CryptoNotaryAdapter(event_bus=event_bus)
+    notary_adapter = CryptoNotaryAdapter(event_bus=event_bus, env_path=env_path)
     ledger_adapter = GitLedgerAdapter(
-        event_bus=event_bus, repository_path=repository_path
+        event_bus=event_bus,
+        repository_path=repository_path,
+        env_path=env_path,
     )
 
     artifact_path = Path(args.file).resolve()
@@ -882,12 +1027,12 @@ async def _run_register_command(args: argparse.Namespace) -> int:
 
     # --- Artistic attestation wizard ---
     if getattr(args, "non_interactive", False):
+        qa_pairs = _build_attestation_qa("fiction")
         attestation = AuthorAttestation(
             classification="fiction",
-            is_human=True,
-            is_original_creation=True,
-            is_independent_and_accurate=True,
-            understands_cryptographic_permanence=True,
+            attestations=[
+                AttestationQa(question=q, answer=a) for q, a in qa_pairs
+            ],
         )
     else:
         try:
@@ -910,36 +1055,27 @@ async def _run_register_command(args: argparse.Namespace) -> int:
             classification = class_map[class_choice]
 
             print("\nSTEP 2: The Attestations")
-            p1 = input(
-                "Prompt 1: Do you affirm that you are a human acting on your own behalf, "
-                "and that you possess the artistic capacity to make these declarations? [y/N]: "
-            ).strip().lower()
-            p2 = input(
-                "Prompt 2: Do you publicly declare ownership of this text, "
-                "affirming that it is your original creation? [y/N]: "
-            ).strip().lower()
-            p3 = input(
-                f"Prompt 3: Do you declare in good faith that this text is your independent creation, "
-                f"and that its content accurately reflects the classification ({classification.upper()}) "
-                "you selected above? [y/N]: "
-            ).strip().lower()
-            p4 = input(
-                "Prompt 4: Do you fully understand and consent that this declaration will be "
-                "cryptographically sealed into a public, append-only ledger, and that any future "
-                "attempt to alter or delete this record will deliberately break the cryptographic "
-                "chain of trust? [y/N]: "
-            ).strip().lower()
+            questions = [
+                _REGISTER_QUESTION_1,
+                _REGISTER_QUESTION_2,
+                _REGISTER_QUESTION_3_TEMPLATE.format(classification.upper()),
+                _REGISTER_QUESTION_4,
+            ]
+            answers: list[str] = []
+            for i, q in enumerate(questions, 1):
+                raw = input(f"Prompt {i}: {q} [y/N]: ").strip()
+                answers.append(raw)
+                if raw.lower() != "y":
+                    raise RuntimeError(
+                        "Registration aborted: All attestations must be agreed to (y) to proceed."
+                    )
 
-            if not all(ans == "y" for ans in [p1, p2, p3, p4]):
-                raise RuntimeError(
-                    "Registration aborted: All attestations must be agreed to (y) to proceed."
-                )
             attestation = AuthorAttestation(
                 classification=classification,
-                is_human=True,
-                is_original_creation=True,
-                is_independent_and_accurate=True,
-                understands_cryptographic_permanence=True,
+                attestations=[
+                    AttestationQa(question=q, answer=a)
+                    for q, a in zip(questions, answers, strict=True)
+                ],
             )
             print("=" * 50 + "\n")
         except (KeyboardInterrupt, EOFError):
@@ -961,7 +1097,7 @@ async def _run_register_command(args: argparse.Namespace) -> int:
         await asyncio.to_thread(
             provenance_service.register_signing_key,
             event.artifact.signature.verification_anchor.signer_fingerprint,
-            _read_env_optional("SIGNING_KEY_VERSION"),
+            _read_env_optional("SIGNING_KEY_VERSION", env_path=env_path),
         )
 
     async def _record_committed(event: StoryCommitted) -> None:
@@ -998,11 +1134,13 @@ async def _run_register_command(args: argparse.Namespace) -> int:
             )
         )
 
+    ceremony = _capture_registration_ceremony(env_path)
     human_event = StoryHumanRegistered(
         body=body,
         title=title,
         license=args.license,
         attestation=attestation,
+        registration_ceremony=ceremony,
     )
 
     await event_bus.subscribe(StorySigned, _record_signed)
@@ -1034,14 +1172,26 @@ async def _run_register_command(args: argparse.Namespace) -> int:
 async def _run_verify_command(args: argparse.Namespace) -> int:
     """Run strict signature verification for one artifact file."""
 
-    adapter = CryptoNotaryAdapter(event_bus=EventBus(), require_private_key=False)
+    env_path = get_project_env_path()
+    adapter = CryptoNotaryAdapter(
+        event_bus=EventBus(),
+        env_path=env_path,
+        require_private_key=False,
+    )
     artifact_path = Path(args.file).resolve()
+    allow_redacted = getattr(args, "allow_redacted", False)
     try:
         artifact_id = adapter.read_artifact_id(artifact_path)
-        ok = adapter.verify_artifact(artifact_path)
+        ok = adapter.verify_artifact(artifact_path, allow_redacted=allow_redacted)
         if not ok:
             print("[FAIL] CORRUPT ARTIFACT: Invalid ML-DSA signature")
             return 1
+        if allow_redacted:
+            print(
+                "[OK] REDACTED: Metadata and signatures valid. "
+                "Reveal full body to complete verification."
+            )
+            return 0
         envelope, payload = parse_artifact_markdown(artifact_path)
         sidecar_path = artifact_path.with_suffix(".c2pa")
         if sidecar_path.exists():
@@ -1076,6 +1226,26 @@ async def _run_verify_command(args: argparse.Namespace) -> int:
         return 0
     except Exception as exc:  # noqa: BLE001
         print(f"[FAIL] CORRUPT ARTIFACT: {exc}")
+        return 1
+
+
+def _run_redact_command(args: argparse.Namespace) -> int:
+    """Produce redacted artifact with body replaced by placeholder."""
+
+    artifact_path = Path(args.file).resolve()
+    output_path = Path(args.output).resolve()
+    if not artifact_path.exists():
+        print(f"[FAIL] File not found: {artifact_path}")
+        return 1
+    try:
+        text = artifact_path.read_text(encoding="utf-8")
+        redacted = produce_redacted_artifact(text, args.placeholder)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(redacted, encoding="utf-8")
+        print(f"Redacted artifact written to: {output_path}")
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        print(f"[FAIL] Redaction failed: {exc}")
         return 1
 
 
@@ -1525,6 +1695,130 @@ def _run_forge_status_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_anchor_merkle_root_command(args: argparse.Namespace) -> int:
+    """Compute Merkle root of transparency log, OTS-stamp it, commit to repo."""
+
+    repository_path = _require_repo_path(args)
+    _validate_external_repo_path(repository_path)
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    ots_adapter = build_ots_adapter(env_path)
+    if ots_adapter is None:
+        print("OTS forging is disabled (ENABLE_OTS_FORGE=false).")
+        return 1
+
+    log_path = repository_path / ".provenance" / "transparency-log.jsonl"
+    if not log_path.exists():
+        print("No transparency log found. Run anchor on artifacts first.")
+        return 1
+
+    transparency_log = TransparencyLogAdapter(log_path=log_path)
+    entries = transparency_log.parse_entries_from_jsonl(
+        log_path.read_text(encoding="utf-8")
+    )
+    if not entries:
+        print("Transparency log is empty.")
+        return 0
+
+    entry_hashes = [e.entry_hash for e in entries]
+    merkle_root = build_merkle_root(entry_hashes)
+    root_bytes = bytes.fromhex(merkle_root)
+
+    try:
+        ots_bytes = ots_adapter.stamp_payload(root_bytes)
+    except Exception as exc:  # noqa: BLE001
+        print(f"OTS stamp failed: {exc}")
+        return 1
+
+    from datetime import datetime, timezone
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ots_rel = f".provenance/merkle-{ts}.ots"
+    ots_full = repository_path / ots_rel
+    ots_full.parent.mkdir(parents=True, exist_ok=True)
+    ots_full.write_bytes(ots_bytes)
+
+    snapshots_path = repository_path / ".provenance" / "merkle-snapshots.jsonl"
+    snapshot = {
+        "merkle_root": merkle_root,
+        "entry_count": len(entries),
+        "anchored_at": datetime.now(timezone.utc).isoformat(),
+        "ots_path": ots_rel,
+        "bitcoin_block_height": None,
+    }
+    line = json.dumps(snapshot, sort_keys=True) + "\n"
+    snapshots_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(snapshots_path, "a", encoding="utf-8") as f:
+        f.write(line)
+
+    repo = pygit2.Repository(str(repository_path))
+    repo.index.add(ots_rel)
+    repo.index.add(snapshots_path.relative_to(repository_path).as_posix())
+    author = pygit2.Signature(
+        "Slop Orchestrator",
+        "bot@antiphoria.local",
+    )
+    repo.index.write()
+    tree_id = repo.index.write_tree()
+    try:
+        parent = repo.head.target if repo.head else None
+        ref_name = repo.head.name if repo.head else "refs/heads/master"
+    except (KeyError, pygit2.GitError):
+        parent = None
+        ref_name = "HEAD"  # Empty repo: create initial commit
+    if parent is not None:
+        repo.create_commit(
+            ref_name,
+            author,
+            author,
+            f"provenance: anchor Merkle root ({ts})",
+            tree_id,
+            [parent],
+        )
+    else:
+        repo.create_commit(
+            ref_name,
+            author,
+            author,
+            f"provenance: anchor Merkle root ({ts})",
+            tree_id,
+            [],
+        )
+
+    print(f"Merkle root anchored: {merkle_root[:16]}... ({len(entries)} entries)")
+    return 0
+
+
+def _run_verify_transparency_log_command(args: argparse.Namespace) -> int:
+    """Recompute Merkle root from transparency log and compare to expected."""
+
+    repository_path = _require_repo_path(args)
+    log_path = repository_path / ".provenance" / "transparency-log.jsonl"
+    if not log_path.exists():
+        print("No transparency log found.")
+        return 1
+
+    transparency_log = TransparencyLogAdapter(log_path=log_path)
+    entries = transparency_log.parse_entries_from_jsonl(
+        log_path.read_text(encoding="utf-8")
+    )
+    if not entries:
+        print("Transparency log is empty.")
+        return 1
+
+    entry_hashes = [e.entry_hash for e in entries]
+    computed_root = build_merkle_root(entry_hashes)
+    expected = args.merkle_root.strip().lower()
+
+    if computed_root.lower() == expected:
+        print(f"OK: Merkle root matches ({len(entries)} entries)")
+        return 0
+    print(
+        f"MISMATCH: computed={computed_root}, expected={expected} "
+        f"({len(entries)} entries)"
+    )
+    return 1
+
+
 async def _run_events_command(args: argparse.Namespace) -> int:
     """List recent provenance lifecycle telemetry events."""
 
@@ -1591,6 +1885,8 @@ async def _dispatch(args: argparse.Namespace) -> int:
         return await _run_register_command(args)
     if args.command == "verify":
         return await _run_verify_command(args)
+    if args.command == "redact":
+        return _run_redact_command(args)
     if args.command == "anchor":
         return await _run_anchor_command(args)
     if args.command == "timestamp":
@@ -1605,6 +1901,10 @@ async def _dispatch(args: argparse.Namespace) -> int:
         return await _run_upgrade_command(args)
     if args.command == "process-pending":
         return await _run_process_pending_command(args)
+    if args.command == "anchor-merkle-root":
+        return _run_anchor_merkle_root_command(args)
+    if args.command == "verify-transparency-log":
+        return _run_verify_transparency_log_command(args)
     if args.command == "events":
         return await _run_events_command(args)
     if args.command == "admin":
@@ -1625,12 +1925,14 @@ def main() -> int:
         "curate",
         "register",
         "anchor",
+        "anchor-merkle-root",
         "timestamp",
         "audit",
         "attest",
         "events",
         "upgrade",
         "process-pending",
+        "verify-transparency-log",
     }:
         lock_base = _require_repo_path(parsed_args)
     lock_path = lock_base / ".slop-orchestrator.lock"

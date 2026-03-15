@@ -220,6 +220,7 @@ class OTSAdapter:
                     [ots_bin, "verify", "-f", str(payload_path), str(proof_path)],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
                     timeout=timeout,
                 )
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):

@@ -13,6 +13,9 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 CRYPTO_ALGORITHM_ML_DSA_44 = "CRYSTALS-Dilithium (NIST ML-DSA-44)"
 """Canonical algorithm label required in frontmatter."""
 
+CRYPTO_ALGORITHM_ED25519 = "Ed25519"
+"""Classical algorithm for hybrid (belt-and-suspenders) signing."""
+
 PolicyLicenseId: TypeAlias = Literal["ARR", "CC-BY-4.0", "CC0-1.0"]
 """Canonical license IDs from CONTENT_LICENSE_POLICY. Use | str for custom escape hatch."""
 
@@ -64,16 +67,20 @@ class Curation(StrictModel):
     unified_diff: str = Field(alias="unifiedDiff", min_length=1)
 
 
+class AttestationQa(StrictModel):
+    """Single Q&A pair stored verbatim for legal record. Questions and answers
+    must be preserved in full, unchanged length."""
+
+    question: str = Field(min_length=1)
+    answer: str = Field(min_length=1)
+
+
 class AuthorAttestation(StrictModel):
-    """Explicit artistic declarations made by a human author."""
+    """Explicit artistic declarations made by a human author. Stores the
+    actual questions and answers verbatim for legal importance."""
 
     classification: ArtisticClassification
-    is_human: bool = Field(alias="isHuman")
-    is_original_creation: bool = Field(alias="isOriginalCreation")
-    is_independent_and_accurate: bool = Field(alias="isIndependentAndAccurate")
-    understands_cryptographic_permanence: bool = Field(
-        alias="understandsCryptographicPermanence"
-    )
+    attestations: list[AttestationQa] = Field(min_length=4)
 
 
 class VerificationAnchor(StrictModel):
@@ -81,6 +88,18 @@ class VerificationAnchor(StrictModel):
 
     signer_fingerprint: str = Field(alias="signerFingerprint", min_length=1)
     public_key_uri: HttpUrl | None = Field(alias="publicKeyUri", default=None)
+
+
+class RegistrationCeremony(StrictModel):
+    """Proof-of-environment metadata for human registration."""
+
+    registration_utc_ms: int = Field(alias="registrationUtcMs")
+    orchestrator_git_commit: str = Field(
+        alias="orchestratorGitCommit", min_length=1
+    )
+    machine_id_hash: str | None = Field(
+        alias="machineIdHash", default=None
+    )
 
 
 class Provenance(StrictModel):
@@ -99,12 +118,18 @@ class Provenance(StrictModel):
         alias="authorAttestation",
         default=None,
     )
+    registration_ceremony: RegistrationCeremony | None = Field(
+        alias="registrationCeremony",
+        default=None,
+    )
 
 
 class SignatureBlock(StrictModel):
     """Cryptographic seal details for envelope verification."""
 
-    crypto_algorithm: Literal[CRYPTO_ALGORITHM_ML_DSA_44] = Field(
+    crypto_algorithm: Literal[
+        CRYPTO_ALGORITHM_ML_DSA_44, CRYPTO_ALGORITHM_ED25519
+    ] = Field(
         alias="cryptoAlgorithm",
         default=CRYPTO_ALGORITHM_ML_DSA_44,
     )
@@ -137,6 +162,9 @@ class Artifact(StrictModel):
     provenance: Provenance
     curation: Curation | None = None
     signature: SignatureBlock | None = None
+    hybrid_signature: SignatureBlock | None = Field(
+        alias="hybridSignature", default=None
+    )
     record_status: Literal["unverified"] = Field(
         alias="recordStatus", default="unverified"
     )
@@ -174,6 +202,7 @@ def build_envelope_signing_target(
     # Signature metadata is excluded from the signed envelope target to keep
     # sign/verify bytes stable regardless of post-signature attachment details.
     envelope_data.pop("signature", None)
+    envelope_data.pop("hybridSignature", None)
 
     return {
         "schemaVersion": "eternity.signing-target.v1",

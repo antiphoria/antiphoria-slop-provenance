@@ -9,6 +9,7 @@ description = "Event-driven slop orchestration MVP."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "cryptography>=42.0.0",
     "filelock>=3.13.0",
     "google-genai",
     "pydantic>=2.5.0,<3.0.0",

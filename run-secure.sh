@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# BYOV launcher for Slop Orchestrator (Linux/macOS)
+# BYOV launcher for Slop Orchestrator (Linux only)
 # Decrypts GPG vault to RAM, injects key paths, runs command, cleans up on exit.
 # Requires: gpg, keys_vault.tar.gpg at project root.
+# NOTE: Uses /dev/shm (Linux tmpfs). macOS and Windows lack this; use run-secure.ps1
+# on Windows. macOS users need an alternative (e.g. $TMPDIR or a different RAM disk).
 
 set -e -o pipefail
 

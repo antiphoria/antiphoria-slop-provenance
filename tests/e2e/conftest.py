@@ -72,6 +72,8 @@ def run_cli(args: list[str], env: dict, timeout: int = 15) -> subprocess.Complet
         env=env,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
     )
 
@@ -88,5 +90,7 @@ def run_tool(
         env=env,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
     )

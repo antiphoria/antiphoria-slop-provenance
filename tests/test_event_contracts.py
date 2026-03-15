@@ -6,7 +6,16 @@ import unittest
 from uuid import uuid4
 
 from src.events import StoryRequested, StoryHumanRegistered
-from src.models import AuthorAttestation
+from src.models import AttestationQa, AuthorAttestation
+
+
+def _sample_attestations() -> list[AttestationQa]:
+    return [
+        AttestationQa(question="Q1?", answer="y"),
+        AttestationQa(question="Q2?", answer="y"),
+        AttestationQa(question="Q3?", answer="y"),
+        AttestationQa(question="Q4?", answer="y"),
+    ]
 
 
 class EventContractsTest(unittest.TestCase):
@@ -19,10 +28,7 @@ class EventContractsTest(unittest.TestCase):
     def test_story_human_registered_includes_license_and_attestation(self) -> None:
         attestation = AuthorAttestation(
             classification="fiction",
-            is_human=True,
-            is_original_creation=True,
-            is_independent_and_accurate=True,
-            understands_cryptographic_permanence=True,
+            attestations=_sample_attestations(),
         )
         event = StoryHumanRegistered(
             body="Human content.",
@@ -32,15 +38,12 @@ class EventContractsTest(unittest.TestCase):
         )
         self.assertEqual(event.license, "CC-BY-4.0")
         self.assertEqual(event.attestation.classification, "fiction")
-        self.assertIs(event.attestation.is_human, True)
+        self.assertEqual(len(event.attestation.attestations), 4)
 
     def test_story_human_registered_defaults_license_to_arr(self) -> None:
         attestation = AuthorAttestation(
             classification="fact",
-            is_human=True,
-            is_original_creation=True,
-            is_independent_and_accurate=True,
-            understands_cryptographic_permanence=True,
+            attestations=_sample_attestations(),
         )
         event = StoryHumanRegistered(
             body="Content",

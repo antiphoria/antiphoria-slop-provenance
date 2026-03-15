@@ -24,6 +24,27 @@ def parse_artifact_markdown(file_path: Path) -> tuple[Artifact, str]:
     return parse_artifact_markdown_text(text)
 
 
+def produce_redacted_artifact(text: str, placeholder: str) -> str:
+    """Produce redacted artifact text with body replaced by placeholder.
+
+    Preserves frontmatter and signature footer exactly; replaces body only.
+    """
+    text = _sanitize_null_bytes(text)
+    if not text.startswith("---\n"):
+        raise RuntimeError("Artifact file is missing YAML frontmatter delimiter.")
+    delimiter_index = text.find("\n---\n", 4)
+    if delimiter_index == -1:
+        raise RuntimeError("Artifact file has malformed YAML frontmatter.")
+    prefix = text[: delimiter_index + len("\n---\n")]
+    rest = text[delimiter_index + len("\n---\n"):]
+    footer_index = rest.rfind(_FOOTER_MARKERS[0])
+    if footer_index != -1:
+        body_section = placeholder + "\n"
+        footer = rest[footer_index:]
+        return prefix + body_section + footer
+    return prefix + placeholder + "\n"
+
+
 def _sanitize_null_bytes(text: str) -> str:
     """Remove null bytes that corrupt YAML parsing (e.g. from UTF-16 file copy)."""
 

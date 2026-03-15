@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from src.adapters.transparency_log import TransparencyLogAdapter
+from src.merkle import build_merkle_root
 from tests.e2e.conftest import run_cli
 
 
@@ -50,10 +53,11 @@ def test_cli_help_exits_zero(isolated_env) -> None:
 
 
 def test_verify_invalid_artifact_fails(isolated_env) -> None:
-    """slop-cli verify --file /nonexistent fails."""
-    env, _, _ = isolated_env
+    """slop-cli verify --file <nonexistent> fails."""
+    env, ledger_dir, _ = isolated_env
+    nonexistent = ledger_dir.parent / "nonexistent_verify" / "artifact.md"
     result = run_cli(
-        ["verify", "--file", "/nonexistent/artifact.md"],
+        ["verify", "--file", str(nonexistent)],
         env=env,
     )
     assert result.returncode != 0
@@ -71,7 +75,8 @@ def test_forge_status_empty_repo(isolated_env) -> None:
 
 def test_admin_revoke_key_missing_db(isolated_env) -> None:
     """slop-cli admin revoke-key with missing db exits non-zero."""
-    env, _, _ = isolated_env
+    env, ledger_dir, _ = isolated_env
+    nonexistent_db = ledger_dir.parent / "nonexistent_admin" / "db.db"
     result = run_cli(
         [
             "admin",
@@ -79,7 +84,7 @@ def test_admin_revoke_key_missing_db(isolated_env) -> None:
             "--fingerprint",
             "deadbeef",
             "--db-path",
-            "/nonexistent/db.db",
+            str(nonexistent_db),
         ],
         env=env,
     )
@@ -88,8 +93,9 @@ def test_admin_revoke_key_missing_db(isolated_env) -> None:
 
 def test_generate_fails_when_repo_path_invalid(isolated_env) -> None:
     """slop-cli generate with non-existent repo path fails."""
-    env, _, _ = isolated_env
-    env["LEDGER_REPO_PATH"] = "/nonexistent/ledger"
+    env, ledger_dir, _ = isolated_env
+    nonexistent_repo = ledger_dir.parent / "nonexistent_repo" / "ledger"
+    env["LEDGER_REPO_PATH"] = str(nonexistent_repo)
     result = run_cli(
         ["generate", "--prompt", "x"],
         env=env,
@@ -98,10 +104,11 @@ def test_generate_fails_when_repo_path_invalid(isolated_env) -> None:
 
 
 def test_curate_requires_valid_artifact(isolated_env) -> None:
-    """slop-cli curate --file /nonexistent fails."""
+    """slop-cli curate --file <nonexistent> fails."""
     env, ledger_dir, _ = isolated_env
+    nonexistent = ledger_dir.parent / "nonexistent_curate" / "artifact.md"
     result = run_cli(
-        ["curate", "--file", "/nonexistent/artifact.md", "--repo-path", str(ledger_dir)],
+        ["curate", "--file", str(nonexistent), "--repo-path", str(ledger_dir)],
         env=env,
     )
     assert result.returncode != 0
@@ -309,3 +316,109 @@ def test_verify_valid_artifact_passes(isolated_env) -> None:
         "CRITICAL: Security isolation failed! "
         "The CLI ignored the env override and likely fell back to a real key in .env."
     )
+
+
+def test_redact_and_verify_allow_redacted(isolated_env) -> None:
+    """Redact artifact body, verify with --allow-redacted; full verify fails on redacted."""
+    env, ledger_dir, _ = isolated_env
+    keys_dir = Path(__file__).resolve().parents[1] / "fixtures" / "keys"
+    if not (keys_dir / "test_ml_dsa.priv").exists() or not (keys_dir / "test_ml_dsa.pub").exists():
+        pytest.skip("Test keys not found; run keygen for fixtures/keys/")
+
+    request_id, _ = _generate_and_extract_artifact(env, ledger_dir)
+    attest_result = run_cli(
+        ["attest", "--repo-path", str(ledger_dir), "--request-id", request_id],
+        env=env,
+    )
+    assert attest_result.returncode == 0, attest_result.stderr or attest_result.stdout
+
+    artifact_content = subprocess.run(
+        ["git", "-C", str(ledger_dir), "show", f"artifact/{request_id}:{request_id}.md"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=5,
+    ).stdout
+    assert artifact_content, "Could not extract attested artifact from ledger"
+    artifact_path = ledger_dir / "artifact.md"
+    artifact_path.write_text(artifact_content, encoding="utf-8")
+
+    redacted_path = ledger_dir / "artifact_redacted.md"
+    redact_result = run_cli(
+        ["redact", "--file", str(artifact_path), "--output", str(redacted_path)],
+        env=env,
+    )
+    assert redact_result.returncode == 0, redact_result.stderr or redact_result.stdout
+    assert redacted_path.exists()
+
+    verify_redacted = run_cli(
+        ["verify", "--file", str(redacted_path), "--allow-redacted"],
+        env=env,
+    )
+    assert verify_redacted.returncode == 0, verify_redacted.stderr or verify_redacted.stdout
+    assert "REDACTED" in (verify_redacted.stdout or "")
+
+    verify_strict = run_cli(
+        ["verify", "--file", str(redacted_path)],
+        env=env,
+    )
+    assert verify_strict.returncode != 0, "Verify without --allow-redacted must fail on redacted body"
+
+
+def _create_worktree_transparency_log(ledger_dir: Path) -> list[str]:
+    """Create a minimal transparency log in worktree; return entry_hashes for Merkle root."""
+    prov_dir = ledger_dir / ".provenance"
+    prov_dir.mkdir(parents=True, exist_ok=True)
+    log_path = prov_dir / "transparency-log.jsonl"
+    adapter = TransparencyLogAdapter(log_path=log_path)
+    entry, serializable = adapter.build_entry_record(
+        artifact_hash="a" * 64,
+        artifact_id="00000000-0000-0000-0000-000000000001",
+        source_file="test.md",
+        previous_entry_hash=None,
+        request_id="00000000-0000-0000-0000-000000000002",
+        metadata={"source": "test"},
+        skip_remote=True,
+    )
+    line = json.dumps(serializable, sort_keys=True) + "\n"
+    log_path.write_text(line, encoding="utf-8")
+    return [entry.entry_hash]
+
+
+def test_verify_transparency_log_matches(isolated_env) -> None:
+    """verify-transparency-log recomputes Merkle root and compares; matches when correct."""
+    env, ledger_dir, _ = isolated_env
+    entry_hashes = _create_worktree_transparency_log(ledger_dir)
+    merkle_root = build_merkle_root(entry_hashes)
+
+    result = run_cli(
+        [
+            "verify-transparency-log",
+            "--repo-path",
+            str(ledger_dir),
+            "--merkle-root",
+            merkle_root,
+        ],
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "OK" in (result.stdout or "")
+
+
+def test_verify_transparency_log_mismatch(isolated_env) -> None:
+    """verify-transparency-log fails when expected Merkle root does not match."""
+    env, ledger_dir, _ = isolated_env
+    _create_worktree_transparency_log(ledger_dir)
+
+    result = run_cli(
+        [
+            "verify-transparency-log",
+            "--repo-path",
+            str(ledger_dir),
+            "--merkle-root",
+            "a" * 64,
+        ],
+        env=env,
+    )
+    assert result.returncode != 0
+    assert "MISMATCH" in (result.stdout or result.stderr or "")

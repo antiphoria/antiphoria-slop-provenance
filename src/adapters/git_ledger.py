@@ -21,7 +21,7 @@ from filelock import FileLock
 from src.adapters.c2pa_manifest import build_c2pa_sidecar_manifest
 from src.env_config import read_env_bool, read_env_optional
 from src.events import EventBusPort, StoryCommitted, StorySigned
-from src.models import sha256_hex
+from src.models import Artifact, sha256_hex
 from src.secrets_guard import assert_secret_free
 
 _DEFAULT_LEDGER_AUTHOR_NAME = "Slop Orchestrator"
@@ -179,6 +179,23 @@ class GitLedgerAdapter:
             return filename
         return f"{self._artifacts_directory}/{filename}"
 
+    def _hybrid_signature_block(self, artifact: Artifact) -> str:
+        """Render hybridSignature YAML block when present."""
+        if artifact.hybrid_signature is None:
+            return ""
+        hs = artifact.hybrid_signature
+        lines = self._wrap_signature_lines(hs.cryptographic_signature)
+        yaml_lines = "\n".join(f"    {line}" for line in lines)
+        return (
+            "hybridSignature:\n"
+            f"  cryptoAlgorithm: {self._yaml_quoted(hs.crypto_algorithm)}\n"
+            f"  artifactHash: {self._yaml_quoted(hs.artifact_hash)}\n"
+            "  verificationAnchor:\n"
+            f"    signerFingerprint: {self._yaml_quoted(hs.verification_anchor.signer_fingerprint)}\n"
+            "  cryptographicSignature: |\n"
+            f"{yaml_lines}\n"
+        )
+
     @staticmethod
     def _wrap_signature_lines(signature_base64: str, line_width: int = 76) -> list[str]:
         """Normalize and wrap base64 signature text for YAML/footer blocks."""
@@ -273,14 +290,17 @@ class GitLedgerAdapter:
         attestation_block = ""
         if artifact.provenance.author_attestation is not None:
             att = artifact.provenance.author_attestation
-            attestation_block = (
-                "  authorAttestation:\n"
-                f"    classification: {self._yaml_quoted(att.classification)}\n"
-                f"    isHuman: {str(att.is_human).lower()}\n"
-                f"    isOriginalCreation: {str(att.is_original_creation).lower()}\n"
-                f"    isIndependentAndAccurate: {str(att.is_independent_and_accurate).lower()}\n"
-                f"    understandsCryptographicPermanence: {str(att.understands_cryptographic_permanence).lower()}\n"
-            )
+            attestation_lines = [
+                "  authorAttestation:\n",
+                f"    classification: {self._yaml_quoted(att.classification)}\n",
+                "    attestations:\n",
+            ]
+            for qa in att.attestations:
+                # Content must be indented more than "question" key for valid YAML
+                q_block = self._yaml_literal_block(qa.question, indent=10)
+                attestation_lines.append(f"      - question: |-\n{q_block}\n")
+                attestation_lines.append(f"        answer: {self._yaml_quoted(qa.answer)}\n")
+            attestation_block = "".join(attestation_lines)
 
         public_key_uri_line = ""
         if artifact.signature.verification_anchor.public_key_uri is not None:
@@ -323,6 +343,7 @@ class GitLedgerAdapter:
             f"{public_key_uri_line}"
             "  cryptographicSignature: |\n"
             f"{signature_block_yaml}\n"
+            f"{self._hybrid_signature_block(artifact)}"
             f"recordStatus: {self._yaml_quoted(artifact.record_status)}\n"
             "---\n"
             f"{event.body}\n"

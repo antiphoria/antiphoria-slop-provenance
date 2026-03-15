@@ -201,6 +201,7 @@ class RFC3161TSAAdapter:
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             env=self._openssl_env(),
         )
         if process.returncode != 0:
@@ -239,6 +240,7 @@ class RFC3161TSAAdapter:
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             env=self._openssl_env(),
         )
 
@@ -262,6 +264,7 @@ class RFC3161TSAAdapter:
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             env=self._openssl_env(),
         )
         if extract_token.returncode != 0 or not token_path.exists():
@@ -281,6 +284,7 @@ class RFC3161TSAAdapter:
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             env=self._openssl_env(),
         )
         if extract_certs.returncode != 0 or not output_path.exists():

@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from src.adapters.crypto_notary import CryptoNotaryAdapter
 from src.events import InMemoryEventBus
-from src.models import AuthorAttestation
+from src.models import AttestationQa, AuthorAttestation
 
 
 class CryptoNotaryC2PATest(unittest.IsolatedAsyncioTestCase):
@@ -51,10 +51,12 @@ class CryptoNotaryC2PATest(unittest.IsolatedAsyncioTestCase):
 
         attestation = AuthorAttestation(
             classification="satire",
-            is_human=True,
-            is_original_creation=True,
-            is_independent_and_accurate=True,
-            understands_cryptographic_permanence=True,
+            attestations=[
+                AttestationQa(question="Q1?", answer="y"),
+                AttestationQa(question="Q2?", answer="y"),
+                AttestationQa(question="Q3?", answer="y"),
+                AttestationQa(question="Q4?", answer="y"),
+            ],
         )
 
         adapter = CryptoNotaryAdapter(
@@ -90,9 +92,9 @@ class CryptoNotaryC2PATest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             artifact.provenance.author_attestation.classification, "satire"
         )
-        self.assertIs(
-            artifact.provenance.author_attestation.understands_cryptographic_permanence,
-            True,
+        self.assertEqual(
+            len(artifact.provenance.author_attestation.attestations),
+            4,
         )
         dumped = artifact.provenance.author_attestation.model_dump(by_alias=True)
         self.assertIn("authorAttestation", str(artifact.model_dump(by_alias=True)))
