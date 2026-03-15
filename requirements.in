@@ -1,6 +1,5 @@
 # Direct dependencies for slop-orchestrator (from pyproject.toml)
 # Used by pip-compile to generate requirements.txt
-# For Kafka workers, use: pip install .[kafka]
 filelock>=3.13.0
 google-genai
 pydantic>=2.5.0,<3.0.0

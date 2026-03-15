@@ -19,19 +19,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-kafka = ["aiokafka>=0.10.0"]
 dev = ["pytest-httpserver>=1.0.0"]
 
 [project.scripts]
 slop-cli = "src.cli:main"
-slop-generator-service = "src.kafka.workers.generator:main"
-slop-notary-service = "src.kafka.workers.notary:main"
-slop-ledger-service = "src.kafka.workers.ledger:main"
-slop-provenance-service = "src.kafka.workers.provenance:main"
-slop-telemetry-service = "src.kafka.workers.telemetry:main"
-slop-replay-dlq = "src.kafka.replay_dlq:main"
-slop-bootstrap-topics = "src.kafka.bootstrap:main"
-slop-smoke-kafka = "src.kafka.smoke:main"
 slop-metrics = "src.runtime.metrics_report:main"
 
 [tool.setuptools.packages.find]
@@ -79,8 +70,15 @@ ignore = [
     "S603",
 ]
 
+[tool.pytest.ini_options]
+testpaths = ["tests", "src/kafka/tests"]
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [
+    "S101",
+    "S105",
+]
+"src/kafka/tests/**/*.py" = [
     "S101",
     "S105",
 ]

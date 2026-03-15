@@ -50,7 +50,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="slop-metrics")
     parser.add_argument(
         "--metrics-dir",
-        default=read_env_optional("KAFKA_METRICS_DIR") or ".metrics",
+        default=read_env_optional("METRICS_DIR") or ".metrics",
         help="Directory containing per-service metrics snapshots.",
     )
     parser.add_argument(

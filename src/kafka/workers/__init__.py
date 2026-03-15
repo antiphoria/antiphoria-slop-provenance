@@ -1,1 +1,0 @@
-"""Kafka worker entrypoints."""

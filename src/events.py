@@ -107,7 +107,7 @@ class StorySigned(BaseModel):
     body: str = Field(min_length=1)
     c2pa_manifest_hash: str | None = None
     c2pa_manifest_bytes_b64: str | None = None
-    # Legacy field retained for Kafka/backfill compatibility.
+    # Legacy field retained for backfill compatibility.
     c2pa_manifest_bytes_ref: str | None = None
     signed_at: datetime = Field(default_factory=_utc_now)
 

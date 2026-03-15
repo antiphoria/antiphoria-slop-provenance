@@ -1,7 +1,7 @@
 """Shared OTS upgrade logic for furnace and CLI.
 
-This module has no Kafka imports. Both the provenance worker (Kafka) and
-the CLI import from here. When bus is None, the StoryForged emit is skipped.
+This module has no transport-specific imports. Both the provenance worker
+and the CLI import from here. When bus is None, the StoryForged emit is skipped.
 """
 
 from __future__ import annotations

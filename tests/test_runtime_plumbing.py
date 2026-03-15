@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -67,16 +66,6 @@ class RuntimePlumbingTest(unittest.TestCase):
                 request_id=request_id,
             )
             self.assertIsNone(resolved)
-
-    def test_provenance_worker_entrypoint_is_importable(self) -> None:
-        import pytest
-
-        pytest.importorskip("aiokafka")
-        worker_module = importlib.import_module("src.kafka.workers.provenance")
-        shim_module = importlib.import_module("src.runtime.provenance_service")
-
-        self.assertTrue(callable(worker_module.main))
-        self.assertIs(shim_module.main, worker_module.main)
 
 
 if __name__ == "__main__":

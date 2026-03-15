@@ -19,12 +19,6 @@ Event-driven provenance engine for short-story generation, cryptographic certifi
 pip install -e .
 ```
 
-**Kafka workers (optional):** For distributed mode (`--transport kafka`) and worker services (`slop-generator-service`, `slop-notary-service`, etc.), install the Kafka extra:
-
-```bash
-pip install -e ".[kafka]"
-```
-
 **Windows users:** The project depends on `liboqs-python`, OpenSSL, and `make`, which are painful to set up natively on Windows. See [doc/WSL2_SETUP.md](doc/WSL2_SETUP.md) for a WSL2 + Docker Desktop setup tutorial.
 
 ## Environment
@@ -57,8 +51,6 @@ RFC3161_TSA_URL=https://freetsa.org/tsr
 RFC3161_CA_CERT_PATH=./keys/tsa-ca.pem
 RFC3161_TSA_UNTRUSTED_CERT_PATH=./keys/tsa.crt
 SIGNING_KEY_VERSION=v1
-ORCHESTRATOR_TRANSPORT=local
-KAFKA_BOOTSTRAP_SERVERS=localhost:9092
 STATE_DB_PATH=./state.db
 ENABLE_C2PA=false
 C2PA_MODE=mvp
@@ -116,28 +108,16 @@ Run that command directly (no manual branch checkout required):
 slop-cli attest --repo-path ../my-ledger --request-id <request_id>
 ```
 
-Kafka dispatch mode:
-
-```bash
-slop-cli generate --prompt "A short brutalist micro-story." --repo-path ../my-ledger --transport kafka
-```
-
 ### Curate and re-certify
 
 ```bash
 slop-cli curate --file ../my-ledger/<request_id>.md --repo-path ../my-ledger
 ```
 
-Kafka dispatch mode:
+Human-only registration:
 
 ```bash
-slop-cli curate --file ../my-ledger/<request_id>.md --repo-path ../my-ledger --transport kafka
-```
-
-Human-only registration (Kafka):
-
-```bash
-slop-cli register --file ../my-ledger/human-story.md --repo-path ../my-ledger --non-interactive --transport kafka
+slop-cli register --file ../my-ledger/human-story.md --repo-path ../my-ledger --non-interactive
 ```
 
 ### Request-ID attestation (recommended)
@@ -182,83 +162,7 @@ slop-cli timestamp --file ../my-ledger/<request_id>.md --repo-path ../my-ledger 
 slop-cli audit --file ../my-ledger/<request_id>.md --repo-path ../my-ledger --tsa-ca-cert-path ./keys/tsa-ca.pem --report-file ./audit_report.json
 ```
 
-## Distributed runtime (Kafka + microservices)
-
-Start the local distributed stack:
-
-```bash
-docker compose up --build
-```
-
-or via Make:
-
-```bash
-make up
-```
-
-Create topics explicitly (optional when auto-create is disabled):
-
-```bash
-slop-bootstrap-topics --bootstrap-servers localhost:9092
-```
-
-Run workers directly (without Docker):
-
-```bash
-slop-generator-service
-slop-notary-service
-slop-ledger-service
-slop-provenance-service
-slop-telemetry-service
-```
-
-Replay failed dead-letter events:
-
-```bash
-slop-replay-dlq --topic story.signed --max-messages 50
-```
-
-### Kafka Architecture
-
-The pipeline flows through Kafka topics as follows:
-
-```mermaid
-flowchart LR
-    StoryRequested --> Generator
-    Generator --> StoryGenerated
-    StoryGenerated --> Notary
-    Notary --> StorySigned
-    StorySigned --> Ledger
-    Ledger --> StoryCommitted
-```
-
-**Topic layout:** Each event type maps to a primary topic (e.g. `story.requested`, `story.generated`). Failed messages are retried on `{topic}.retry` and eventually moved to `{topic}.dlq` after max retries.
-
-**Ports:** Kafka listens on `9092` (Docker internal) and `9094` (host). Use `localhost:9094` when running CLI or smoke tests from the host; use `kafka:9092` from inside Docker.
-
-**Per-service DB layout:**
-
-| Env var | Purpose |
-|---------|---------|
-| `STATE_DB_PATH` | Per-service dedup DB (e.g. `/state/ledger.db`). Each service has its own; no sharing. |
-| `ARTIFACT_DB_PATH` | Shared artifact lifecycle DB (e.g. `/state/artifacts.db`). All services that update artifact status use this. |
-
-For common failures, DLQ inspection, replay commands, and health check interpretation, see [docs/KAFKA_RUNBOOK.md](docs/KAFKA_RUNBOOK.md).
-
-Run an end-to-end Kafka smoke test (requires running workers).
-
-From host (Kafka advertises `localhost:9094` for host clients):
-
-```bash
-slop-smoke-kafka --bootstrap-topics --bootstrap-servers localhost:9094 --ledger-repo-path ./ledger --timeout-sec 180
-```
-
-Or from inside Docker (uses internal `kafka:9092`):
-
-```bash
-docker compose run --rm --no-deps ledger-service \
-  slop-smoke-kafka --bootstrap-servers kafka:9092 --ledger-repo-path /ledger --timeout-sec 180
-```
+Kafka orchestration (distributed workers) lives in a separate repository. This certification engine exposes only `slop-cli` for local execution.
 
 ## C2PA implementation note
 
@@ -300,9 +204,6 @@ make lint
 make test
 make compile
 make requirements   # Regenerate requirements.txt from requirements.in (for Docker)
-make topics
-make replay
-make smoke
 make metrics
 make down
 ```

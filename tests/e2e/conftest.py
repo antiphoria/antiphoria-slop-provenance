@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -83,7 +82,7 @@ def run_tool(
     env: dict,
     timeout: int = 15,
 ) -> subprocess.CompletedProcess:
-    """Run other entry points (e.g. src.kafka.bootstrap) same way."""
+    """Run module entry points (e.g. src.kafka.bootstrap, src.runtime.metrics_report)."""
     return subprocess.run(
         [sys.executable, "-m", module] + args,
         env=env,
@@ -91,13 +90,3 @@ def run_tool(
         text=True,
         timeout=timeout,
     )
-
-
-def kafka_reachable(bootstrap_servers: str = "localhost:9094") -> bool:
-    """Return True if Kafka is reachable."""
-    try:
-        host, port = bootstrap_servers.split(":", 1)
-        with socket.create_connection((host, int(port)), timeout=2):
-            return True
-    except Exception:
-        return False

@@ -20,8 +20,6 @@ def _generate_and_extract_artifact(env: dict, ledger_dir: Path) -> tuple[str, Pa
             "E2E artifact",
             "--repo-path",
             str(ledger_dir),
-            "--transport",
-            "local",
         ],
         env=env,
     )
@@ -110,7 +108,7 @@ def test_curate_requires_valid_artifact(isolated_env) -> None:
 
 
 def test_register_human_artifact_success(isolated_env, tsa_mock) -> None:
-    """slop-cli register human markdown with --transport local. Requires test keys."""
+    """slop-cli register human markdown locally. Requires test keys."""
     env, ledger_dir, _ = isolated_env
     env["RFC3161_TSA_URL"] = tsa_mock
     keys_dir = Path(__file__).resolve().parents[1] / "fixtures" / "keys"
@@ -130,8 +128,6 @@ def test_register_human_artifact_success(isolated_env, tsa_mock) -> None:
             "--license",
             "CC0-1.0",
             "--non-interactive",
-            "--transport",
-            "local",
         ],
         env=env,
     )

@@ -1,4 +1,4 @@
-"""Kafka/event worker that anchors and timestamps committed artifacts."""
+"""Event worker that anchors and timestamps committed artifacts."""
 
 from __future__ import annotations
 

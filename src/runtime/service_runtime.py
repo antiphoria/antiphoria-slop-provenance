@@ -81,9 +81,12 @@ def build_dedup_repository(service_name: str) -> DedupRepository:
 
 
 def _resolve_health_file_path(service_name: str) -> Path | None:
-    """Resolve health file path from KAFKA_HEALTH_FILE or derive from state dir."""
+    """Resolve health file path from WORKER_HEALTH_FILE or derive from state dir."""
 
-    health_file = read_env_optional("KAFKA_HEALTH_FILE", env_path=_ENV_PATH)
+    health_file = (
+        read_env_optional("WORKER_HEALTH_FILE", env_path=_ENV_PATH)
+        or read_env_optional("KAFKA_HEALTH_FILE", env_path=_ENV_PATH)
+    )
     if health_file:
         return Path(health_file).resolve()
     state_db = read_env_optional("STATE_DB_PATH", env_path=_ENV_PATH)
@@ -115,7 +118,7 @@ async def _health_writer_loop(health_path: Path, interval_sec: float = 30.0) -> 
 def start_health_writer(service_name: str) -> asyncio.Task[None] | None:
     """Start background task that writes health timestamp every 30s.
 
-    Returns the task when KAFKA_HEALTH_FILE or STATE_DB_PATH is set, else None.
+    Returns the task when WORKER_HEALTH_FILE or STATE_DB_PATH is set, else None.
     """
 
     health_path = _resolve_health_file_path(service_name)

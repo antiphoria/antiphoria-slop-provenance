@@ -73,25 +73,6 @@ def _default_repo_path() -> str | None:
     return _read_env_optional("LEDGER_REPO_PATH", env_path=get_project_env_path())
 
 
-def _build_kafka_bus(
-    bootstrap_servers: str,
-    consumer_group: str = "cli-gateway",
-):
-    """Build KafkaEventBus. Raises RuntimeError if kafka extra not installed."""
-    try:
-        from src.kafka.event_bus import KafkaEventBus
-
-        return KafkaEventBus(
-            bootstrap_servers=bootstrap_servers,
-            consumer_group=consumer_group,
-        )
-    except ImportError as exc:
-        raise RuntimeError(
-            "Kafka transport requires the kafka extra. "
-            "Run: pip install slop-orchestrator[kafka]"
-        ) from exc
-
-
 def _require_repo_path(args: argparse.Namespace) -> Path:
     """Resolve repo path from args or LEDGER_REPO_PATH. Raises if unset."""
     raw = getattr(args, "repo_path", None) or _default_repo_path()
@@ -161,12 +142,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=_read_env_optional("GENERATOR_MODEL_ID") or "gemini-2.5-flash",
         help="Google AI Studio model identifier.",
     )
-    generate_parser.add_argument(
-        "--transport",
-        choices=("local", "kafka"),
-        default=_read_env_optional("ORCHESTRATOR_TRANSPORT") or "local",
-        help="Execution transport mode.",
-    )
 
     curate_parser = subparsers.add_parser(
         "curate",
@@ -179,12 +154,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--repo-path",
         default=_default_repo_path(),
         help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
-    )
-    curate_parser.add_argument(
-        "--transport",
-        choices=("local", "kafka"),
-        default=_read_env_optional("ORCHESTRATOR_TRANSPORT") or "local",
-        help="Execution transport mode.",
     )
 
     register_parser = subparsers.add_parser(
@@ -213,12 +182,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--non-interactive",
         action="store_true",
         help="Skip artistic attestation wizard; use defaults (for CI/automation).",
-    )
-    register_parser.add_argument(
-        "--transport",
-        choices=("local", "kafka"),
-        default=_read_env_optional("ORCHESTRATOR_TRANSPORT") or "local",
-        help="Execution transport mode.",
     )
 
     verify_parser = subparsers.add_parser(
@@ -641,23 +604,6 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
 
     assert_secret_free("cli generate prompt", args.prompt)
 
-    if args.transport == "kafka":
-        bootstrap_servers = (
-            _read_env_optional("KAFKA_BOOTSTRAP_SERVERS", env_path=get_project_env_path())
-            or "localhost:9092"
-        )
-        kafka_bus = _build_kafka_bus(bootstrap_servers)
-        await kafka_bus.start()
-        request_event = StoryRequested(prompt=args.prompt)
-        await kafka_bus.emit(request_event)
-        await kafka_bus.stop()
-        print(
-            "Request queued:",
-            f"request_id={request_event.request_id}",
-            "transport=kafka",
-        )
-        return 0
-
     event_bus = EventBus()
     repository = _build_repository()
     telemetry_adapter = ProvenanceTelemetryAdapter(
@@ -759,49 +705,6 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
 
 async def _run_curate_command(args: argparse.Namespace) -> int:
     """Run curation pipeline for an edited markdown artifact file."""
-
-    if args.transport == "kafka":
-        repository = _build_repository()
-        repository_path = _require_repo_path(args)
-        artifact_path = Path(args.file).resolve()
-        _validate_artifact_under_repo(artifact_path, repository_path)
-        if not artifact_path.exists():
-            raise RuntimeError(f"Curated file not found: '{artifact_path}'.")
-        request_id = extract_request_id_from_artifact_path(artifact_path)
-        record = await asyncio.to_thread(repository.get_artifact_record, request_id)
-        if record is None:
-            raise RuntimeError(
-                f"Artifact record not found for request_id={request_id}."
-            )
-        if record.model_id == "human":
-            raise RuntimeError(
-                "Human-registered artifacts cannot be curated. "
-                "Register seals the file; use attest to verify."
-            )
-        markdown_text = artifact_path.read_text(encoding="utf-8")
-        curated_body = extract_markdown_body(markdown_text)
-        assert_secret_free("curation prompt", record.prompt)
-        assert_secret_free("curation body", curated_body)
-        curation_metadata = build_curation_metadata(record.body, curated_body)
-        bootstrap_servers = (
-            _read_env_optional("KAFKA_BOOTSTRAP_SERVERS", env_path=get_project_env_path())
-            or "localhost:9092"
-        )
-        kafka_bus = _build_kafka_bus(bootstrap_servers)
-        await kafka_bus.start()
-        await kafka_bus.emit(
-            StoryCurated(
-                request_id=request_id,
-                curated_body=curated_body,
-                prompt=record.prompt,
-                curation_metadata=curation_metadata,
-                model_id=record.model_id,
-                title=record.title if record.model_id == "human" else None,
-            )
-        )
-        await kafka_bus.stop()
-        print("Curation request queued:", f"request_id={request_id}", "transport=kafka")
-        return 0
 
     event_bus = EventBus()
     repository = _build_repository()
@@ -1101,23 +1004,6 @@ async def _run_register_command(args: argparse.Namespace) -> int:
         license=args.license,
         attestation=attestation,
     )
-
-    if args.transport == "kafka":
-        bootstrap_servers = (
-            _read_env_optional("KAFKA_BOOTSTRAP_SERVERS", env_path=get_project_env_path())
-            or "localhost:9094"
-        )
-        kafka_bus = _build_kafka_bus(bootstrap_servers)
-        await kafka_bus.start()
-        await kafka_bus.emit(human_event)
-        await kafka_bus.stop()
-        print(
-            "Registration request queued:",
-            f"request_id={human_event.request_id}",
-            "transport=kafka",
-        )
-        _print_attest_next_step(repository_path, human_event.request_id)
-        return 0
 
     await event_bus.subscribe(StorySigned, _record_signed)
     await event_bus.subscribe(StoryCommitted, _record_committed)
