@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "cryptography>=42.0.0",
+    "rfc8785>=0.1.4",
     "filelock>=3.13.0",
     "google-genai",
     "pydantic>=2.5.0,<3.0.0",
@@ -20,7 +21,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest-httpserver>=1.0.0", "hypothesis>=6.0.0", "mutmut>=2.0.0"]
+dev = [
+    "pytest-asyncio>=0.23.0",
+    "pytest-httpserver>=1.0.0",
+    "hypothesis>=6.0.0",
+    "mutmut>=2.0.0",
+]
 webauthn = ["fido2>=1.1.0"]
 
 [project.scripts]
@@ -74,6 +80,7 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
 
 [tool.mutmut]
 paths_to_mutate = "src/"

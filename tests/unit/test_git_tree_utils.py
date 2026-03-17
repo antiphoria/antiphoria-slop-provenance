@@ -148,3 +148,17 @@ def test_tree_get_entry(
         assert result is None
     else:
         assert result is not None
+
+
+@pytest.mark.parametrize(
+    "malicious_path",
+    ["../a.txt", "../../etc/passwd", "/a.txt", "dir/../a.txt"],
+)
+def test_tree_get_blob_rejects_path_traversal(repo_with_tree, malicious_path: str) -> None:
+    """tree_get_blob raises ValueError for path traversal or absolute paths."""
+    commit = repo_with_tree.revparse_single("HEAD")
+    assert isinstance(commit, pygit2.Commit)
+    tree = commit.tree
+
+    with pytest.raises(ValueError, match="not permitted"):
+        tree_get_blob(repo_with_tree, tree, malicious_path)

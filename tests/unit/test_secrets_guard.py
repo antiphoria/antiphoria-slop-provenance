@@ -30,6 +30,24 @@ class SecretsGuardTest(unittest.TestCase):
             "Write a short micro-fiction story set in a monolithic city.",
         )
 
+    def test_detects_rsa_private_key_header(self) -> None:
+        findings = find_secret_findings(
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIB\n-----END RSA PRIVATE KEY-----"  # pragma: allowlist secret
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].detector, "pem_private_key")
+
+    def test_detects_openssh_private_key_header(self) -> None:
+        findings = find_secret_findings(
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nkey\n-----END OPENSSH PRIVATE KEY-----"  # pragma: allowlist secret
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].detector, "pem_private_key")
+
+    def test_ignores_benign_similar_prefix(self) -> None:
+        findings = find_secret_findings("AIza short")
+        self.assertEqual(len(findings), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

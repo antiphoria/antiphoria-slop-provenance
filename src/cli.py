@@ -554,6 +554,12 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Index of the leaf in the transparency log (0-based).",
     )
+    verify_inclusion_parser.add_argument(
+        "--tree-size",
+        type=int,
+        default=None,
+        help="Number of leaves in the tree (required for odd-sized trees).",
+    )
 
     build_proof_parser = subparsers.add_parser(
         "build-inclusion-proof",
@@ -2277,6 +2283,7 @@ def _run_verify_inclusion_command(args: argparse.Namespace) -> int:
         proof=proof,
         root=args.merkle_root.strip().lower(),
         leaf_index=args.leaf_index,
+        tree_size=getattr(args, "tree_size", None),
     )
     if valid:
         print("OK: Inclusion proof valid.")
@@ -2320,6 +2327,7 @@ def _run_build_inclusion_proof_command(args: argparse.Namespace) -> int:
             "leaf_index": leaf_index,
             "leaf_hash": leaf_hash,
             "merkle_root": merkle_root,
+            "tree_size": len(entry_hashes),
         }
         print(json.dumps(output, sort_keys=True))
     else:

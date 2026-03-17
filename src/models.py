@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+
+import rfc8785
 from datetime import datetime
 from typing import Annotated, Any, Literal, TypeAlias
 from uuid import UUID, uuid4
@@ -80,7 +82,7 @@ class AuthorAttestation(StrictModel):
     actual questions and answers verbatim for legal importance."""
 
     classification: ArtisticClassification
-    attestations: list[AttestationQa] = Field(min_length=4)
+    attestations: list[AttestationQa] = Field(min_length=4, max_length=64)
 
 
 class WebAuthnAttestation(StrictModel):
@@ -208,19 +210,11 @@ class Artifact(StrictModel):
 def canonical_json_bytes(data: dict[str, Any]) -> bytes:
     """Return deterministic canonical JSON bytes for signing.
 
-    Uses sort_keys + compact separators. Python json.dumps formats floats as 0.0
-    (not 0); strict RFC 8785 JCS requires 0 for integral floats. Cross-language
-    validators (Go, TypeScript) implementing JCS may produce different bytes.
-    JCS compliance is deferred; use the `jcs` library if interoperability with
-    strict JCS validators is required.
+    Uses RFC 8785 (JSON Canonicalization Scheme) for strict JCS compliance.
+    Ensures consistent output across parsers for float normalization,
+    Unicode normalization, and escape sequences.
     """
-
-    return json.dumps(
-        data,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
+    return rfc8785.dumps(data)
 
 
 def build_envelope_signing_target(

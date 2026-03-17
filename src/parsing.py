@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,8 @@ def produce_redacted_artifact(text: str, placeholder: str) -> str:
     Preserves frontmatter exactly; replaces body only. Body is everything after
     the second --- delimiter. No footer.
     """
-    text = _sanitize_null_bytes(text)
+    if "\x00" in text:
+        raise RuntimeError("Artifact contains null bytes; invalid payload.")
     if not text.startswith("---\n"):
         raise RuntimeError("Artifact file is missing YAML frontmatter delimiter.")
     delimiter_index = text.find("\n---\n", 4)
@@ -35,22 +37,21 @@ def produce_redacted_artifact(text: str, placeholder: str) -> str:
     return prefix + placeholder + "\n"
 
 
-def _sanitize_null_bytes(text: str) -> str:
-    """Remove null bytes that corrupt YAML parsing (e.g. from UTF-16 file copy)."""
-
-    return text.replace("\x00", "")
-
-
 def parse_artifact_markdown_text(text: str) -> tuple[Artifact, str]:
     """Parse artifact markdown text into strict envelope and body payload."""
 
-    text = _sanitize_null_bytes(text)
+    if "\x00" in text:
+        raise RuntimeError("Artifact contains null bytes; invalid payload.")
     if not text.startswith("---\n"):
         raise RuntimeError("Artifact file is missing YAML frontmatter delimiter.")
     delimiter_index = text.find("\n---\n", 4)
     if delimiter_index == -1:
         raise RuntimeError("Artifact file has malformed YAML frontmatter.")
     frontmatter_text = text[4:delimiter_index]
+    if re.search(r"&\w", frontmatter_text) or re.search(r"\*\w", frontmatter_text):
+        raise RuntimeError(
+            "YAML frontmatter contains anchors or aliases; rejected for security."
+        )
     payload_text = text[delimiter_index + len("\n---\n"):]
     payload = payload_text.strip()
     if not payload:

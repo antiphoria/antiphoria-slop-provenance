@@ -48,13 +48,11 @@ def test_parse_artifact_markdown_text_raises(text: str, match: str) -> None:
         parse_artifact_markdown_text(text)
 
 
-def test_parse_artifact_markdown_text_null_bytes_stripped() -> None:
-    """Null bytes in body are stripped before parsing."""
+def test_parse_artifact_markdown_text_null_bytes_raises() -> None:
+    """Null bytes in artifact raise RuntimeError."""
     text = f"{_MINIMAL_FRONTMATTER}content\x00with\x00nulls\n"
-    envelope, payload = parse_artifact_markdown_text(text)
-    assert isinstance(envelope, Artifact)
-    assert "content" in payload and "with" in payload and "nulls" in payload
-    assert "\x00" not in payload
+    with pytest.raises(RuntimeError, match="null bytes"):
+        parse_artifact_markdown_text(text)
 
 
 def test_parse_artifact_markdown_text_valid() -> None:
@@ -68,10 +66,27 @@ def test_parse_artifact_markdown_text_valid() -> None:
     assert payload == body
 
 
+def test_parse_artifact_markdown_text_body_contains_horizontal_rule() -> None:
+    """Body containing --- (markdown horizontal rule) parses correctly."""
+    body = "Section one\n\n---\n\nSection two\n"
+    text = f"{_MINIMAL_FRONTMATTER}{body}\n"
+    envelope, payload = parse_artifact_markdown_text(text)
+    assert isinstance(envelope, Artifact)
+    assert "---" in payload
+    assert payload.strip() == body.strip()
+
+
 def test_parse_artifact_markdown_text_frontmatter_not_dict_raises() -> None:
     """Frontmatter that decodes to non-dict raises RuntimeError."""
     text = "---\n- list\n- items\n---\nbody\n"
     with pytest.raises(RuntimeError, match="did not decode to an object"):
+        parse_artifact_markdown_text(text)
+
+
+def test_parse_artifact_markdown_text_yaml_anchors_rejected() -> None:
+    """YAML frontmatter with anchors or aliases raises RuntimeError."""
+    text = "---\na: &a [1,2,3]\nb: *a\n---\nbody\n"
+    with pytest.raises(RuntimeError, match="anchors or aliases"):
         parse_artifact_markdown_text(text)
 
 
@@ -108,6 +123,7 @@ def test_produce_redacted_artifact(text: str, placeholder: str, expected_prefix:
     [
         ("no ---", "missing YAML frontmatter delimiter"),
         ("x\n---\ny\n---\nz", "missing YAML frontmatter delimiter"),
+        ("---\na: 1\n---\nbody\x00with\x00nulls\n", "null bytes"),
     ],
 )
 def test_produce_redacted_artifact_raises(text: str, match: str) -> None:

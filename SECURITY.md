@@ -1,5 +1,14 @@
 # Security: Key Handling (BYOV)
 
+## Security Audit Remediation (Breaking Changes)
+
+The following changes were made to address cryptographic and integrity vulnerabilities. **Existing artifacts and transparency logs may be incompatible.**
+
+- **Merkle tree:** RFC 6962-style domain separation (leaf vs internal node hashing) and odd-node promotion (no duplication). Merkle roots will change. `verify_merkle_proof` now accepts optional `tree_size` for odd-sized trees.
+- **Null bytes:** Artifacts containing `\x00` are rejected (no longer stripped). Invalid payloads raise `RuntimeError`.
+- **JSON canonicalization:** `canonical_json_bytes` now uses RFC 8785 (JCS). Existing signatures may break if the previous output differed from JCS.
+- **Path traversal:** `tree_get_blob` and `tree_get_entry` reject `..`, `.`, and absolute paths with `ValueError`.
+
 ## Threat Model
 
 Private keys (ML-DSA `private.key`, C2PA `c2pa-private-key.pem`, and Ed25519 `ed25519_private.pem`) must never be written to disk at runtime. The BYOV (Bring Your Own Vault) architecture ensures **zero-disk-exposure**: keys are provided via secure, volatile mounts. The application receives paths to keys in RAM or on a temporarily mounted volume; when the process exits, the launcher unmounts or deletes the volatile storage.

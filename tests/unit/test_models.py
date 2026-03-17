@@ -81,6 +81,17 @@ def test_author_attestation_validation_error(payload: dict, match: str) -> None:
         AuthorAttestation.model_validate(payload)
 
 
+def test_author_attestation_rejects_excessive_attestations() -> None:
+    """AuthorAttestation raises ValidationError for more than 64 attestations."""
+    attestations = [
+        {"question": f"Q{i}", "answer": "a"} for i in range(65)
+    ]
+    with pytest.raises(ValidationError, match="64"):
+        AuthorAttestation.model_validate(
+            {"classification": "fiction", "attestations": attestations}
+        )
+
+
 @pytest.mark.parametrize(
     "payload,match",
     [
@@ -124,7 +135,7 @@ def test_author_attestation_valid(classification: str) -> None:
 @pytest.mark.parametrize(
     "payload,expected_bytes",
     [
-        ({"temp": 0.0}, b'{"temp":0.0}'),
+        ({"temp": 0.0}, b'{"temp":0}'),
         (
             {"nested": {"b": 1, "a": 2}},
             b'{"nested":{"a":2,"b":1}}',
@@ -134,8 +145,20 @@ def test_author_attestation_valid(classification: str) -> None:
     ],
 )
 def test_canonical_json_bytes(payload: dict, expected_bytes: bytes) -> None:
-    """canonical_json_bytes produces deterministic output for signing."""
+    """canonical_json_bytes produces RFC 8785 deterministic output for signing."""
     assert canonical_json_bytes(payload) == expected_bytes
+
+
+def test_canonical_json_bytes_float_normalization() -> None:
+    """RFC 8785: 1e2 and 100 produce same canonical bytes."""
+    assert canonical_json_bytes({"x": 1e2}) == canonical_json_bytes({"x": 100})
+
+
+def test_canonical_json_bytes_unicode_escape() -> None:
+    """RFC 8785: Unicode escapes normalized consistently."""
+    result = canonical_json_bytes({"c": "\u003c"})
+    assert b"<" in result or b"\\u003c" in result
+    assert canonical_json_bytes({"c": "<"}) == result
 
 
 class AuthorAttestationTest(unittest.TestCase):

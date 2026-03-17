@@ -360,13 +360,18 @@ class InMemoryEventBus:
     Emission is fan-out and concurrent using `asyncio.gather`.
     """
 
-    def __init__(self) -> None:
-        """Initialize empty subscriber registry."""
+    def __init__(self, max_pending_tasks: int = 10_000) -> None:
+        """Initialize empty subscriber registry.
 
+        Args:
+            max_pending_tasks: Maximum number of pending handler tasks.
+                When exceeded, emit raises RuntimeError to prevent OOM.
+        """
         self._subscribers: dict[type[BaseModel], list[_RawEventHandler]] = {}
         self._error_subscribers: list[ErrorHandler] = []
         self._tasks: set[asyncio.Task[None]] = set()
         self._lock = asyncio.Lock()
+        self._max_pending_tasks = max_pending_tasks
 
     async def subscribe(
         self,
@@ -454,6 +459,12 @@ class InMemoryEventBus:
 
         if not handlers:
             return
+
+        if len(self._tasks) >= self._max_pending_tasks:
+            raise RuntimeError(
+                f"Event bus queue full ({self._max_pending_tasks} pending tasks). "
+                "Publication blocked to prevent OOM."
+            )
 
         for handler in handlers:
             task = asyncio.create_task(self._run_handler(handler, event))
