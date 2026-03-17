@@ -22,7 +22,7 @@ from src.env_config import (
     read_env_optional,
     read_env_required,
 )
-from src.canonicalization import compute_payload_hash
+from src.canonicalization import canonicalize_body, compute_payload_hash
 from src.models import Artifact, canonical_json_bytes, sha256_hex
 
 _C2PA_MODE_VALUES: tuple[str, ...] = ("mvp", "sdk")
@@ -618,7 +618,9 @@ def _validate_sdk_markdown_assertion(
     errors: list[str] = []
     expected_hash = compute_payload_hash(body)
     stored_hash = assertion_data.get("payloadHash")
-    if assertion_data.get("content") != body:
+    # Compare canonicalized forms: C2PA stores raw body, commit stores canonicalized
+    stored_content = assertion_data.get("content") or ""
+    if canonicalize_body(stored_content) != canonicalize_body(body):
         errors.append(
             "SDK markdown assertion content mismatch against artifact payload."
         )

@@ -713,6 +713,67 @@ class ProvenanceService:
             return str(entry_hash)
         return None
 
+    def sync_transparency_log_to_remote(
+        self, repository_path: Path
+    ) -> tuple[int, int]:
+        """Republish local transparency log entries to remote if missing. Idempotent.
+
+        Iterates all artifact branches, reads .provenance/transparency-log.jsonl,
+        and publishes each entry to Supabase only when not already present.
+
+        Returns:
+            (published_count, skipped_count)
+        """
+        published = 0
+        skipped = 0
+        try:
+            repo = pygit2.Repository(str(repository_path))
+        except (KeyError, pygit2.GitError):
+            return 0, 0
+        for ref in repo.references:
+            name = getattr(ref, "name", str(ref))
+            if not name.startswith("refs/heads/artifact/"):
+                continue
+            try:
+                log_content = self._read_branch_file(
+                    repository_path=repository_path,
+                    ref_name=name,
+                    relative_path=_BRANCH_LOG_PATH,
+                )
+            except RuntimeError:
+                continue
+            entries = self._transparency_log_adapter.parse_entries_from_jsonl(
+                log_content
+            )
+            for entry in entries:
+                serializable = {
+                    "entryId": entry.entry_id,
+                    "artifactHash": entry.artifact_hash,
+                    "artifactId": entry.artifact_id,
+                    "requestId": entry.request_id,
+                    "sourceFile": entry.source_file,
+                    "previousEntryHash": entry.previous_entry_hash,
+                    "anchoredAt": entry.anchored_at,
+                    "metadata": entry.metadata,
+                    "entryHash": entry.entry_hash,
+                    "remoteReceipt": entry.remote_receipt,
+                }
+                if entry.bitcoin_block_height is not None:
+                    serializable["bitcoinBlockHeight"] = entry.bitcoin_block_height
+                ok, msg = self._transparency_log_adapter.republish_entry_if_missing(
+                    serializable
+                )
+                if ok:
+                    published += 1
+                    _logger.info(
+                        "Republished transparency entry entry_hash=%s source=%s",
+                        entry.entry_hash[:16] + "...",
+                        entry.source_file,
+                    )
+                else:
+                    skipped += 1
+        return published, skipped
+
     def _resolve_previous_entry_hash(
         self,
         repository_path: Path,

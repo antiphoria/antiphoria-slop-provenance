@@ -73,6 +73,18 @@ def test_forge_status_empty_repo(isolated_env) -> None:
     assert result.returncode == 0
 
 
+def test_sync_transparency_log_empty_repo(isolated_env) -> None:
+    """slop-cli sync-transparency-log on repo with no artifact branches exits 0."""
+    env, ledger_dir, _ = isolated_env
+    result = run_cli(
+        ["sync-transparency-log", "--repo-path", str(ledger_dir)],
+        env=env,
+    )
+    assert result.returncode == 0
+    assert "Published:" in (result.stdout or "")
+    assert "skipped" in (result.stdout or "")
+
+
 def test_admin_revoke_key_missing_db(isolated_env) -> None:
     """slop-cli admin revoke-key with missing db exits non-zero."""
     env, ledger_dir, _ = isolated_env

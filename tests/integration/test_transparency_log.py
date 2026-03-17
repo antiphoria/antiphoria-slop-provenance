@@ -297,3 +297,163 @@ class FetchRemoteEntriesTest(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 adapter.fetch_remote_entries_by_artifact_hash("f" * 64)
         self.assertIn("Remote transparency log fetch failed", str(ctx.exception))
+
+
+class EntryExistsInRemoteTest(unittest.TestCase):
+    """Validate entry_exists_in_remote idempotency check."""
+
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        self._log_path = Path(self._temp.name) / "transparency-log.jsonl"
+
+    def tearDown(self) -> None:
+        self._temp.cleanup()
+
+    def test_returns_true_when_entry_hash_matches(self) -> None:
+        def fake_urlopen(request: object, timeout: float = 10.0) -> object:
+            return _make_response(
+                json.dumps([
+                    {
+                        "payload": {
+                            "artifactHash": "a" * 64,
+                            "entryHash": "entry-123",
+                        },
+                    },
+                ]).encode("utf-8")
+            )
+
+        adapter = TransparencyLogAdapter(
+            log_path=self._log_path,
+            publish_url="https://test.supabase.co/rest/v1/transparency_log",
+            publish_headers={"apikey": "x", "Authorization": "Bearer x"},
+        )
+        with patch("urllib.request.urlopen", fake_urlopen):
+            self.assertTrue(
+                adapter.entry_exists_in_remote("entry-123", "a" * 64)
+            )
+
+    def test_returns_false_when_no_matching_entry_hash(self) -> None:
+        def fake_urlopen(request: object, timeout: float = 10.0) -> object:
+            return _make_response(
+                json.dumps([
+                    {
+                        "payload": {
+                            "artifactHash": "a" * 64,
+                            "entryHash": "other-entry",
+                        },
+                    },
+                ]).encode("utf-8")
+            )
+
+        adapter = TransparencyLogAdapter(
+            log_path=self._log_path,
+            publish_url="https://test.supabase.co/rest/v1/transparency_log",
+            publish_headers={"apikey": "x", "Authorization": "Bearer x"},
+        )
+        with patch("urllib.request.urlopen", fake_urlopen):
+            self.assertFalse(
+                adapter.entry_exists_in_remote("entry-123", "a" * 64)
+            )
+
+    def test_returns_false_when_remote_not_configured(self) -> None:
+        adapter = TransparencyLogAdapter(
+            log_path=self._log_path,
+            publish_url=None,
+            publish_headers={},
+        )
+        self.assertFalse(
+            adapter.entry_exists_in_remote("entry-123", "a" * 64)
+        )
+
+
+class RepublishEntryIfMissingTest(unittest.TestCase):
+    """Validate republish_entry_if_missing idempotent healing."""
+
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        self._log_path = Path(self._temp.name) / "transparency-log.jsonl"
+
+    def tearDown(self) -> None:
+        self._temp.cleanup()
+
+    def test_skips_when_entry_already_exists(self) -> None:
+        def fake_urlopen(request: object, timeout: float = 10.0) -> object:
+            return _make_response(
+                json.dumps([
+                    {
+                        "payload": {
+                            "artifactHash": "a" * 64,
+                            "entryHash": "entry-123",
+                        },
+                    },
+                ]).encode("utf-8")
+            )
+
+        adapter = TransparencyLogAdapter(
+            log_path=self._log_path,
+            publish_url="https://test.supabase.co/rest/v1/transparency_log",
+            publish_headers={"apikey": "x", "Authorization": "Bearer x"},
+            publish_supabase_format=True,
+        )
+        serializable = {
+            "entryHash": "entry-123",
+            "artifactHash": "a" * 64,
+            "entryId": "id-1",
+            "artifactId": "art-1",
+            "requestId": "req-1",
+            "sourceFile": "x.md",
+            "previousEntryHash": None,
+            "anchoredAt": "2024-01-01T00:00:00Z",
+            "metadata": {},
+        }
+        with patch("urllib.request.urlopen", fake_urlopen):
+            published, msg = adapter.republish_entry_if_missing(serializable)
+        self.assertFalse(published)
+        self.assertIn("Already present", msg)
+
+    def test_publishes_when_entry_missing(self) -> None:
+        call_count = 0
+
+        def fake_urlopen(request: object, timeout: float = 10.0) -> object:
+            nonlocal call_count
+            call_count += 1
+            if request.method == "GET":
+                return _make_response(b"[]")
+            return _make_response(b'[{"id": 1}]')
+
+        adapter = TransparencyLogAdapter(
+            log_path=self._log_path,
+            publish_url="https://test.supabase.co/rest/v1/transparency_log",
+            publish_headers={"apikey": "x", "Authorization": "Bearer x"},
+            publish_supabase_format=True,
+        )
+        serializable = {
+            "entryHash": "entry-456",
+            "artifactHash": "b" * 64,
+            "entryId": "id-2",
+            "artifactId": "art-2",
+            "requestId": "req-2",
+            "sourceFile": "y.md",
+            "previousEntryHash": None,
+            "anchoredAt": "2024-01-01T00:00:00Z",
+            "metadata": {},
+        }
+        with patch("urllib.request.urlopen", fake_urlopen):
+            published, msg = adapter.republish_entry_if_missing(serializable)
+        self.assertTrue(published)
+        self.assertIn("Published", msg)
+        self.assertEqual(call_count, 2)
+
+    def test_returns_false_when_remote_not_configured(self) -> None:
+        adapter = TransparencyLogAdapter(
+            log_path=self._log_path,
+            publish_url=None,
+            publish_headers={},
+        )
+        serializable = {
+            "entryHash": "entry-789",
+            "artifactHash": "c" * 64,
+        }
+        published, msg = adapter.republish_entry_if_missing(serializable)
+        self.assertFalse(published)
+        self.assertIn("not configured", msg)

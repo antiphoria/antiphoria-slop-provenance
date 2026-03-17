@@ -494,6 +494,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to .ots file (default: latest from merkle-snapshots.jsonl).",
     )
 
+    sync_tlog_parser = subparsers.add_parser(
+        "sync-transparency-log",
+        help="Republish local transparency log entries to Supabase if missing (idempotent).",
+    )
+    sync_tlog_parser.add_argument(
+        "--repo-path",
+        default=_default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
+    )
+
     verify_tlog_parser = subparsers.add_parser(
         "verify-transparency-log",
         help="Recompute Merkle root from transparency log and compare to expected.",
@@ -2180,6 +2190,22 @@ def _run_upgrade_merkle_ots_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_sync_transparency_log_command(args: argparse.Namespace) -> int:
+    """Republish local transparency log entries to Supabase if missing."""
+
+    repository_path = _require_repo_path(args)
+    _validate_external_repo_path(repository_path)
+    repository = _build_repository()
+    provenance_service, _ = _build_provenance_services(
+        repository, repository_path
+    )
+    published, skipped = provenance_service.sync_transparency_log_to_remote(
+        repository_path
+    )
+    print(f"Published: {published}, skipped (already present): {skipped}")
+    return 0
+
+
 def _run_verify_transparency_log_command(args: argparse.Namespace) -> int:
     """Recompute Merkle root from transparency log and compare to expected."""
 
@@ -2421,6 +2447,8 @@ async def _dispatch_impl(args: argparse.Namespace) -> int:
         return _run_anchor_merkle_root_command(args)
     if args.command == "upgrade-merkle-ots":
         return _run_upgrade_merkle_ots_command(args)
+    if args.command == "sync-transparency-log":
+        return _run_sync_transparency_log_command(args)
     if args.command == "verify-transparency-log":
         return _run_verify_transparency_log_command(args)
     if args.command == "verify-hash":
@@ -2461,6 +2489,7 @@ def main() -> int:
         "upgrade",
         "process-pending",
         "recover-failed",
+        "sync-transparency-log",
         "verify-transparency-log",
         "build-inclusion-proof",
         "webauthn-register",

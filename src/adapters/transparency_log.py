@@ -574,6 +574,40 @@ class TransparencyLogAdapter:
             )
             return None
 
+    def entry_exists_in_remote(
+        self, entry_hash: str, artifact_hash: str
+    ) -> bool:
+        """Return True if remote has a row with this entry_hash (idempotency check)."""
+        rows = self.fetch_remote_entries_by_artifact_hash(artifact_hash)
+        if rows is None:
+            return False
+        for row in rows:
+            payload = row.get("payload") or row.get("Payload")
+            if isinstance(payload, dict) and payload.get("entryHash") == entry_hash:
+                return True
+        return False
+
+    def republish_entry_if_missing(
+        self, serializable: dict[str, Any]
+    ) -> tuple[bool, str]:
+        """Publish entry to remote only if not already present. Idempotent.
+
+        Returns:
+            (published, message) - published=True if INSERT was performed.
+        """
+        entry_hash = serializable.get("entryHash")
+        artifact_hash = serializable.get("artifactHash")
+        if not entry_hash or not artifact_hash:
+            return False, "Record missing entryHash or artifactHash"
+        if not self.is_remote_configured():
+            return False, "Remote publish not configured"
+        if self.entry_exists_in_remote(entry_hash, artifact_hash):
+            return False, "Already present"
+        receipt = self._publish_entry(serializable)
+        if receipt is None:
+            return False, "Publish failed (network or server error)"
+        return True, "Published"
+
     def fetch_remote_entries_by_artifact_hash(
         self, artifact_hash: str
     ) -> list[dict[str, Any]] | None:

@@ -331,6 +331,96 @@ class C2PAManifestTest(unittest.TestCase):
         self.assertFalse(result.valid)
         self.assertIn("payloadHash mismatch", "; ".join(result.errors))
 
+    def test_sdk_validation_accepts_canonicalized_content_mismatch(self) -> None:
+        """Manifest stores raw body (CRLF); attested body is canonicalized (LF).
+
+        Regression: commit stores canonicalize_body(body), C2PA stores raw.
+        Validation must compare canonicalized forms, not raw strings.
+        """
+        artifact = self._build_artifact()
+        raw_body = "hello\r\nworld  \r\n"
+        canonical_body = "hello\nworld\n"
+        payload_hash = compute_payload_hash(canonical_body)
+        payload_bytes, payload_format = build_c2pa_validation_payload(
+            artifact,
+            canonical_body,
+            mode="sdk",
+        )
+        _FakeC2paModule.reader_manifest_store = {
+            "active_manifest": "manifest-1",
+            "manifests": {
+                "manifest-1": {
+                    "assertions": [
+                        {
+                            "label": _SDK_MARKDOWN_ASSERTION_LABEL,
+                            "data": {
+                                "content": raw_body,
+                                "payloadHash": payload_hash,
+                                "contentType": artifact.content_type,
+                            },
+                        }
+                    ]
+                }
+            },
+        }
+        with patch(
+            "src.adapters.c2pa_manifest._load_c2pa_module",
+            return_value=_FakeC2paModule,
+        ):
+            result = validate_c2pa_sidecar(
+                payload_bytes=payload_bytes,
+                manifest_bytes=b"fake-sidecar",
+                content_type=artifact.content_type,
+                payload_format=payload_format,
+                body_for_mvp=canonical_body,
+            )
+        self.assertTrue(
+            result.valid,
+            f"Canonicalized comparison should pass: {result.errors}",
+        )
+
+    def test_sdk_validation_rejects_semantic_content_mismatch(self) -> None:
+        """Different actual content (not just line endings) must fail."""
+        artifact = self._build_artifact()
+        body_a = "hello\n"
+        body_b = "world\n"
+        payload_hash = compute_payload_hash(body_a)
+        payload_bytes, payload_format = build_c2pa_validation_payload(
+            artifact,
+            body_b,
+            mode="sdk",
+        )
+        _FakeC2paModule.reader_manifest_store = {
+            "active_manifest": "manifest-1",
+            "manifests": {
+                "manifest-1": {
+                    "assertions": [
+                        {
+                            "label": _SDK_MARKDOWN_ASSERTION_LABEL,
+                            "data": {
+                                "content": body_a,
+                                "payloadHash": payload_hash,
+                                "contentType": artifact.content_type,
+                            },
+                        }
+                    ]
+                }
+            },
+        }
+        with patch(
+            "src.adapters.c2pa_manifest._load_c2pa_module",
+            return_value=_FakeC2paModule,
+        ):
+            result = validate_c2pa_sidecar(
+                payload_bytes=payload_bytes,
+                manifest_bytes=b"fake-sidecar",
+                content_type=artifact.content_type,
+                payload_format=payload_format,
+                body_for_mvp=body_b,
+            )
+        self.assertFalse(result.valid)
+        self.assertIn("content mismatch", "; ".join(result.errors))
+
 
 if __name__ == "__main__":
     unittest.main()
