@@ -113,16 +113,18 @@ async def process_single_ots_record(
             ref_name = f"refs/heads/artifact/{record.request_id}"
             commit_message = f"provenance: OTS forged ({record.request_id})"
 
-            # Idempotency: if .ots already on branch (crash-after-step-1 retry), skip git
-            ots_already_on_branch = await asyncio.to_thread(
-                ProvenanceService.blob_exists_on_branch,
+            # Idempotency: skip only if forged .ots already committed (crash-after-step-1 retry).
+            # Must NOT skip when pending .ots exists—we need to commit upgraded bytes.
+            ots_forged_already_on_branch = await asyncio.to_thread(
+                ProvenanceService.blob_equals_on_branch,
                 repository_path,
                 ref_name,
                 ots_path,
+                final_ots_bytes,
             )
 
-            # 1. Git FIRST (skip if already present)
-            if not ots_already_on_branch:
+            # 1. Git FIRST (skip only if forged content already present)
+            if not ots_forged_already_on_branch:
                 await asyncio.to_thread(
                     provenance_service._commit_branch_file_bytes,
                     repository_path,
@@ -131,6 +133,10 @@ async def process_single_ots_record(
                     final_ots_bytes,
                     commit_message,
                 )
+            # 1b. Sync working directory so pygit2 commit is visible on disk
+            ots_full_path = repository_path / ots_path
+            ots_full_path.parent.mkdir(parents=True, exist_ok=True)
+            ots_full_path.write_bytes(final_ots_bytes)
 
             # 2. Append-Only Merkle Chain + mirror to SQLite (skip if already done)
             if not repository.has_transparency_log_record(record.artifact_hash):

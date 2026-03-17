@@ -594,6 +594,27 @@ class ProvenanceService:
             return False
         return tree_get_blob(repo, commit_obj.tree, relative_path) is not None
 
+    @staticmethod
+    def blob_equals_on_branch(
+        repository_path: Path,
+        ref_name: str,
+        relative_path: str,
+        expected_bytes: bytes,
+    ) -> bool:
+        """Return True if blob at path exists and has exact content as expected_bytes."""
+        try:
+            repo = pygit2.Repository(str(repository_path))
+            reference = repo.lookup_reference(ref_name)
+            commit_obj = repo[reference.target]
+        except (KeyError, pygit2.GitError):
+            return False
+        if not isinstance(commit_obj, pygit2.Commit):
+            return False
+        blob_obj = tree_get_blob(repo, commit_obj.tree, relative_path)
+        if blob_obj is None:
+            return False
+        return bytes(blob_obj.data) == expected_bytes
+
     def get_artifact_payload_bytes_from_branch(
         self,
         repository_path: Path,
@@ -618,7 +639,7 @@ class ProvenanceService:
             return None
         markdown_text = bytes(blob_obj.data).decode("utf-8")
         _, payload = parse_artifact_markdown_text(markdown_text)
-        return payload.encode("utf-8")
+        return canonicalize_body_for_hash(payload)
 
     @staticmethod
     def _read_markdown_from_commit(

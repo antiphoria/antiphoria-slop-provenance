@@ -7,6 +7,7 @@ and executes the asynchronous generation->notarization->ledger pipeline.
 from __future__ import annotations
 
 import argparse
+import base64
 import asyncio
 import hashlib
 import json
@@ -427,6 +428,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Retry a FAILED record (otherwise upgrade only processes PENDING).",
     )
+    upgrade_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-run even when FORGED (e.g. to fix missing git commit).",
+    )
 
     process_pending_parser = subparsers.add_parser(
         "process-pending",
@@ -472,6 +478,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--repo-path",
         default=_default_repo_path(),
         help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
+    )
+
+    upgrade_merkle_parser = subparsers.add_parser(
+        "upgrade-merkle-ots",
+        help="Upgrade Merkle root OTS proof and optionally update Supabase.",
+    )
+    upgrade_merkle_parser.add_argument(
+        "--repo-path",
+        default=_default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
+    )
+    upgrade_merkle_parser.add_argument(
+        "--ots-path",
+        help="Path to .ots file (default: latest from merkle-snapshots.jsonl).",
     )
 
     verify_tlog_parser = subparsers.add_parser(
@@ -1744,7 +1764,7 @@ async def _run_upgrade_command(args: argparse.Namespace) -> int:
     if record is None:
         print(f"No OTS forge record for request_id={args.request_id}")
         return 1
-    if record.status == "FORGED":
+    if record.status == "FORGED" and not getattr(args, "force", False):
         block_str = (
             f" block={record.bitcoin_block_height}"
             if record.bitcoin_block_height
@@ -1755,7 +1775,11 @@ async def _run_upgrade_command(args: argparse.Namespace) -> int:
     if record.status == "FAILED" and not getattr(args, "retry", False):
         print("Already FAILED (use --retry to retry)")
         return 0
-    if record.status != "PENDING" and record.status != "FAILED":
+    if (
+        record.status != "PENDING"
+        and record.status != "FAILED"
+        and not (record.status == "FORGED" and getattr(args, "force", False))
+    ):
         print(f"Unexpected status: {record.status}")
         return 1
 
@@ -1965,7 +1989,7 @@ def _run_anchor_merkle_root_command(args: argparse.Namespace) -> int:
     root_bytes = bytes.fromhex(merkle_root)
 
     try:
-        ots_bytes = ots_adapter.stamp_payload(root_bytes)
+        ots_bytes = ots_adapter.request_ots_stamp(root_bytes)
     except Exception as exc:  # noqa: BLE001
         print(f"OTS stamp failed: {exc}")
         return 1
@@ -2051,6 +2075,108 @@ def _run_anchor_merkle_root_command(args: argparse.Namespace) -> int:
         )
 
     print(f"Merkle root anchored: {merkle_root[:16]}... ({len(entries)} entries)")
+    return 0
+
+
+def _run_upgrade_merkle_ots_command(args: argparse.Namespace) -> int:
+    """Upgrade Merkle root OTS proof and optionally update Supabase."""
+    repository_path = _require_repo_path(args)
+    _validate_external_repo_path(repository_path)
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    ots_adapter = build_ots_adapter(env_path)
+    if ots_adapter is None:
+        print("OTS forging is disabled (ENABLE_OTS_FORGE=false).")
+        return 1
+
+    ots_path: str
+    merkle_root: str
+    if getattr(args, "ots_path", None):
+        ots_path = args.ots_path
+        ots_full = repository_path / ots_path
+        if not ots_full.exists():
+            print(f"OTS file not found: {ots_full}")
+            return 1
+        snapshots_path = repository_path / ".provenance" / "merkle-snapshots.jsonl"
+        if not snapshots_path.exists():
+            print("Cannot determine merkle_root without merkle-snapshots.jsonl.")
+            return 1
+        for line in reversed(snapshots_path.read_text(encoding="utf-8").splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                snap = json.loads(line)
+                if snap.get("ots_path") == ots_path:
+                    merkle_root = snap.get("merkle_root", "")
+                    break
+            except json.JSONDecodeError:
+                continue
+        else:
+            print(f"No snapshot found for {ots_path}. Set --ots-path to match.")
+            return 1
+    else:
+        snapshots_path = repository_path / ".provenance" / "merkle-snapshots.jsonl"
+        if not snapshots_path.exists():
+            print("No merkle-snapshots.jsonl found. Run anchor-merkle-root first.")
+            return 1
+        lines = [
+            l.strip()
+            for l in snapshots_path.read_text(encoding="utf-8").splitlines()
+            if l.strip()
+        ]
+        if not lines:
+            print("merkle-snapshots.jsonl is empty.")
+            return 1
+        try:
+            snap = json.loads(lines[-1])
+        except json.JSONDecodeError:
+            print("Invalid JSON in merkle-snapshots.jsonl.")
+            return 1
+        ots_path = snap.get("ots_path", "")
+        merkle_root = snap.get("merkle_root", "")
+        if not ots_path or not merkle_root:
+            print("Latest snapshot missing ots_path or merkle_root.")
+            return 1
+
+    ots_full = repository_path / ots_path
+    if not ots_full.exists():
+        print(f"OTS file not found: {ots_full}")
+        return 1
+
+    pending_b64 = base64.b64encode(ots_full.read_bytes()).decode("ascii")
+    root_bytes = bytes.fromhex(merkle_root)
+    upgraded, final_ots_bytes, block_height = ots_adapter.upgrade_ots_proof(
+        pending_b64, payload_bytes=root_bytes
+    )
+    if not upgraded or final_ots_bytes is None:
+        print("OTS upgrade failed.")
+        return 1
+    ots_full.write_bytes(final_ots_bytes)
+    if block_height is None:
+        print("Still pending. Try again later.")
+        return 0
+    print(f"Upgraded: bitcoin_block_height={block_height}")
+
+    try:
+        publish_url = _read_env_optional("MERKLE_ANCHORS_PUBLISH_URL", env_path=env_path)
+        if not publish_url:
+            base_url = _read_env_optional("TRANSPARENCY_LOG_PUBLISH_URL", env_path=env_path)
+            if base_url and "transparency_log" in base_url:
+                publish_url = base_url.replace("transparency_log", "merkle_anchors")
+        if publish_url:
+            publish_headers, _ = build_supabase_publish_config(publish_url, env_path=env_path)
+            if publish_headers:
+                from src.adapters.transparency_log import update_merkle_anchor_block_height
+
+                if update_merkle_anchor_block_height(
+                    root_hash=merkle_root,
+                    bitcoin_block_height=block_height,
+                    publish_url=publish_url,
+                    publish_headers=publish_headers,
+                ):
+                    print("Supabase merkle_anchors updated.")
+    except RuntimeError:
+        pass
     return 0
 
 
@@ -2293,6 +2419,8 @@ async def _dispatch_impl(args: argparse.Namespace) -> int:
         return _run_recover_failed_command(args)
     if args.command == "anchor-merkle-root":
         return _run_anchor_merkle_root_command(args)
+    if args.command == "upgrade-merkle-ots":
+        return _run_upgrade_merkle_ots_command(args)
     if args.command == "verify-transparency-log":
         return _run_verify_transparency_log_command(args)
     if args.command == "verify-hash":
@@ -2325,6 +2453,7 @@ def main() -> int:
         "register",
         "anchor",
         "anchor-merkle-root",
+        "upgrade-merkle-ots",
         "timestamp",
         "audit",
         "attest",

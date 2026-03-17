@@ -119,6 +119,54 @@ def publish_merkle_anchor(
         ) as response:
             response.read()
             return True
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", errors="replace")
+            _logger.warning(
+                "Merkle anchor publish soft-fail. Local anchor secure. HTTP %s: %s",
+                exc.code,
+                _sanitize_for_log(body or str(exc)),
+            )
+        except Exception:
+            _logger.warning(
+                "Merkle anchor publish soft-fail. Local anchor secure. Error: %s",
+                _sanitize_for_log(str(exc)),
+            )
+        return False
+    except (
+        urllib.error.URLError,
+        socket.timeout,
+        ConnectionError,
+    ) as exc:
+        _logger.warning(
+            "Merkle anchor publish soft-fail. Local anchor secure. Error: %s",
+            _sanitize_for_log(str(exc)),
+        )
+        return False
+
+
+def update_merkle_anchor_block_height(
+    root_hash: str,
+    bitcoin_block_height: int,
+    publish_url: str | None = None,
+    publish_headers: dict[str, str] | None = None,
+    timeout_sec: float = 10.0,
+) -> bool:
+    """PATCH merkle_anchors row by rootHash to set bitcoinBlockHeight.
+
+    Returns True on success, False on soft-fail.
+    """
+    if not publish_url or not publish_url.strip() or not publish_headers:
+        return False
+    query = urllib.parse.urlencode(
+        [("payload->>rootHash", f"eq.{root_hash}")]
+    )
+    get_url = f"{publish_url.rstrip('/')}?{query}"
+    headers = {k: v for k, v in publish_headers.items() if k != "Prefer"}
+    req = urllib.request.Request(get_url, method="GET", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=min(timeout_sec, 5.0)) as resp:
+            raw = resp.read().decode("utf-8").strip()
     except (
         urllib.error.URLError,
         urllib.error.HTTPError,
@@ -126,7 +174,52 @@ def publish_merkle_anchor(
         ConnectionError,
     ) as exc:
         _logger.warning(
-            "Merkle anchor publish soft-fail. Local anchor secure. Error: %s",
+            "Merkle anchor fetch for update failed: %s",
+            _sanitize_for_log(str(exc)),
+        )
+        return False
+    if not raw:
+        return False
+    try:
+        rows = json.loads(raw)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(rows, list) or len(rows) == 0:
+        return False
+    row = rows[0]
+    if not isinstance(row, dict):
+        return False
+    payload = row.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    row_id = row.get("id")
+    if row_id is None:
+        return False
+    payload = {**payload, "bitcoinBlockHeight": bitcoin_block_height}
+    patch_url = f"{publish_url.rstrip('/')}?id=eq.{row_id}"
+    body = {"payload": payload}
+    headers = {
+        "Content-Type": "application/json",
+        **publish_headers,
+    }
+    req = urllib.request.Request(
+        patch_url,
+        method="PATCH",
+        headers=headers,
+        data=json.dumps(body).encode("utf-8"),
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=min(timeout_sec, 5.0)) as resp:
+            resp.read()
+        return True
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        socket.timeout,
+        ConnectionError,
+    ) as exc:
+        _logger.warning(
+            "Merkle anchor block height update failed: %s",
             _sanitize_for_log(str(exc)),
         )
         return False

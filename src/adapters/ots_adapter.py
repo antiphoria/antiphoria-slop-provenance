@@ -41,13 +41,19 @@ def resolve_ots_binary(env_path: Path | None = None) -> str:
     2. Bundled bin/ots[.exe] (project default)
     3. 'ots' (system PATH fallback)
     """
+    base = Path(__file__).resolve().parents[2]  # project root
+
     # 1. Check for explicit environment override first
     env_override = read_env_optional("OTS_BIN", env_path=env_path)
     if env_override:
-        return env_override
+        override_path = Path(env_override)
+        if not override_path.is_absolute():
+            override_path = (base / override_path).resolve()
+        if override_path.exists():
+            return str(override_path)
+        return env_override  # Let subprocess fail with clear error if missing
 
     # 2. Check for bundled binary
-    base = Path(__file__).resolve().parents[2]  # project root
     exe_name = "ots.exe" if os.name == "nt" else "ots"
     bundled_path = base / "bin" / exe_name
 
@@ -59,7 +65,7 @@ def resolve_ots_binary(env_path: Path | None = None) -> str:
                 "Run: git update-index --chmod=+x bin/ots",
                 bundled_path,
             )
-        return str(bundled_path)
+        return str(bundled_path.resolve())
 
     # 3. Fallback to system PATH
     if shutil.which("ots"):
@@ -146,14 +152,16 @@ class OTSAdapter:
         bin_ = ots_bin or self._ots_bin
         pending_bytes = base64.b64decode(pending_ots_b64, validate=True)
         with tempfile.TemporaryDirectory() as temp_dir:
-            proof_path = Path(temp_dir) / "proof.ots"
+            temp_path = Path(temp_dir)
+            proof_path = temp_path / "proof.ots"
             proof_path.write_bytes(pending_bytes)
             try:
                 subprocess.run(
-                    [bin_, "upgrade", str(proof_path)],
+                    [bin_, "upgrade", "proof.ots"],
                     check=True,
                     timeout=timeout,
                     capture_output=True,
+                    cwd=temp_path,
                 )
             except subprocess.CalledProcessError as e:
                 stderr_s = (e.stderr or b"").decode("utf-8", errors="replace")
@@ -210,26 +218,40 @@ class OTSAdapter:
         ots_bin: str,
         timeout: int,
     ) -> tuple[bool, int | None]:
-        """Run ots verify -f payload proof; parse block height from stdout."""
+        """Run ots verify (Go dialect: proof then payload, no -f flag)."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            payload_path = Path(temp_dir) / "payload.md"
-            proof_path = Path(temp_dir) / "proof.ots"
+            temp_path = Path(temp_dir)
+            payload_path = temp_path / "payload.md"
+            proof_path = temp_path / "payload.md.ots"
             payload_path.write_bytes(payload_bytes)
             proof_path.write_bytes(ots_bytes)
             try:
                 result = subprocess.run(
-                    [ots_bin, "verify", "-f", str(payload_path), str(proof_path)],
+                    [ots_bin, "verify", "payload.md.ots", "payload.md"],
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
                     timeout=timeout,
+                    cwd=temp_path,
                 )
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 return False, None
             if result.returncode != 0:
+                _logger.warning(
+                    "ots verify failed: returncode=%s stdout=%s stderr=%s",
+                    result.returncode,
+                    _sanitize_for_log(result.stdout or ""),
+                    _sanitize_for_log(result.stderr or ""),
+                )
                 return False, None
-            if "Success" not in (result.stdout or ""):
+            out = (result.stdout or "") + (result.stderr or "")
+            if "Success" not in out and "timestamp validated" not in out and "valid" not in out:
+                _logger.warning(
+                    "ots verify: no success marker in output stdout=%s stderr=%s",
+                    _sanitize_for_log(result.stdout or ""),
+                    _sanitize_for_log(result.stderr or ""),
+                )
                 return False, None
-            match = re.search(r"block\s+(\d+)", result.stdout or "", re.IGNORECASE)
+            match = re.search(r"block\s*\[?(\d+)\]?", out, re.IGNORECASE)
             block_height = int(match.group(1)) if match else None
             return True, block_height
