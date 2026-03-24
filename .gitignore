@@ -1,5 +1,4 @@
 keys/
-docs/
 *.hc
 *.tar.gpg
 keys_vault.hc

@@ -11,7 +11,7 @@ import pytest
 
 from src.adapters.transparency_log import TransparencyLogAdapter
 from src.merkle import build_merkle_root
-from tests.e2e.conftest import run_cli
+from .conftest import run_cli
 
 
 def _generate_and_extract_artifact(env: dict, ledger_dir: Path) -> tuple[str, Path]:
