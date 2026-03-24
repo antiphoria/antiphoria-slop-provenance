@@ -49,10 +49,6 @@ pip install -e ".[dev]"
 
 Install Git if needed (`sudo apt install git`). Initialize ledger repos the same way as on Linux — see [QUICKSTART.md](QUICKSTART.md).
 
-## 6. Docker Desktop (optional)
-
-Docker Desktop can use WSL2 as the backend. That helps if you prefer containerized workflows; it is **not** required to develop this project in WSL. The repo [Dockerfile](../Dockerfile) is a separate, minimal entry point.
-
-## 7. Next steps
+## 6. Next steps
 
 Follow [QUICKSTART.md](QUICKSTART.md) for `.env`, keys, tests, and `slop-cli`.

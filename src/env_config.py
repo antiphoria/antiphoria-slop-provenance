@@ -2,7 +2,7 @@
 
 When env_path is None, resolution order:
   1. Explicit env_path (when passed by caller)
-  2. PROJECT_ROOT env var (if set) + /.env - for systemd/Docker
+  2. PROJECT_ROOT env var (if set) + /.env - for systemd / fixed deploy roots
   3. Path(".env") relative to CWD
 
 Entrypoints (CLI, workers) should pass explicit env_path when CWD may differ.

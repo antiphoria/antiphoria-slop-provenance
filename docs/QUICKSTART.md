@@ -30,7 +30,6 @@ Optional: OpenTimestamps support — `pip install -e ".[ots]"`.
 
 - **Linux / macOS / WSL:** Native install is the supported path for development.
 - **Windows without WSL:** Native builds (`liboqs-python`, OpenSSL) are fragile; use **WSL2** — see [WSL2_SETUP.md](WSL2_SETUP.md).
-- **Docker:** See the repo [Dockerfile](../Dockerfile) for a minimal image (`slop-cli --help`); it does not replace a full dev/test setup unless you extend it.
 
 ## 5. Environment (`.env`)
 

@@ -7,7 +7,7 @@ lint:
 	ruff check .
 	ruff format --check .
 
-# Regenerate requirements.txt from requirements.in (for deterministic Docker builds)
+# Regenerate requirements.txt from requirements.in (CI / reproducible installs)
 requirements:
 	pip install pip-tools
 	pip-compile requirements.in -o requirements.txt
