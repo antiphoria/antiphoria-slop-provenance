@@ -8,6 +8,13 @@ import sys
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    PublicFormat,
+)
 
 
 @pytest.fixture
@@ -35,6 +42,25 @@ def isolated_env(tmp_path: Path):
     priv_path = keys_dir / "test_ml_dsa.priv"
     pub_path = keys_dir / "test_ml_dsa.pub"
 
+    ed_dir = tmp_path / "signing_keys"
+    ed_dir.mkdir()
+    ed_priv_key = Ed25519PrivateKey.generate()
+    ed_priv_path = ed_dir / "ed25519_private.pem"
+    ed_pub_path = ed_dir / "ed25519_public.pem"
+    ed_priv_path.write_bytes(
+        ed_priv_key.private_bytes(
+            encoding=Encoding.PEM,
+            format=PrivateFormat.PKCS8,
+            encryption_algorithm=NoEncryption(),
+        )
+    )
+    ed_pub_path.write_bytes(
+        ed_priv_key.public_key().public_bytes(
+            encoding=Encoding.PEM,
+            format=PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+
     artifact_db = state_dir / "artifacts.db"
     env = os.environ.copy()
     env.update({
@@ -49,23 +75,28 @@ def isolated_env(tmp_path: Path):
         "PQC_PRIVATE_KEY_PATH": str(priv_path) if priv_path.exists() else "",
         "OQS_PUBLIC_KEY_PATH": str(pub_path) if pub_path.exists() else "",
         "C2PA_PRIVATE_KEY_PATH": "",
+        "ED25519_PRIVATE_KEY_PATH": str(ed_priv_path),
+        "ED25519_PUBLIC_KEY_PATH": str(ed_pub_path),
     })
     return env, ledger_dir, state_dir
 
 
 @pytest.fixture
 def tsa_mock(httpserver):
-    """RFC3161 TSA mock using pytest-httpserver. Returns URL for RFC3161_TSA_URL."""
+    """TSA mock via pytest-httpserver; return URL for RFC3161_TSA_URL."""
     fixtures_dir = Path(__file__).resolve().parents[1] / "fixtures"
     tsr_path = fixtures_dir / "dummy.tsr"
-    tsr_bytes = tsr_path.read_bytes() if tsr_path.exists() else b""
+    exists = tsr_path.exists()
+    tsr_bytes = tsr_path.read_bytes() if exists else b""
     httpserver.expect_request("/").respond_with_data(
         tsr_bytes, content_type="application/timestamp-reply"
     )
     return httpserver.url_for("/")
 
 
-def run_cli(args: list[str], env: dict, timeout: int = 15) -> subprocess.CompletedProcess:
+def run_cli(
+    args: list[str], env: dict, timeout: int = 15
+) -> subprocess.CompletedProcess:
     """Run CLI via current Python. Guarantees exact source code under test."""
     return subprocess.run(
         [sys.executable, "-m", "src.cli"] + args,
@@ -84,7 +115,7 @@ def run_tool(
     env: dict,
     timeout: int = 15,
 ) -> subprocess.CompletedProcess:
-    """Run module entry points (e.g. src.kafka.bootstrap, src.runtime.metrics_report)."""
+    """Run module entry points (e.g. metrics_report)."""
     return subprocess.run(
         [sys.executable, "-m", module] + args,
         env=env,

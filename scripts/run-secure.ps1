@@ -1,6 +1,6 @@
 # BYOV launcher for Slop Orchestrator (Windows)
 # Mount keys_vault.hc manually in VeraCrypt first. This script finds it, injects key paths, runs your command.
-# Usage: .\run-secure.ps1 slop-cli generate --prompt "..." --repo-path <path>
+# Usage: .\scripts\run-secure.ps1 slop-cli generate --prompt "..." --repo-path <path>
 
 $ErrorActionPreference = "Stop"
 
@@ -41,7 +41,7 @@ if ($args.Count -gt 0) {
     & $cmd @cmdArgs
     exit $LASTEXITCODE
 } else {
-    Write-Host "Keys injected. Run your command, or start interactive: .\run-secure.ps1 pwsh"
+    Write-Host "Keys injected. Run your command, or start interactive: .\scripts\run-secure.ps1 pwsh"
     $shellExe = (Get-Process -Id $PID).Path
     & $shellExe -NoExit
 }

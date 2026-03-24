@@ -52,7 +52,7 @@ def main() -> int:
     print("  1. Copy ed25519_private.pem to vault at K:\\ed25519_private.pem")
     print("  2. Add ED25519_PUBLIC_KEY_PATH=./keys/ed25519_public.pem to .env")
     print("  3. SECURE CLEANUP: Delete keys/ed25519_private.pem from disk!")
-    print("  4. Use run-secure.ps1 or run-secure.sh to run the app")
+    print("  4. Use scripts/run-secure.ps1 or scripts/run-secure.sh to run the app")
     return 0
 
 

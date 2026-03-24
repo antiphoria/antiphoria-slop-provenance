@@ -1,4 +1,4 @@
-"""Shared artifact branch resolution (no Kafka dependency)."""
+"""Shared artifact branch resolution for CLI and worker-style runtimes."""
 
 from __future__ import annotations
 

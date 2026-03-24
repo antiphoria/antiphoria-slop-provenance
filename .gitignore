@@ -1,4 +1,5 @@
-keys/
+# Repo-root secrets only; allow tests/fixtures/keys for committed test key material.
+/keys/
 *.hc
 *.tar.gpg
 keys_vault.hc

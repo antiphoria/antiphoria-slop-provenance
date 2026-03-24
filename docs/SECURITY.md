@@ -49,24 +49,24 @@ gpg -c keys_vault.tar
 rm keys/private.key keys/c2pa-private-key.pem keys/ed25519_private.pem
 ```
 
-This produces `keys_vault.tar.gpg`. The `rm` step removes the plaintext originals from disk. The archive is flat so `run-secure.sh` finds files at `$RAMDIR/private.key`, `$RAMDIR/c2pa-private-key.pem`, and `$RAMDIR/ed25519_private.pem`.
+This produces `keys_vault.tar.gpg`. The `rm` step removes the plaintext originals from disk. The archive is flat so `scripts/run-secure.sh` finds files at `$RAMDIR/private.key`, `$RAMDIR/c2pa-private-key.pem`, and `$RAMDIR/ed25519_private.pem`.
 
 ## Runtime Flow
 
 Use the launcher to mount/extract the vault, inject key paths, run the app, and clean up:
 
-- **Windows:** `./run-secure.ps1 slop-cli generate --prompt "..." --repo-path <path>`
-- **Linux:** `./run-secure.sh slop-cli generate --prompt "..." --repo-path <path>`
+- **Windows:** `./scripts/run-secure.ps1 slop-cli generate --prompt "..." --repo-path <path>`
+- **Linux:** `./scripts/run-secure.sh slop-cli generate --prompt "..." --repo-path <path>`
 
 If no arguments are passed, the launcher starts an interactive shell with the environment variables set.
 
 ## Windows UAC
 
-Virtual volume mounting requires **Administrator privileges**. Run PowerShell as Administrator before invoking `run-secure.ps1` (or the script will exit with an error). If the session is elevated, the mounted drive may be in the Administrator context; `EnableLinkedConnections` can affect visibility across user contexts.
+Virtual volume mounting requires **Administrator privileges**. Run PowerShell as Administrator before invoking `scripts/run-secure.ps1` (or the script will exit with an error). If the session is elevated, the mounted drive may be in the Administrator context; `EnableLinkedConnections` can affect visibility across user contexts.
 
 ## Multi-Process (Windows)
 
-If the vault is already mounted (e.g. notary in one terminal), a second `run-secure.ps1` detects it, reuses the drive, injects env, runs the child, and does **not** unmount. The first session unmounts when done.
+If the vault is already mounted (e.g. notary in one terminal), a second `scripts/run-secure.ps1` detects it, reuses the drive, injects env, runs the child, and does **not** unmount. The first session unmounts when done.
 
 ## Dev Mode
 

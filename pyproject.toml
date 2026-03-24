@@ -26,6 +26,7 @@ dev = [
     "pytest-httpserver>=1.0.0",
     "hypothesis>=6.0.0",
     "mutmut>=2.0.0",
+    "ruff>=0.8.0",
 ]
 webauthn = ["fido2>=1.1.0"]
 

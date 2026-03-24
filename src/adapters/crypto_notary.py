@@ -228,7 +228,7 @@ class CryptoNotaryAdapter:
         if not path_value:
             raise RuntimeError(
                 f"Missing required {_ED25519_PRIVATE_KEY_ENV}. "
-                "Set it in .env or via run-secure.ps1 (vault must contain ed25519_private.pem)."
+                "Set it in .env or via scripts/run-secure.ps1 (vault must contain ed25519_private.pem)."
             )
         key_path = Path(path_value)
         if not key_path.is_absolute():

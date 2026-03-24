@@ -1,4 +1,4 @@
-"""Runtime helpers for worker services (shared by core and Kafka workers)."""
+"""Runtime helpers for worker-style long-running services."""
 
 from __future__ import annotations
 
@@ -85,10 +85,7 @@ def build_dedup_repository(service_name: str) -> DedupRepository:
 def _resolve_health_file_path(service_name: str) -> Path | None:
     """Resolve health file path from WORKER_HEALTH_FILE or derive from state dir."""
 
-    health_file = (
-        read_env_optional("WORKER_HEALTH_FILE", env_path=_ENV_PATH)
-        or read_env_optional("KAFKA_HEALTH_FILE", env_path=_ENV_PATH)
-    )
+    health_file = read_env_optional("WORKER_HEALTH_FILE", env_path=_ENV_PATH)
     if health_file:
         return Path(health_file).resolve()
     state_db = read_env_optional("STATE_DB_PATH", env_path=_ENV_PATH)

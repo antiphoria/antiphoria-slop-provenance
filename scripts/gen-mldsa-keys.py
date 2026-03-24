@@ -39,7 +39,7 @@ def main() -> int:
     print("  2. Move c2pa-root-ca.key.pem to offline USB")
     print("  3. Create vault with private.key and c2pa-private-key.pem")
     print("  4. SECURE CLEANUP: Delete the plaintext private keys from the keys/ directory!")
-    print("  5. Use run-secure.ps1 or run-secure.sh to run the app")
+    print("  5. Use scripts/run-secure.ps1 or scripts/run-secure.sh to run the app")
     return 0
 
 

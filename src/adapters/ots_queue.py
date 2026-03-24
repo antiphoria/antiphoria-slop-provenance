@@ -6,8 +6,8 @@ Current state is derived by taking the latest event per request_id.
 
 Uses read-modify-commit: content is read from git ref (source of truth), new line
 appended in memory, full blob committed. Git history is preserved; branch tip is
-replaced. FileLock coordinates within a single process; for multi-worker Kafka,
-see distributed locking requirements.
+replaced. FileLock coordinates within a single process; multiple writers require
+distributed locking or a single-writer topology.
 """
 
 from __future__ import annotations

@@ -1,14 +1,11 @@
-.PHONY: install hooks lint test compile up down logs migrate metrics requirements
+.PHONY: install lint test compile migrate metrics requirements
 
 install:
-	pip install -e .
-
-hooks:
-	python -m pip install pre-commit
-	pre-commit install --install-hooks
+	pip install -e ".[dev]"
 
 lint:
-	pre-commit run --all-files
+	ruff check .
+	ruff format --check .
 
 # Regenerate requirements.txt from requirements.in (for deterministic Docker builds)
 requirements:
@@ -20,15 +17,6 @@ test:
 
 compile:
 	python -m compileall src
-
-up:
-	docker compose -f src/kafka/docker-compose.yml up --build -d
-
-down:
-	docker compose -f src/kafka/docker-compose.yml down
-
-logs:
-	docker compose -f src/kafka/docker-compose.yml logs -f
 
 migrate:
 	python scripts/migrate_state_v2.py --db-path state.db

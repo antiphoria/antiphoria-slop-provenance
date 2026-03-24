@@ -1,4 +1,4 @@
-"""Hermetic E2E tests for CLI local transport. No Kafka, no external APIs."""
+"""Hermetic E2E tests for CLI local transport. No external APIs."""
 
 from __future__ import annotations
 
