@@ -1,1 +1,1 @@
-"""Slop Orchestrator package namespace."""
+"""Antiphoria Slop Provenance package namespace."""

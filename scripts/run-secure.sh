@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# BYOV launcher for Slop Orchestrator (Linux only)
+# BYOV launcher for Antiphoria Slop Provenance (Linux only)
 # Decrypts GPG vault to RAM, injects key paths, runs command, cleans up on exit.
 # Requires: gpg, keys_vault.tar.gpg at project root.
 # NOTE: Uses /dev/shm (Linux tmpfs). macOS and Windows lack this; on Windows use

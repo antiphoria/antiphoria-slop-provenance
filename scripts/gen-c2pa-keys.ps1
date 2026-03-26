@@ -1,4 +1,4 @@
-# C2PA key generation for Slop Orchestrator
+# C2PA key generation for Antiphoria Slop Provenance
 # Works around Anaconda/conda OpenSSL having a hardcoded config path from its build env.
 # Set OPENSSL_CONF so openssl req can find a valid config when creating the CSR.
 
@@ -54,7 +54,7 @@ openssl ecparam -name prime256v1 -genkey -noout -out ".\keys\c2pa-leaf.key.pem"
 openssl req -new -sha256 `
   -key ".\keys\c2pa-leaf.key.pem" `
   -out ".\keys\c2pa-leaf.csr.pem" `
-  -subj "/CN=Slop Orchestrator C2PA Signer/O=Antiphoria" `
+  -subj "/CN=Antiphoria Slop Provenance C2PA Signer/O=Antiphoria" `
   -config $opensslConf
 
 # 5) Sign leaf with root CA

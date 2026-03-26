@@ -29,7 +29,7 @@ _logger = logging.getLogger(__name__)
 
 _QUEUE_RELATIVE_PATH = ".provenance/ots-queue.jsonl"
 _DEFAULT_QUEUE_REF = "refs/heads/main"
-_DEFAULT_LEDGER_AUTHOR_NAME = "Slop Orchestrator"
+_DEFAULT_LEDGER_AUTHOR_NAME = "Antiphoria Slop Provenance"
 _DEFAULT_LEDGER_AUTHOR_EMAIL = "bot@antiphoria.local"
 
 

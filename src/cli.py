@@ -1,4 +1,4 @@
-"""Command-line entry point for the Slop Orchestrator.
+"""Command-line entry point for Antiphoria Slop Provenance.
 
 This module composes the event bus and adapters, exposes a simple argparse UX,
 and executes the asynchronous generation->notarization->ledger pipeline.
@@ -2078,7 +2078,7 @@ def _run_anchor_merkle_root_command(args: argparse.Namespace) -> int:
     repo.index.add(ots_rel)
     repo.index.add(snapshots_path.relative_to(repository_path).as_posix())
     author = pygit2.Signature(
-        "Slop Orchestrator",
+        "Antiphoria Slop Provenance",
         "bot@antiphoria.local",
     )
     repo.index.write()

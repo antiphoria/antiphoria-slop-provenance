@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Ed25519 keypair for Slop Orchestrator hybrid signing.
+"""Generate Ed25519 keypair for Antiphoria Slop Provenance hybrid signing.
 
 Writes keys/ed25519_private.pem and keys/ed25519_public.pem (PEM format).
 Run from project root or via: python scripts/gen-ed25519-keys.py

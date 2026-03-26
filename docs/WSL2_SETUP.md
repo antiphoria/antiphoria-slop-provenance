@@ -38,7 +38,7 @@ Work in the Linux filesystem (e.g. `~/projects/...`), not `/mnt/c/...`, for bett
 ```bash
 cd ~
 git clone <repository-url>
-cd slop-orchestrator-v0.0.1
+cd antiphoria-slop-provenance
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip

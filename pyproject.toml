@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "slop-orchestrator"
+name = "antiphoria-slop-provenance"
 version = "0.0.1"
-description = "Event-driven slop orchestration MVP."
+description = "Antiphoria slop provenance: event-driven story generation, signing, and ledger-backed auditability."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

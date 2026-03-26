@@ -1,4 +1,4 @@
-# Slop Orchestrator
+# Antiphoria Slop Provenance
 
 Event-driven provenance engine for short-story generation, cryptographic signing and provenance, and long-term auditability.
 

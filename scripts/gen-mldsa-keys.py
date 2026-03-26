@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate ML-DSA-44 keypair for Slop Orchestrator.
+"""Generate ML-DSA-44 keypair for Antiphoria Slop Provenance.
 
 Writes keys/private.key and keys/public.key (raw bytes).
 Run from project root or via: python scripts/gen-mldsa-keys.py

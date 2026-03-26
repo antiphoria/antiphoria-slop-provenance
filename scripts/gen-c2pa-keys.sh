@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# C2PA key generation for Slop Orchestrator (Linux/macOS)
+# C2PA key generation for Antiphoria Slop Provenance (Linux/macOS)
 # Bash equivalent of gen-c2pa-keys.ps1; same OpenSSL workflow.
 
 set -e
@@ -56,7 +56,7 @@ openssl ecparam -name prime256v1 -genkey -noout -out keys/c2pa-leaf.key.pem
 openssl req -new -sha256 \
   -key keys/c2pa-leaf.key.pem \
   -out keys/c2pa-leaf.csr.pem \
-  -subj "/CN=Slop Orchestrator C2PA Signer/O=Antiphoria" \
+  -subj "/CN=Antiphoria Slop Provenance C2PA Signer/O=Antiphoria" \
   -config "$openssl_conf"
 
 # 5) Sign leaf with root CA

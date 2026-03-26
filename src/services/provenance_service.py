@@ -46,7 +46,7 @@ def _sanitize_for_log(raw: str, max_len: int = 200) -> str:
         flags=re.IGNORECASE,
     )
     return out[:max_len] + "..." if len(out) > max_len else out
-_DEFAULT_LEDGER_AUTHOR_NAME = "Slop Orchestrator"
+_DEFAULT_LEDGER_AUTHOR_NAME = "Antiphoria Slop Provenance"
 _DEFAULT_LEDGER_AUTHOR_EMAIL = "bot@antiphoria.local"
 
 

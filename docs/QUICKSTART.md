@@ -10,7 +10,7 @@ Python **3.12** is the version used in CI; 3.10+ is supported per `pyproject.tom
 
 ```bash
 git clone <repository-url>
-cd slop-orchestrator-v0.0.1
+cd antiphoria-slop-provenance
 ```
 
 ## 2. Virtual environment

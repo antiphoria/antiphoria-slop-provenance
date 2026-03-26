@@ -1,4 +1,4 @@
-# BYOV launcher for Slop Orchestrator (Windows)
+# BYOV launcher for Antiphoria Slop Provenance (Windows)
 # Mount keys_vault.hc manually in VeraCrypt first. This script finds it, injects key paths, runs your command.
 # Usage: .\scripts\run-secure.ps1 slop-cli generate --prompt "..." --repo-path <path>
 

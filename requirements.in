@@ -1,4 +1,4 @@
-# Direct dependencies for slop-orchestrator (from pyproject.toml)
+# Direct dependencies for antiphoria-slop-provenance (from pyproject.toml)
 # Used by pip-compile to generate requirements.txt
 filelock>=3.13.0
 google-genai

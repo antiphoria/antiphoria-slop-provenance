@@ -26,7 +26,7 @@ _adapter_logger = logging.getLogger("src.adapters.git_ledger")
 from src.models import sha256_hex
 from src.secrets_guard import assert_secret_free
 
-_DEFAULT_LEDGER_AUTHOR_NAME = "Slop Orchestrator"
+_DEFAULT_LEDGER_AUTHOR_NAME = "Antiphoria Slop Provenance"
 _DEFAULT_LEDGER_AUTHOR_EMAIL = "bot@antiphoria.local"
 
 
