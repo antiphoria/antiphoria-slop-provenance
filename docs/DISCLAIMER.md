@@ -1,6 +1,6 @@
 # Disclaimer
 
-This software must be used in a research setting only.
+This software must be used in a research setting only and for artistic purposes.
 
 This software is provided for research, creative, and operational provenance workflows on an "AS IS" basis, without warranties of any kind.
 

@@ -1,8 +1,8 @@
 # Quickstart: clone → tests → CLI
 
-The software must be used in a research setting only.
+The software must be used in a **research setting only** and **for artistic purposes**. This tooling is **experimental**—do not rely on it for regulated or high-stakes decisions without appropriate review. The CLI prompts once on first real use (not for `--help` only); for scripts or CI, set `SLOP_ORCHESTRATOR_RESEARCH_ACK=1` after reading [TERMS_OF_USE.md](TERMS_OF_USE.md) and [DISCLAIMER.md](DISCLAIMER.md).
 
-This tooling is **experimental**. Do not rely on it for regulated or high-stakes decisions without appropriate legal and operational review. See [TERMS_OF_USE.md](TERMS_OF_USE.md) and [DISCLAIMER.md](DISCLAIMER.md).
+`pip install` does not show a separate legal screen; acknowledgment happens when you first run `slop-cli` (see above).
 
 Python **3.12** is the version used in CI; 3.10+ is supported per `pyproject.toml`.
 
@@ -29,6 +29,8 @@ pip install -e ".[dev]"
 ```
 
 Optional: OpenTimestamps support — `pip install -e ".[ots]"`.
+
+After install, the first non-`--help` `slop-cli` invocation may ask you to type `y` to confirm research/artistic use (unless `SLOP_ORCHESTRATOR_RESEARCH_ACK=1` is set).
 
 ## 4. Platform notes
 

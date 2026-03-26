@@ -2,9 +2,9 @@
 
 By using this repository and software, you agree to the following conditions.
 
-## 0. Research use only
+## 0. Research and artistic use only
 
-The software must be used in a research setting only.
+The software must be used in a research setting only and for artistic purposes.
 
 ## 1. Lawful use only
 

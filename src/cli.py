@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import os
+import sys
 import subprocess
 import time
 import uuid as uuid_module
@@ -77,6 +78,13 @@ from src.logging_config import (
     should_log_route,
 )
 from src.runtime.service_runtime import configure_logging
+from src.research_use_ack import (
+    argv_requests_help_only,
+    is_research_use_acknowledged,
+    print_non_interactive_research_ack_hint,
+    prompt_and_confirm_research_use,
+    write_research_use_acknowledgment,
+)
 
 
 _read_env_optional = read_env_optional
@@ -170,9 +178,10 @@ def build_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser."""
 
     _cli_epilog = (
-        "Experimental provenance tooling; not legal, regulatory, or commercial "
-        "certification. Full terms: docs/TERMS_OF_USE.md and docs/DISCLAIMER.md "
-        "at the repository root."
+        "Research and artistic use only; not legal/regulatory certification. "
+        "Terms: docs/TERMS_OF_USE.md, docs/DISCLAIMER.md. "
+        "First run: confirm interactively or set SLOP_ORCHESTRATOR_RESEARCH_ACK=1 "
+        "for automation after reading those documents."
     )
     parser = argparse.ArgumentParser(
         prog="slop-cli",
@@ -2487,6 +2496,16 @@ async def _dispatch_impl(args: argparse.Namespace) -> int:
 
 def main() -> int:
     """Parse arguments and run the asynchronous CLI dispatcher."""
+
+    argv = sys.argv[1:]
+    if not argv_requests_help_only(argv):
+        if not is_research_use_acknowledged():
+            if not sys.stdin.isatty():
+                print_non_interactive_research_ack_hint()
+                return 2
+            if not prompt_and_confirm_research_use():
+                return 2
+            write_research_use_acknowledgment()
 
     configure_logging()
     parser = build_parser()
