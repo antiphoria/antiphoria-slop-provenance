@@ -2,6 +2,10 @@
 
 By using this repository and software, you agree to the following conditions.
 
+## 0. Research use only
+
+The software must be used in a research setting only.
+
 ## 1. Lawful use only
 
 You must use this software in compliance with all applicable laws, regulations, contracts, and platform terms of service.

@@ -1,6 +1,12 @@
 # Slop Orchestrator
 
-Event-driven provenance engine for short-story generation, cryptographic certification, and long-term auditability.
+Event-driven provenance engine for short-story generation, cryptographic signing and provenance, and long-term auditability.
+
+This project is **research and artistic exploration**: technical experiments in provenance, signing, and ledgers. It is **not** a legal, regulatory, or commercial certification service. Signatures and metadata are **technical records** for transparency and audit—they are not determinations of law, platform compliance, or third-party rights.
+
+**Human-only registration** records **what the operator self-attests at signing time**; it does not independently prove human authorship to others.
+
+Use of this software is subject to [docs/TERMS_OF_USE.md](docs/TERMS_OF_USE.md) and [docs/DISCLAIMER.md](docs/DISCLAIMER.md).
 
 > **Privacy warning:** All prompts are cryptographically sealed into artifacts. Do not include PII, confidential data, or trade secrets in your prompts—they cannot be un-published once signed and committed.
 

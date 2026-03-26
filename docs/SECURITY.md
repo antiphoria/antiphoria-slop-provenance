@@ -1,3 +1,7 @@
+The software must be used in a research setting only.
+
+Most parts of this software were vibecoded and audited by LLMs with little human oversight.
+
 # Security: Key Handling (BYOV)
 
 ## Security Audit Remediation (Breaking Changes)

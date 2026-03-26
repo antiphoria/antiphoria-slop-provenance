@@ -1,5 +1,7 @@
 # Limitations and design notes
 
+This software must be used in a research setting only.
+
 This document complements the overview in the root [README.md](../README.md). It is not a substitute for [SECURITY.md](SECURITY.md) or legal/policy docs in this folder.
 
 ## Reproducibility and “truth”

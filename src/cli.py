@@ -169,9 +169,15 @@ class OrchestratorLock:
 def build_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser."""
 
+    _cli_epilog = (
+        "Experimental provenance tooling; not legal, regulatory, or commercial "
+        "certification. Full terms: docs/TERMS_OF_USE.md and docs/DISCLAIMER.md "
+        "at the repository root."
+    )
     parser = argparse.ArgumentParser(
         prog="slop-cli",
         description="Event-driven slop generation and notarization pipeline.",
+        epilog=_cli_epilog,
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -209,7 +215,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     register_parser = subparsers.add_parser(
         "register",
-        help="Certify human-only content (no AI generation).",
+        help=(
+            "Register self-attested human-only content "
+            "(no AI generation in pipeline)."
+        ),
     )
     register_parser.add_argument(
         "--file", required=True, help="Plain markdown file path."

@@ -1,5 +1,9 @@
 # Quickstart: clone → tests → CLI
 
+The software must be used in a research setting only.
+
+This tooling is **experimental**. Do not rely on it for regulated or high-stakes decisions without appropriate legal and operational review. See [TERMS_OF_USE.md](TERMS_OF_USE.md) and [DISCLAIMER.md](DISCLAIMER.md).
+
 Python **3.12** is the version used in CI; 3.10+ is supported per `pyproject.toml`.
 
 ## 1. Clone
