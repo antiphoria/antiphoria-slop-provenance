@@ -37,7 +37,7 @@ _C2PA_ALGORITHM_VALUES: tuple[str, ...] = (
 )
 _DEFAULT_C2PA_MODE = "mvp"
 _DEFAULT_C2PA_ALGORITHM = "ES256"
-_SDK_BRIDGE_SCHEMA_VERSION = "slop-orchestrator.c2pa.bridge.v1"
+_SDK_BRIDGE_SCHEMA_VERSION = "antiphoria-slop-provenance.c2pa.bridge.v1"
 _SDK_BRIDGE_FORMAT = "text/xml"
 _SDK_CARRIER_FORMAT = "image/jpeg"
 _SDK_MARKDOWN_ASSERTION_LABEL = "org.antiphoria.markdown"

@@ -188,7 +188,7 @@ class ProvenanceAuthorAttestationTest(unittest.TestCase):
         )
         prov = Provenance(
             source="human",
-            engineVersion="slop-orchestrator-v1.0.0",
+            engineVersion="antiphoria-slop-provenance-v1.0.0",
             modelId="human",
             generationContext=GenerationContext(
                 systemInstruction="Human-authored.",
@@ -207,7 +207,7 @@ class ProvenanceAuthorAttestationTest(unittest.TestCase):
     def test_provenance_author_attestation_defaults_to_none(self) -> None:
         prov = Provenance(
             source="synthetic",
-            engineVersion="slop-orchestrator-v1.0.0",
+            engineVersion="antiphoria-slop-provenance-v1.0.0",
             modelId="gemini-2.5-flash",
             generationContext=GenerationContext(
                 systemInstruction="system",

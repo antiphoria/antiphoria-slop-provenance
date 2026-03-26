@@ -180,7 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
     _cli_epilog = (
         "Research and artistic use only; not legal/regulatory certification. "
         "Terms: docs/TERMS_OF_USE.md, docs/DISCLAIMER.md. "
-        "First run: confirm interactively or set SLOP_ORCHESTRATOR_RESEARCH_ACK=1 "
+        "First run: confirm interactively or set ANTIPHORIA_SLOP_PROVENANCE_RESEARCH_ACK=1 "
         "for automation after reading those documents."
     )
     parser = argparse.ArgumentParser(
@@ -2531,7 +2531,7 @@ def main() -> int:
         "webauthn-register",
     }:
         lock_base = _require_repo_path(parsed_args)
-    lock_path = lock_base / ".slop-orchestrator.lock"
+    lock_path = lock_base / ".antiphoria-slop-provenance.lock"
     with OrchestratorLock(lock_path):
         return asyncio.run(_dispatch(parsed_args))
 

@@ -1,7 +1,7 @@
 """First-run acknowledgment: research and artistic use only.
 
 Interactive users confirm once; automation sets env
-SLOP_ORCHESTRATOR_RESEARCH_ACK=1.
+ANTIPHORIA_SLOP_PROVENANCE_RESEARCH_ACK=1.
 """
 
 from __future__ import annotations
@@ -11,20 +11,21 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-_ACK_ENV = "SLOP_ORCHESTRATOR_RESEARCH_ACK"
+_ACK_ENV = "ANTIPHORIA_SLOP_PROVENANCE_RESEARCH_ACK"
 _ACK_FILE_NAME = "research_artistic_use_ack_v1"
-_ACK_SENTINEL = "slop-orchestrator-research-artistic-ack-v1"
+_ACK_SENTINEL = "antiphoria-slop-provenance-research-artistic-ack-v1"
+_CONFIG_SUBDIR = "antiphoria-slop-provenance"
 
 
 def _config_dir() -> Path:
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
         if base:
-            return Path(base) / "slop-orchestrator"
+            return Path(base) / _CONFIG_SUBDIR
     xdg = os.environ.get("XDG_CONFIG_HOME")
     if xdg:
-        return Path(xdg) / "slop-orchestrator"
-    return Path.home() / ".config" / "slop-orchestrator"
+        return Path(xdg) / _CONFIG_SUBDIR
+    return Path.home() / ".config" / _CONFIG_SUBDIR
 
 
 def _ack_file_path() -> Path:

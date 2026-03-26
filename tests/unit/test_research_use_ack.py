@@ -20,19 +20,19 @@ def test_argv_requests_help_only() -> None:
 def test_is_research_use_acknowledged_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SLOP_ORCHESTRATOR_RESEARCH_ACK", raising=False)
+    monkeypatch.delenv("ANTIPHORIA_SLOP_PROVENANCE_RESEARCH_ACK", raising=False)
     assert rua.is_research_use_acknowledged() is False
-    monkeypatch.setenv("SLOP_ORCHESTRATOR_RESEARCH_ACK", "1")
+    monkeypatch.setenv("ANTIPHORIA_SLOP_PROVENANCE_RESEARCH_ACK", "1")
     assert rua.is_research_use_acknowledged() is True
-    monkeypatch.setenv("SLOP_ORCHESTRATOR_RESEARCH_ACK", "yes")
+    monkeypatch.setenv("ANTIPHORIA_SLOP_PROVENANCE_RESEARCH_ACK", "yes")
     assert rua.is_research_use_acknowledged() is True
 
 
 def test_ack_file_roundtrip(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.delenv("SLOP_ORCHESTRATOR_RESEARCH_ACK", raising=False)
-    cfg = tmp_path / "slop-orchestrator"
+    monkeypatch.delenv("ANTIPHORIA_SLOP_PROVENANCE_RESEARCH_ACK", raising=False)
+    cfg = tmp_path / "antiphoria-slop-provenance"
     monkeypatch.setattr(rua, "_config_dir", lambda: cfg)
     assert rua.is_research_use_acknowledged() is False
     rua.write_research_use_acknowledgment()

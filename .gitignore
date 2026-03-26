@@ -10,7 +10,7 @@ state/
 *.sqlite
 *.db-shm
 *.db-wal
-.slop-orchestrator.lock
+.antiphoria-slop-provenance.lock
 .deps/
 .venv-freeze/
 .env.*

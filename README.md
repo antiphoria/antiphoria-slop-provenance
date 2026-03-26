@@ -4,7 +4,7 @@ Event-driven provenance engine for short-story generation, cryptographic signing
 
 This project is **research and artistic exploration**: technical experiments in provenance, signing, and ledgers. It is **not** a legal, regulatory, or commercial certification service. Signatures and metadata are **technical records** for transparency and audit—they are not determinations of law, platform compliance, or third-party rights.
 
-The software must be used in a **research setting only** and **for artistic purposes**. On first CLI use you are prompted to confirm (or set `SLOP_ORCHESTRATOR_RESEARCH_ACK=1` for non-interactive use after reading the terms).
+The software must be used in a **research setting only** and **for artistic purposes**. On first CLI use you are prompted to confirm (or set `ANTIPHORIA_SLOP_PROVENANCE_RESEARCH_ACK=1` for non-interactive use after reading the terms).
 
 **Human-only registration** records **what the operator self-attests at signing time**; it does not independently prove human authorship to others.
 
@@ -27,6 +27,8 @@ Use of this software is subject to [docs/TERMS_OF_USE.md](docs/TERMS_OF_USE.md) 
 - Produces machine-readable provenance audit reports.
 
 ## Installation
+
+Use **Python 3.12** in a **repo-local venv** (see [docs/QUICKSTART.md](docs/QUICKSTART.md)); that matches CI and avoids relying on a global `python` that may be the wrong version or missing wheels (e.g. `pygit2`).
 
 ```bash
 python -m pip install --upgrade pip

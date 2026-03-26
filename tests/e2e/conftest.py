@@ -77,7 +77,7 @@ def isolated_env(tmp_path: Path):
         "C2PA_PRIVATE_KEY_PATH": "",
         "ED25519_PRIVATE_KEY_PATH": str(ed_priv_path),
         "ED25519_PUBLIC_KEY_PATH": str(ed_pub_path),
-        "SLOP_ORCHESTRATOR_RESEARCH_ACK": "1",
+        "ANTIPHORIA_SLOP_PROVENANCE_RESEARCH_ACK": "1",
     })
     return env, ledger_dir, state_dir
 

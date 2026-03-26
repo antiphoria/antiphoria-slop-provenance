@@ -235,7 +235,7 @@ class GitLedgerAdapter:
         repo_hash = hashlib.sha256(
             str(self._repository_path.resolve()).encode()
         ).hexdigest()[:16]
-        lock_dir = Path(tempfile.gettempdir()) / "slop-orchestrator" / "locks"
+        lock_dir = Path(tempfile.gettempdir()) / "antiphoria-slop-provenance" / "locks"
         lock_dir.mkdir(parents=True, exist_ok=True)
         lock_path = lock_dir / f"{repo_hash}_{ref_name.replace('/', '_')}.lock"
         with FileLock(lock_path):

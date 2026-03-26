@@ -26,7 +26,7 @@ if (Test-Path "${TargetLetter}:\ed25519_private.pem") {
     $env:ED25519_PRIVATE_KEY_PATH = "${TargetLetter}:\ed25519_private.pem"
 }
 
-# Prepend venv so slop-cli is found
+# Prepend venv Scripts so slop-cli is found (.venv-freeze optional; see docs/QUICKSTART.md)
 foreach ($venv in @(".venv-freeze", ".venv")) {
     $scripts = Join-Path $PSScriptRoot "$venv\Scripts"
     if (Test-Path $scripts) {

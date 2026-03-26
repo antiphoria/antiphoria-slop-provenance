@@ -42,7 +42,7 @@ def _build_human_story_signed_event(
         license="ARR",
         provenance=Provenance(
             source="human",
-            engineVersion="slop-orchestrator-v1.0.0",
+            engineVersion="antiphoria-slop-provenance-v1.0.0",
             modelId="human",
             generationContext=GenerationContext(
                 systemInstruction="Human-authored. No AI generation.",

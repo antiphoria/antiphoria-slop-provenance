@@ -1,10 +1,10 @@
 # Quickstart: clone → tests → CLI
 
-The software must be used in a **research setting only** and **for artistic purposes**. This tooling is **experimental**—do not rely on it for regulated or high-stakes decisions without appropriate review. The CLI prompts once on first real use (not for `--help` only); for scripts or CI, set `SLOP_ORCHESTRATOR_RESEARCH_ACK=1` after reading [TERMS_OF_USE.md](TERMS_OF_USE.md) and [DISCLAIMER.md](DISCLAIMER.md).
+The software must be used in a **research setting only** and **for artistic purposes**. This tooling is **experimental**—do not rely on it for regulated or high-stakes decisions without appropriate review. The CLI prompts once on first real use (not for `--help` only); for scripts or CI, set `ANTIPHORIA_SLOP_PROVENANCE_RESEARCH_ACK=1` after reading [TERMS_OF_USE.md](TERMS_OF_USE.md) and [DISCLAIMER.md](DISCLAIMER.md).
 
 `pip install` does not show a separate legal screen; acknowledgment happens when you first run `slop-cli` (see above).
 
-Python **3.12** is the version used in CI; 3.10+ is supported per `pyproject.toml`.
+Python **3.12** is the version used in CI; 3.10+ is supported per `pyproject.toml`. Use a **project virtualenv** and that venv’s `python` / `pip` (not whatever `python` happens to be on your global PATH—e.g. a bleeding-edge install may lack `pygit2` wheels and break tests).
 
 ## 1. Clone
 
@@ -15,11 +15,15 @@ cd antiphoria-slop-provenance
 
 ## 2. Virtual environment
 
+**Default (documented path):** create **`.venv`** at the repo root with Python 3.12.
+
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate          # Linux / macOS / WSL
 # Windows (PowerShell):  .venv\Scripts\Activate.ps1
 ```
+
+**Optional:** a second local env dir **`.venv-freeze/`** (gitignored) is fine for a reproducible “pip freeze” layout. On Windows, `scripts/run-secure.ps1` prepends **`.venv-freeze\Scripts`** to `PATH` if it exists, otherwise **`.venv\Scripts`**, so `slop-cli` resolves from whichever you use—activate the same venv in your shell when running `pytest` or `python -m pip`.
 
 ## 3. Install (app + test tooling)
 
@@ -30,7 +34,7 @@ pip install -e ".[dev]"
 
 Optional: OpenTimestamps support — `pip install -e ".[ots]"`.
 
-After install, the first non-`--help` `slop-cli` invocation may ask you to type `y` to confirm research/artistic use (unless `SLOP_ORCHESTRATOR_RESEARCH_ACK=1` is set).
+After install, the first non-`--help` `slop-cli` invocation may ask you to type `y` to confirm research/artistic use (unless `ANTIPHORIA_SLOP_PROVENANCE_RESEARCH_ACK=1` is set).
 
 ## 4. Platform notes
 
@@ -44,6 +48,8 @@ cp .env.example .env
 ```
 
 Use **one** of the tracks below. All variables are documented in [`.env.example`](../.env.example).
+
+**Upgrade from `slop-orchestrator`:** use `ANTIPHORIA_SLOP_PROVENANCE_RESEARCH_ACK` (not `SLOP_ORCHESTRATOR_RESEARCH_ACK`). Config is under `%LOCALAPPDATA%\antiphoria-slop-provenance` or `~/.config/antiphoria-slop-provenance`; repo root lock file is `.antiphoria-slop-provenance.lock`. Re-run the first-run acknowledgment if you only had the old on-disk ack file.
 
 ### Track A — First green run (no Gemini, no Supabase)
 

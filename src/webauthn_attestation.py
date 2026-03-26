@@ -35,7 +35,7 @@ def _get_credentials_path(repo_path: Path | None = None) -> Path:
     """Return path to stored WebAuthn credentials."""
     if repo_path:
         return repo_path / _CREDENTIALS_FILE
-    return Path.home() / ".config" / "slop-orchestrator" / _CREDENTIALS_FILE
+    return Path.home() / ".config" / "antiphoria-slop-provenance" / _CREDENTIALS_FILE
 
 
 def _load_credentials(path: Path) -> dict[str, Any]:

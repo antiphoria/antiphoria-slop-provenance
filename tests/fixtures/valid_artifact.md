@@ -7,7 +7,7 @@ contentType: "text/markdown"
 license: "CC0-1.0"
 provenance:
   source: "synthetic"
-  engineVersion: "slop-orchestrator-v1.0.0"
+  engineVersion: "antiphoria-slop-provenance-v1.0.0"
   modelId: "gemini-2.5-flash"
   generationContext:
     systemInstruction: |-
