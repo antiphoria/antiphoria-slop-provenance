@@ -9,6 +9,8 @@ on:
 
 permissions:
   contents: read
+  # Required by antiphoria/.github quality-gate (trivy-sarif uploads SARIF).
+  security-events: write
 
 jobs:
   quality-gate:
