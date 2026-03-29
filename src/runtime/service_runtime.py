@@ -58,9 +58,7 @@ def build_repository() -> SQLiteRepository:
         project_root=_PROJECT_ROOT,
     )
     if artifact_db_path is None:
-        artifact_db_path = (
-            _PROJECT_ROOT / ".orchestrator-state" / "artifacts.db"
-        ).resolve()
+        artifact_db_path = (_PROJECT_ROOT / ".orchestrator-state" / "artifacts.db").resolve()
     artifact_db_path.parent.mkdir(parents=True, exist_ok=True)
     return SQLiteRepository(db_path=artifact_db_path)
 

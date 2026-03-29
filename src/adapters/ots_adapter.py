@@ -130,9 +130,7 @@ class OTSAdapter:
                 )
                 raise
             except subprocess.TimeoutExpired as e:
-                _logger.warning(
-                    "ots stamp timed out after %s seconds", e.timeout
-                )
+                _logger.warning("ots stamp timed out after %s seconds", e.timeout)
                 raise
             proof_path = temp_path.with_suffix(".md.ots")
             return proof_path.read_bytes()
@@ -174,9 +172,7 @@ class OTSAdapter:
                 )
                 return False, None, None
             except subprocess.TimeoutExpired as e:
-                _logger.warning(
-                    "ots upgrade timed out after %s seconds", e.timeout
-                )
+                _logger.warning("ots upgrade timed out after %s seconds", e.timeout)
                 return False, None, None
 
             final_bytes = proof_path.read_bytes()

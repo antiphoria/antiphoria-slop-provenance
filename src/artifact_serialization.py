@@ -76,9 +76,7 @@ def render_artifact_markdown(artifact: Artifact, body: str) -> str:
 
     curation_block: str
     if artifact.curation is not None:
-        diff_block = _yaml_literal_block(
-            artifact.curation.unified_diff, indent=6
-        )
+        diff_block = _yaml_literal_block(artifact.curation.unified_diff, indent=6)
         curation_block = (
             "curation:\n"
             f"  differenceScore: {artifact.curation.difference_score:.2f}\n"
@@ -164,8 +162,7 @@ def render_artifact_markdown(artifact: Artifact, body: str) -> str:
     public_key_uri_line = ""
     if sig.verification_anchor.public_key_uri is not None:
         public_key_uri_line = (
-            "    publicKeyUri: "
-            f"{_yaml_quoted(str(sig.verification_anchor.public_key_uri))}\n"
+            f"    publicKeyUri: {_yaml_quoted(str(sig.verification_anchor.public_key_uri))}\n"
         )
 
     payload_canon_line = (

@@ -374,7 +374,9 @@ def test_redact_and_verify_allow_redacted(isolated_env) -> None:
         ["verify", "--file", str(redacted_path)],
         env=env,
     )
-    assert verify_strict.returncode != 0, "Verify without --allow-redacted must fail on redacted body"
+    assert verify_strict.returncode != 0, (
+        "Verify without --allow-redacted must fail on redacted body"
+    )
 
 
 def _create_worktree_transparency_log(ledger_dir: Path) -> list[str]:

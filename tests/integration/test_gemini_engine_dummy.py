@@ -21,8 +21,7 @@ class GeminiEngineDummyModeTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             env_path = Path(temp_dir) / ".env"
             env_path.write_text(
-                "GENERATOR_DUMMY_MODE=true\n"
-                "GENERATOR_DUMMY_DELAY_SEC=0\n",
+                "GENERATOR_DUMMY_MODE=true\nGENERATOR_DUMMY_DELAY_SEC=0\n",
                 encoding="utf-8",
             )
             event_bus = InMemoryEventBus()
@@ -56,8 +55,7 @@ class GeminiEngineDummyModeTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             env_path = Path(temp_dir) / ".env"
             env_path.write_text(
-                "GENERATOR_DUMMY_MODE=true\n"
-                "GENERATOR_DUMMY_DELAY_SEC=not-a-number\n",
+                "GENERATOR_DUMMY_MODE=true\nGENERATOR_DUMMY_DELAY_SEC=not-a-number\n",
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(RuntimeError, "must be numeric"):

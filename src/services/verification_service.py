@@ -113,15 +113,15 @@ class VerificationService:
         if should_log_route("fine"):
             _logger.info(
                 "audit_artifact path=%s",
-                str(artifact_path)[:100] + "..." if len(str(artifact_path)) > 100 else str(artifact_path),
+                str(artifact_path)[:100] + "..."
+                if len(str(artifact_path)) > 100
+                else str(artifact_path),
                 extra=get_log_extra(),
             )
 
         request_id: str | None = None
         try:
-            request_id = str(
-                extract_request_id_from_artifact_path(artifact_path)
-            )
+            request_id = str(extract_request_id_from_artifact_path(artifact_path))
             bind_log_context(request_id=request_id)
         except RuntimeError:
             request_id = None
@@ -141,12 +141,8 @@ class VerificationService:
                 log_text = self._read_optional_blob_from_branch(
                     repository_path, f"artifact/{request_id}", ".provenance/transparency-log.jsonl"
                 )
-                entries = self._transparency_log_adapter.parse_entries_from_jsonl(
-                    log_text
-                )
-                transparency_anchor_found = any(
-                    e.artifact_hash == digest_hex for e in entries
-                )
+                entries = self._transparency_log_adapter.parse_entries_from_jsonl(log_text)
+                transparency_anchor_found = any(e.artifact_hash == digest_hex for e in entries)
                 transparency_log_integrity = (
                     self._transparency_log_adapter.verify_integrity_entries(entries)
                 )
@@ -166,16 +162,12 @@ class VerificationService:
                         repository_path,
                         ".provenance/transparency-log.jsonl",
                     )
-                    entries = self._transparency_log_adapter.parse_entries_from_jsonl(
-                        log_text
-                    )
+                    entries = self._transparency_log_adapter.parse_entries_from_jsonl(log_text)
                 else:
                     entries = self._transparency_log_adapter.find_entries_by_artifact_hash(
                         digest_hex
                     )
-                transparency_anchor_found = any(
-                    e.artifact_hash == digest_hex for e in entries
-                )
+                transparency_anchor_found = any(e.artifact_hash == digest_hex for e in entries)
                 transparency_log_integrity = (
                     self._transparency_log_adapter.verify_integrity_entries(entries)
                     if entries
@@ -328,9 +320,7 @@ class VerificationService:
         entries: list[TransparencyLogEntry],
     ) -> bool | None:
         """Verify remote Supabase has matching entry. None=skip, True=ok, False=fail."""
-        matching_entry = next(
-            (e for e in entries if e.artifact_hash == digest_hex), None
-        )
+        matching_entry = next((e for e in entries if e.artifact_hash == digest_hex), None)
         if matching_entry is None:
             return None
         remote_rows = self._transparency_log_adapter.fetch_remote_entries_by_artifact_hash(
@@ -351,9 +341,7 @@ class VerificationService:
                 continue
 
             # Deep check: recompute entryHash from remote payload; detect tampering
-            expected_hash = TransparencyLogAdapter.compute_expected_entry_hash_from_payload(
-                payload
-            )
+            expected_hash = TransparencyLogAdapter.compute_expected_entry_hash_from_payload(payload)
             if expected_hash != payload.get("entryHash"):
                 _logger.warning(
                     "Remote transparency log payload tampered: recomputed entryHash "
@@ -365,8 +353,7 @@ class VerificationService:
                 continue
             if payload.get("artifactHash") != matching_entry.artifact_hash:
                 _logger.warning(
-                    "Remote row entryHash matches but artifactHash differs: "
-                    "expected %s, got %s",
+                    "Remote row entryHash matches but artifactHash differs: expected %s, got %s",
                     matching_entry.artifact_hash,
                     payload.get("artifactHash"),
                 )
@@ -397,9 +384,7 @@ class VerificationService:
             reference = repo.lookup_reference(ref_name)
             commit_obj = repo[reference.target]
             if not isinstance(commit_obj, pygit2.Commit):
-                raise RuntimeError(
-                    f"Branch ref '{ref_name}' does not point to a commit."
-                )
+                raise RuntimeError(f"Branch ref '{ref_name}' does not point to a commit.")
             ledger_path = self._resolve_ledger_path_from_commit(
                 repo=repo,
                 commit_obj=commit_obj,
@@ -417,14 +402,10 @@ class VerificationService:
                 commit_obj=commit_obj,
                 relative_path=".provenance/transparency-log.jsonl",
             )
-            entries = self._transparency_log_adapter.parse_entries_from_jsonl(
-                log_text
-            )
-            transparency_anchor_found = any(
-                entry.artifact_hash == digest_hex for entry in entries
-            )
-            transparency_log_integrity = (
-                self._transparency_log_adapter.verify_integrity_entries(entries)
+            entries = self._transparency_log_adapter.parse_entries_from_jsonl(log_text)
+            transparency_anchor_found = any(entry.artifact_hash == digest_hex for entry in entries)
+            transparency_log_integrity = self._transparency_log_adapter.verify_integrity_entries(
+                entries
             )
             remote_anchor_verified: bool | None = None
             remote_error_message: str | None = None
@@ -558,9 +539,7 @@ class VerificationService:
         else:
             payload_hash_match = digest_hex == envelope.signature.artifact_hash
             if not payload_hash_match:
-                errors.append(
-                    "Payload hash mismatch against signature artifactHash."
-                )
+                errors.append("Payload hash mismatch against signature artifactHash.")
             key_status_lookup = self._key_registry.get_status(
                 envelope.signature.verification_anchor.signer_fingerprint
             )
@@ -604,10 +583,7 @@ class VerificationService:
 
         token_base64_to_verify = (
             envelope.signature.rfc3161_token
-            if (
-                envelope.signature is not None
-                and envelope.signature.rfc3161_token is not None
-            )
+            if (envelope.signature is not None and envelope.signature.rfc3161_token is not None)
             else None
         )
 
@@ -615,9 +591,7 @@ class VerificationService:
             timestamp_found = True
             try:
                 token_condensed = "".join(token_base64_to_verify.split())
-                token_bytes = base64.b64decode(
-                    token_condensed.encode("ascii"), validate=True
-                )
+                token_bytes = base64.b64decode(token_condensed.encode("ascii"), validate=True)
                 verification = self._tsa_adapter.verify_timestamp_token(
                     digest_hex=digest_hex,
                     token_bytes=token_bytes,
@@ -728,9 +702,7 @@ class VerificationService:
     ) -> str:
         blob_obj = tree_get_blob(repo, commit_obj.tree, relative_path)
         if blob_obj is None:
-            raise RuntimeError(
-                f"Branch artifact path '{relative_path}' not found in commit."
-            )
+            raise RuntimeError(f"Branch artifact path '{relative_path}' not found in commit.")
         return bytes(blob_obj.data).decode("utf-8")
 
     @staticmethod

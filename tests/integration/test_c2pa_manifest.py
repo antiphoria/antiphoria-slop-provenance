@@ -186,9 +186,7 @@ class C2PAManifestTest(unittest.TestCase):
         self.assertIn("BEGIN PRIVATE KEY", pkcs8)
         self.assertNotIn("EC PRIVATE KEY", pkcs8)
         # PKCS#8 input passes through (idempotent)
-        pkcs8_pem = key.private_bytes(
-            Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()
-        ).decode()
+        pkcs8_pem = key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()).decode()
         normalized = _normalize_private_key_to_pkcs8(pkcs8_pem)
         self.assertEqual(normalized, pkcs8_pem)
 
@@ -206,16 +204,10 @@ class C2PAManifestTest(unittest.TestCase):
             temp_path = Path(temp_dir)
             cert_path = temp_path / "cert.pem"
             key_path = temp_path / "key.pem"
-            cert_path.write_text(
-                "-----BEGIN CERTIFICATE-----\n"
-                "X\n"
-                "-----END CERTIFICATE-----\n"
-            )
+            cert_path.write_text("-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----\n")
             # Valid EC P-256 key (PKCS#8) for C2PA ES256; normalization accepts EC or PKCS#8
             key = ec.generate_private_key(ec.SECP256R1())
-            key_pem = key.private_bytes(
-                Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()
-            ).decode()
+            key_pem = key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()).decode()
             key_path.write_text(key_pem)
             env_path = temp_path / ".env"
             env_path.write_text(

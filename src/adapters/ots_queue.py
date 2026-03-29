@@ -47,9 +47,9 @@ class OtsQueueAdapter:
         env_path: Path | None = None,
     ) -> None:
         self._repository_path = repository_path.resolve()
-        self._queue_ref = queue_ref or read_env_optional(
-            "OTS_QUEUE_REF", env_path=env_path
-        ) or _DEFAULT_QUEUE_REF
+        self._queue_ref = (
+            queue_ref or read_env_optional("OTS_QUEUE_REF", env_path=env_path) or _DEFAULT_QUEUE_REF
+        )
         self._env_path = env_path
         self._queue_path = self._repository_path / _QUEUE_RELATIVE_PATH
 
@@ -117,9 +117,7 @@ class OtsQueueAdapter:
             try:
                 json.loads(stripped)
             except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"Invalid JSONL: line {i + 1} is not valid JSON: {exc}"
-                ) from exc
+                raise ValueError(f"Invalid JSONL: line {i + 1} is not valid JSON: {exc}") from exc
 
     def _commit_content(self, content: str, message: str) -> None:
         """Commit queue content to the branch."""
@@ -129,9 +127,7 @@ class OtsQueueAdapter:
         ref = repo.lookup_reference(self._queue_ref)
         parent = repo[ref.target]
         if not isinstance(parent, pygit2.Commit):
-            raise RuntimeError(
-                f"Branch {self._queue_ref} does not point to a commit."
-            )
+            raise RuntimeError(f"Branch {self._queue_ref} does not point to a commit.")
         path_parts = Path(_QUEUE_RELATIVE_PATH).parts
         blob_oid = repo.create_blob(content.encode("utf-8"))
         current_tree: pygit2.Tree | None = parent.tree
@@ -149,9 +145,7 @@ class OtsQueueAdapter:
         current_mode = pygit2.GIT_FILEMODE_BLOB
         for i, part in reversed(list(enumerate(path_parts))):
             tb = (
-                repo.TreeBuilder(tree_stack[i])
-                if tree_stack[i] is not None
-                else repo.TreeBuilder()
+                repo.TreeBuilder(tree_stack[i]) if tree_stack[i] is not None else repo.TreeBuilder()
             )
             tb.insert(part, current_oid, current_mode)
             current_oid = tb.write()

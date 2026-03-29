@@ -116,9 +116,7 @@ def _capture_registration_ceremony(env_path: Path) -> RegistrationCeremony:
     if read_env_bool("CAPTURE_MACHINE_ID", default=False, env_path=env_path):
         try:
             node = uuid_module.getnode()
-            machine_id_hash = hashlib.sha256(
-                str(node).encode("utf-8")
-            ).hexdigest()
+            machine_id_hash = hashlib.sha256(str(node).encode("utf-8")).hexdigest()
         except Exception:  # noqa: BLE001
             pass
     return RegistrationCeremony(
@@ -132,9 +130,7 @@ def _require_repo_path(args: argparse.Namespace) -> Path:
     """Resolve repo path from args or LEDGER_REPO_PATH. Raises if unset."""
     raw = getattr(args, "repo_path", None) or _default_repo_path()
     if not raw:
-        raise RuntimeError(
-            "Provide --repo-path or set LEDGER_REPO_PATH in .env"
-        )
+        raise RuntimeError("Provide --repo-path or set LEDGER_REPO_PATH in .env")
     return Path(raw).resolve()
 
 
@@ -159,9 +155,7 @@ class OrchestratorLock:
                 "If the previous process crashed, remove the lock file manually and retry."
             ) from exc
         if self._fd is None:
-            raise RuntimeError(
-                f"Failed to create orchestrator lock file: '{self._lock_path}'."
-            )
+            raise RuntimeError(f"Failed to create orchestrator lock file: '{self._lock_path}'.")
         os.write(self._fd, str(os.getpid()).encode("ascii"))
         return self
 
@@ -202,9 +196,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     generate_parser.add_argument(
         "--model-id",
-        default=_read_env_optional(
-            "GENERATOR_MODEL_ID", env_path=get_project_env_path()
-        )
+        default=_read_env_optional("GENERATOR_MODEL_ID", env_path=get_project_env_path())
         or "gemini-2.5-flash",
         help="Google AI Studio model identifier.",
     )
@@ -213,9 +205,7 @@ def build_parser() -> argparse.ArgumentParser:
         "curate",
         help="Re-sign and commit a curated artifact markdown file.",
     )
-    curate_parser.add_argument(
-        "--file", required=True, help="Edited artifact file path."
-    )
+    curate_parser.add_argument("--file", required=True, help="Edited artifact file path.")
     curate_parser.add_argument(
         "--repo-path",
         default=_default_repo_path(),
@@ -224,14 +214,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     register_parser = subparsers.add_parser(
         "register",
-        help=(
-            "Register self-attested human-only content "
-            "(no AI generation in pipeline)."
-        ),
+        help=("Register self-attested human-only content (no AI generation in pipeline)."),
     )
-    register_parser.add_argument(
-        "--file", required=True, help="Plain markdown file path."
-    )
+    register_parser.add_argument("--file", required=True, help="Plain markdown file path.")
     register_parser.add_argument(
         "--repo-path",
         default=_default_repo_path(),
@@ -653,9 +638,7 @@ def _validate_artifact_under_repo(artifact_path: Path, repository_path: Path) ->
     try:
         artifact_path.resolve().relative_to(repository_path.resolve())
     except ValueError:
-        raise RuntimeError(
-            f"Artifact path must be under repository: {artifact_path}"
-        ) from None
+        raise RuntimeError(f"Artifact path must be under repository: {artifact_path}") from None
 
 
 def _validate_external_repo_path(repository_path: Path) -> None:
@@ -703,14 +686,10 @@ def _build_provenance_services(
         publish_headers=publish_headers if publish_headers else None,
         publish_supabase_format=publish_supabase_format,
     )
-    tsa_url = tsa_url_override or _read_env_optional(
-        "RFC3161_TSA_URL", env_path=env_path
-    )
+    tsa_url = tsa_url_override or _read_env_optional("RFC3161_TSA_URL", env_path=env_path)
     if tsa_url is not None and not tsa_url.strip():
         tsa_url = None
-    tsa_untrusted_path = _read_env_optional(
-        "RFC3161_TSA_UNTRUSTED_CERT_PATH", env_path=env_path
-    )
+    tsa_untrusted_path = _read_env_optional("RFC3161_TSA_UNTRUSTED_CERT_PATH", env_path=env_path)
     openssl_bin = _read_env_optional("OPENSSL_BIN", env_path=env_path) or "openssl"
     openssl_conf = _read_env_optional("OPENSSL_CONF", env_path=env_path)
     tsa_adapter = (
@@ -720,13 +699,9 @@ def _build_provenance_services(
             tsa_url=tsa_url,
             openssl_bin=openssl_bin,
             untrusted_cert_path=(
-                None
-                if tsa_untrusted_path is None
-                else Path(tsa_untrusted_path).resolve()
+                None if tsa_untrusted_path is None else Path(tsa_untrusted_path).resolve()
             ),
-            openssl_conf_path=(
-                None if openssl_conf is None else Path(openssl_conf).resolve()
-            ),
+            openssl_conf_path=(None if openssl_conf is None else Path(openssl_conf).resolve()),
         )
     )
     key_registry = KeyRegistryAdapter(repository=repository)
@@ -765,9 +740,7 @@ def _resolve_tsa_ca_cert_path(
     """Resolve optional TSA CA cert path from arg or env."""
 
     resolved_env = env_path or get_project_env_path()
-    raw_path = explicit_path or _read_env_optional(
-        "RFC3161_CA_CERT_PATH", env_path=resolved_env
-    )
+    raw_path = explicit_path or _read_env_optional("RFC3161_CA_CERT_PATH", env_path=resolved_env)
     if raw_path is None:
         return None
     return Path(raw_path).resolve()
@@ -778,9 +751,7 @@ def _print_attest_next_step(repository_path: Path, request_id: UUID) -> None:
 
     print(
         "Next step:",
-        "slop-cli attest "
-        f'--repo-path "{repository_path}" '
-        f"--request-id {request_id}",
+        f'slop-cli attest --repo-path "{repository_path}" --request-id {request_id}',
     )
 
 
@@ -830,9 +801,7 @@ async def _anchor_and_timestamp_committed_artifact(
                 artifact_hash=anchor_outcome.artifact_hash,
                 tsa_url=timestamp_outcome.tsa_url,
                 digest_algorithm=timestamp_outcome.digest_algorithm,
-                verification_status=(
-                    "verified" if timestamp_outcome.verification.ok else "failed"
-                ),
+                verification_status=("verified" if timestamp_outcome.verification.ok else "failed"),
                 verification_message=timestamp_outcome.verification.message,
             )
         )
@@ -873,15 +842,11 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
     env_path = get_project_env_path()
     event_bus = EventBus()
     repository = _build_repository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(
-        event_bus=event_bus, repository=repository
-    )
+    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
     repository_path = _require_repo_path(args)
     _validate_external_repo_path(repository_path)
     provenance_service, _ = _build_provenance_services(repository, repository_path)
-    completion_future: asyncio.Future[StoryCommitted] = (
-        asyncio.get_running_loop().create_future()
-    )
+    completion_future: asyncio.Future[StoryCommitted] = asyncio.get_running_loop().create_future()
 
     gemini_adapter = GeminiEngineAdapter(
         event_bus=event_bus, model_id=args.model_id, env_path=env_path
@@ -989,15 +954,11 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
     env_path = get_project_env_path()
     event_bus = EventBus()
     repository = _build_repository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(
-        event_bus=event_bus, repository=repository
-    )
+    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
     repository_path = _require_repo_path(args)
     _validate_external_repo_path(repository_path)
     provenance_service, _ = _build_provenance_services(repository, repository_path)
-    completion_future: asyncio.Future[StoryCommitted] = (
-        asyncio.get_running_loop().create_future()
-    )
+    completion_future: asyncio.Future[StoryCommitted] = asyncio.get_running_loop().create_future()
 
     notary_adapter = CryptoNotaryAdapter(event_bus=event_bus, env_path=env_path)
     ledger_adapter = GitLedgerAdapter(
@@ -1130,8 +1091,7 @@ _REGISTER_QUESTION_1 = (
     "and that you possess the artistic capacity to make these declarations?"
 )
 _REGISTER_QUESTION_2 = (
-    "Do you publicly declare ownership of this text, "
-    "affirming that it is your original creation?"
+    "Do you publicly declare ownership of this text, affirming that it is your original creation?"
 )
 _REGISTER_QUESTION_3_TEMPLATE = (
     "Do you declare in good faith that this text is your independent creation, "
@@ -1165,15 +1125,11 @@ async def _run_register_command(args: argparse.Namespace) -> int:
     env_path = get_project_env_path()
     event_bus = EventBus()
     repository = _build_repository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(
-        event_bus=event_bus, repository=repository
-    )
+    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
     repository_path = _require_repo_path(args)
     _validate_external_repo_path(repository_path)
     provenance_service, _ = _build_provenance_services(repository, repository_path)
-    completion_future: asyncio.Future[StoryCommitted] = (
-        asyncio.get_running_loop().create_future()
-    )
+    completion_future: asyncio.Future[StoryCommitted] = asyncio.get_running_loop().create_future()
 
     notary_adapter = CryptoNotaryAdapter(event_bus=event_bus, env_path=env_path)
     ledger_adapter = GitLedgerAdapter(
@@ -1208,9 +1164,7 @@ async def _run_register_command(args: argparse.Namespace) -> int:
         qa_pairs = _build_attestation_qa("fiction")
         attestation = AuthorAttestation(
             classification="fiction",
-            attestations=[
-                AttestationQa(question=q, answer=a) for q, a in qa_pairs
-            ],
+            attestations=[AttestationQa(question=q, answer=a) for q, a in qa_pairs],
         )
     else:
         try:
@@ -1471,9 +1425,7 @@ async def _run_anchor_command(args: argparse.Namespace) -> int:
 
     event_bus = EventBus()
     repository = _build_repository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(
-        event_bus=event_bus, repository=repository
-    )
+    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
     await telemetry_adapter.start()
     repository_path = _require_repo_path(args)
     provenance_service, _ = _build_provenance_services(repository, repository_path)
@@ -1528,9 +1480,7 @@ async def _run_timestamp_command(args: argparse.Namespace) -> int:
 
     event_bus = EventBus()
     repository = _build_repository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(
-        event_bus=event_bus, repository=repository
-    )
+    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
     await telemetry_adapter.start()
     repository_path = _require_repo_path(args)
     provenance_service, _ = _build_provenance_services(
@@ -1589,9 +1539,7 @@ async def _run_audit_command(args: argparse.Namespace) -> int:
 
     event_bus = EventBus()
     repository = _build_repository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(
-        event_bus=event_bus, repository=repository
-    )
+    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
     await telemetry_adapter.start()
     repository_path = _require_repo_path(args)
     _, verification_service = _build_provenance_services(repository, repository_path)
@@ -1679,9 +1627,7 @@ async def _run_attest_command(args: argparse.Namespace) -> int:
 
     event_bus = EventBus()
     repository = _build_repository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(
-        event_bus=event_bus, repository=repository
-    )
+    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
     await telemetry_adapter.start()
     repository_path = _require_repo_path(args)
     _, verification_service = _build_provenance_services(repository, repository_path)
@@ -1720,8 +1666,7 @@ async def _run_attest_command(args: argparse.Namespace) -> int:
         )
     else:
         print(
-            f"[{verdict}] request_id={request_id} "
-            f"artifact_id={report.artifact_id or '<unknown>'}"
+            f"[{verdict}] request_id={request_id} artifact_id={report.artifact_id or '<unknown>'}"
         )
         if report.branch is not None and report.commit_oid is not None:
             print(
@@ -1799,11 +1744,7 @@ async def _run_upgrade_command(args: argparse.Namespace) -> int:
         print(f"No OTS forge record for request_id={args.request_id}")
         return 1
     if record.status == "FORGED" and not getattr(args, "force", False):
-        block_str = (
-            f" block={record.bitcoin_block_height}"
-            if record.bitcoin_block_height
-            else ""
-        )
+        block_str = f" block={record.bitcoin_block_height}" if record.bitcoin_block_height else ""
         print(f"Already {record.status}{block_str}")
         return 0
     if record.status == "FAILED" and not getattr(args, "retry", False):
@@ -1869,7 +1810,11 @@ async def _run_process_pending_command(args: argparse.Namespace) -> int:
         failed = ots_queue.list_ots_forge_records(status="FAILED", limit=args.limit)
         records = (records + failed)[: args.limit]
     if not records:
-        msg = "No PENDING or FAILED records." if getattr(args, "retry", False) else "No PENDING records. (Use --retry to include FAILED.)"
+        msg = (
+            "No PENDING or FAILED records."
+            if getattr(args, "retry", False)
+            else "No PENDING records. (Use --retry to include FAILED.)"
+        )
         print(msg)
         return 0
 
@@ -1942,7 +1887,9 @@ def _run_recover_failed_command(args: argparse.Namespace) -> int:
         pending_ots_b64=record.pending_ots_b64,
     )
 
-    print(f"Successfully appended new PENDING event for {request_id}. It will be retried on the next process-pending run.")
+    print(
+        f"Successfully appended new PENDING event for {request_id}. It will be retried on the next process-pending run."
+    )
     return 0
 
 
@@ -2011,9 +1958,7 @@ def _run_anchor_merkle_root_command(args: argparse.Namespace) -> int:
         return 1
 
     transparency_log = TransparencyLogAdapter(log_path=log_path)
-    entries = transparency_log.parse_entries_from_jsonl(
-        log_path.read_text(encoding="utf-8")
-    )
+    entries = transparency_log.parse_entries_from_jsonl(log_path.read_text(encoding="utf-8"))
     if not entries:
         print("Transparency log is empty.")
         return 0
@@ -2154,9 +2099,7 @@ def _run_upgrade_merkle_ots_command(args: argparse.Namespace) -> int:
             print("No merkle-snapshots.jsonl found. Run anchor-merkle-root first.")
             return 1
         lines = [
-            l.strip()
-            for l in snapshots_path.read_text(encoding="utf-8").splitlines()
-            if l.strip()
+            l.strip() for l in snapshots_path.read_text(encoding="utf-8").splitlines() if l.strip()
         ]
         if not lines:
             print("merkle-snapshots.jsonl is empty.")
@@ -2220,12 +2163,8 @@ def _run_sync_transparency_log_command(args: argparse.Namespace) -> int:
     repository_path = _require_repo_path(args)
     _validate_external_repo_path(repository_path)
     repository = _build_repository()
-    provenance_service, _ = _build_provenance_services(
-        repository, repository_path
-    )
-    published, skipped = provenance_service.sync_transparency_log_to_remote(
-        repository_path
-    )
+    provenance_service, _ = _build_provenance_services(repository, repository_path)
+    published, skipped = provenance_service.sync_transparency_log_to_remote(repository_path)
     print(f"Published: {published}, skipped (already present): {skipped}")
     return 0
 
@@ -2240,9 +2179,7 @@ def _run_verify_transparency_log_command(args: argparse.Namespace) -> int:
         return 1
 
     transparency_log = TransparencyLogAdapter(log_path=log_path)
-    entries = transparency_log.parse_entries_from_jsonl(
-        log_path.read_text(encoding="utf-8")
-    )
+    entries = transparency_log.parse_entries_from_jsonl(log_path.read_text(encoding="utf-8"))
     if not entries:
         print("Transparency log is empty.")
         return 1
@@ -2254,10 +2191,7 @@ def _run_verify_transparency_log_command(args: argparse.Namespace) -> int:
     if computed_root.lower() == expected:
         print(f"OK: Merkle root matches ({len(entries)} entries)")
         return 0
-    print(
-        f"MISMATCH: computed={computed_root}, expected={expected} "
-        f"({len(entries)} entries)"
-    )
+    print(f"MISMATCH: computed={computed_root}, expected={expected} ({len(entries)} entries)")
     return 1
 
 
@@ -2321,9 +2255,7 @@ def _run_build_inclusion_proof_command(args: argparse.Namespace) -> int:
         print("No transparency log found.")
         return 1
     transparency_log = TransparencyLogAdapter(log_path=log_path)
-    entries = transparency_log.parse_entries_from_jsonl(
-        log_path.read_text(encoding="utf-8")
-    )
+    entries = transparency_log.parse_entries_from_jsonl(log_path.read_text(encoding="utf-8"))
     if not entries:
         print("Transparency log is empty.")
         return 1

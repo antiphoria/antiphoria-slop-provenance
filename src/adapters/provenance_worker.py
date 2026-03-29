@@ -41,9 +41,7 @@ class ProvenanceWorkerAdapter:
     async def start(self) -> None:
         """Subscribe to commit events."""
 
-        await self._event_bus.subscribe(
-            StoryCommitted, self._on_story_committed
-        )
+        await self._event_bus.subscribe(StoryCommitted, self._on_story_committed)
 
     async def _on_story_committed(self, event: StoryCommitted) -> None:
         """Anchor and timestamp one committed artifact."""
@@ -81,9 +79,7 @@ class ProvenanceWorkerAdapter:
                 event.request_id,
                 self._tsa_ca_cert_path,
             )
-            verification_status = (
-                "verified" if timestamp_outcome.verification.ok else "failed"
-            )
+            verification_status = "verified" if timestamp_outcome.verification.ok else "failed"
             if should_log_route("coarse"):
                 _adapter_logger.info(
                     "ProvenanceWorkerAdapter emitting StoryTimestamped request_id=%s",
@@ -115,9 +111,7 @@ class ProvenanceWorkerAdapter:
                     request_id=event.request_id,
                     artifact_id=UUID(anchor_outcome.artifact_id),
                     artifact_hash=anchor_outcome.artifact_hash,
-                    tsa_url=read_env_optional(
-                        "RFC3161_TSA_URL", env_path=self._env_path
-                    )
+                    tsa_url=read_env_optional("RFC3161_TSA_URL", env_path=self._env_path)
                     or "unconfigured",
                     digest_algorithm="sha256",
                     verification_status="failed",

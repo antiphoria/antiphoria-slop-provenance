@@ -158,9 +158,7 @@ def update_merkle_anchor_block_height(
     """
     if not publish_url or not publish_url.strip() or not publish_headers:
         return False
-    query = urllib.parse.urlencode(
-        [("payload->>rootHash", f"eq.{root_hash}")]
-    )
+    query = urllib.parse.urlencode([("payload->>rootHash", f"eq.{root_hash}")])
     get_url = f"{publish_url.rstrip('/')}?{query}"
     headers = {k: v for k, v in publish_headers.items() if k != "Prefer"}
     req = urllib.request.Request(get_url, method="GET", headers=headers)
@@ -268,10 +266,7 @@ class TransparencyLogAdapter:
     def is_remote_configured(self) -> bool:
         """Return True when remote publish is configured (URL and auth headers)."""
 
-        return (
-            bool(self._publish_url and self._publish_url.strip())
-            and bool(self._publish_headers)
-        )
+        return bool(self._publish_url and self._publish_url.strip()) and bool(self._publish_headers)
 
     def append_entry(
         self,
@@ -361,16 +356,12 @@ class TransparencyLogAdapter:
         )
         return entry, serializable
 
-    def find_entries_by_artifact_hash(
-        self, artifact_hash: str
-    ) -> list[TransparencyLogEntry]:
+    def find_entries_by_artifact_hash(self, artifact_hash: str) -> list[TransparencyLogEntry]:
         """Return all log entries that match an artifact hash."""
 
         if not self._log_path.exists():
             return []
-        entries = self.parse_entries_from_jsonl(
-            self._log_path.read_text(encoding="utf-8")
-        )
+        entries = self.parse_entries_from_jsonl(self._log_path.read_text(encoding="utf-8"))
         return [entry for entry in entries if entry.artifact_hash == artifact_hash]
 
     def verify_integrity(self) -> bool:
@@ -378,9 +369,7 @@ class TransparencyLogAdapter:
 
         if not self._log_path.exists():
             return True
-        entries = self.parse_entries_from_jsonl(
-            self._log_path.read_text(encoding="utf-8")
-        )
+        entries = self.parse_entries_from_jsonl(self._log_path.read_text(encoding="utf-8"))
         return self.verify_integrity_entries(entries)
 
     def parse_entries_from_jsonl(self, jsonl_text: str) -> list[TransparencyLogEntry]:
@@ -443,9 +432,7 @@ class TransparencyLogAdapter:
             "artifactHash": str(loaded["artifactHash"]),
             "artifactId": str(loaded["artifactId"]),
             "requestId": (
-                None
-                if loaded.get("requestId") is None
-                else str(loaded.get("requestId"))
+                None if loaded.get("requestId") is None else str(loaded.get("requestId"))
             ),
             "sourceFile": str(loaded["sourceFile"]),
             "previousEntryHash": (
@@ -457,9 +444,7 @@ class TransparencyLogAdapter:
             "metadata": metadata,
             "entryHash": str(loaded["entryHash"]),
             "remoteReceipt": (
-                None
-                if loaded.get("remoteReceipt") is None
-                else str(loaded.get("remoteReceipt"))
+                None if loaded.get("remoteReceipt") is None else str(loaded.get("remoteReceipt"))
             ),
         }
         bbh = loaded.get("bitcoinBlockHeight")
@@ -509,9 +494,7 @@ class TransparencyLogAdapter:
             "previousEntryHash": payload.get("previousEntryHash"),
             "anchoredAt": payload.get("anchoredAt"),
             "metadata": (
-                payload.get("metadata")
-                if isinstance(payload.get("metadata"), dict)
-                else {}
+                payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
             ),
         }
         bbh = payload.get("bitcoinBlockHeight")
@@ -574,9 +557,7 @@ class TransparencyLogAdapter:
             )
             return None
 
-    def entry_exists_in_remote(
-        self, entry_hash: str, artifact_hash: str
-    ) -> bool:
+    def entry_exists_in_remote(self, entry_hash: str, artifact_hash: str) -> bool:
         """Return True if remote has a row with this entry_hash (idempotency check)."""
         rows = self.fetch_remote_entries_by_artifact_hash(artifact_hash)
         if rows is None:
@@ -587,9 +568,7 @@ class TransparencyLogAdapter:
                 return True
         return False
 
-    def republish_entry_if_missing(
-        self, serializable: dict[str, Any]
-    ) -> tuple[bool, str]:
+    def republish_entry_if_missing(self, serializable: dict[str, Any]) -> tuple[bool, str]:
         """Publish entry to remote only if not already present. Idempotent.
 
         Returns:
@@ -624,9 +603,7 @@ class TransparencyLogAdapter:
         """
         if not (self._publish_url and self._publish_url.strip()) or not self._publish_headers:
             return None
-        query = urllib.parse.urlencode(
-            [("payload->>artifactHash", f"eq.{artifact_hash}")]
-        )
+        query = urllib.parse.urlencode([("payload->>artifactHash", f"eq.{artifact_hash}")])
         url = f"{self._publish_url.rstrip('/')}?{query}"
         headers = {k: v for k, v in self._publish_headers.items() if k != "Prefer"}
         request = urllib.request.Request(url, method="GET", headers=headers)

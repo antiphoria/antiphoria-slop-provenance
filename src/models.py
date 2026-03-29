@@ -114,12 +114,8 @@ class RegistrationCeremony(StrictModel):
     """Proof-of-environment metadata for human registration."""
 
     registration_utc_ms: int = Field(alias="registrationUtcMs")
-    orchestrator_git_commit: str = Field(
-        alias="orchestratorGitCommit", min_length=1
-    )
-    machine_id_hash: str | None = Field(
-        alias="machineIdHash", default=None
-    )
+    orchestrator_git_commit: str = Field(alias="orchestratorGitCommit", min_length=1)
+    machine_id_hash: str | None = Field(alias="machineIdHash", default=None)
 
 
 class Provenance(StrictModel):
@@ -155,9 +151,7 @@ class Provenance(StrictModel):
 class SignatureBlock(StrictModel):
     """Cryptographic seal details for envelope verification."""
 
-    crypto_algorithm: Literal[
-        CRYPTO_ALGORITHM_ML_DSA_44, CRYPTO_ALGORITHM_ED25519
-    ] = Field(
+    crypto_algorithm: Literal[CRYPTO_ALGORITHM_ML_DSA_44, CRYPTO_ALGORITHM_ED25519] = Field(
         alias="cryptoAlgorithm",
         default=CRYPTO_ALGORITHM_ML_DSA_44,
     )
@@ -194,12 +188,8 @@ class Artifact(StrictModel):
     provenance: Provenance
     curation: Curation | None = None
     signature: SignatureBlock | None = None
-    hybrid_signature: SignatureBlock | None = Field(
-        alias="hybridSignature", default=None
-    )
-    record_status: Literal["unverified"] = Field(
-        alias="recordStatus", default="unverified"
-    )
+    hybrid_signature: SignatureBlock | None = Field(alias="hybridSignature", default=None)
+    record_status: Literal["unverified"] = Field(alias="recordStatus", default="unverified")
 
     def to_frontmatter_dict(self) -> dict[str, object]:
         """Return frontmatter dictionary with alias keys."""

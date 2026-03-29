@@ -83,9 +83,7 @@ def _build_story_signed_event(request_id: UUID, body: str) -> StorySigned:
         signature=SignatureBlock(
             artifactHash=compute_payload_hash(body),
             cryptographicSignature="ZmFrZS1zaWduYXR1cmU=",
-            verificationAnchor=VerificationAnchor(
-                signerFingerprint="test-fingerprint"
-            ),
+            verificationAnchor=VerificationAnchor(signerFingerprint="test-fingerprint"),
         ),
     )
     return StorySigned(
@@ -102,9 +100,7 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
         self._repo_temp = tempfile.TemporaryDirectory()
         self._repo_path = Path(self._repo_temp.name)
         pygit2.init_repository(str(self._repo_path), initial_head="master")
-        self._state_temp = tempfile.TemporaryDirectory(
-            ignore_cleanup_errors=True
-        )
+        self._state_temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self._state_db_path = Path(self._state_temp.name) / "state.db"
         self._old_state_db_path = os.getenv("STATE_DB_PATH")
         os.environ["STATE_DB_PATH"] = str(self._state_db_path)
@@ -131,9 +127,7 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
         repo = pygit2.Repository(str(self._repo_path))
         self.assertEqual(dict(repo.status()), {})
 
-        branch_reference = repo.lookup_reference(
-            f"refs/heads/artifact/{request_id}"
-        )
+        branch_reference = repo.lookup_reference(f"refs/heads/artifact/{request_id}")
         branch_commit = repo[branch_reference.target]
         self.assertIsInstance(branch_commit, pygit2.Commit)
 
@@ -193,9 +187,7 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
         await ledger._on_story_signed(event)
 
         repo = pygit2.Repository(str(self._repo_path))
-        branch_reference = repo.lookup_reference(
-            f"refs/heads/artifact/{request_id}"
-        )
+        branch_reference = repo.lookup_reference(f"refs/heads/artifact/{request_id}")
         branch_commit = repo[branch_reference.target]
 
         repository = SQLiteRepository(db_path=self._state_db_path)
@@ -204,6 +196,7 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
             publish_url="https://test.supabase.co/rest/v1/transparency_log",
             publish_headers={"apikey": "x", "Authorization": "Bearer x"},
         )
+
         def fake_urlopen(request: object, timeout: float = 10.0) -> object:
             resp = MagicMock()
             resp.read.return_value = b'[{"id": 1, "payload": {}}]'
@@ -264,9 +257,7 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
         await ledger._on_story_signed(event)
 
         repo = pygit2.Repository(str(self._repo_path))
-        branch_reference = repo.lookup_reference(
-            f"refs/heads/artifact/{request_id}"
-        )
+        branch_reference = repo.lookup_reference(f"refs/heads/artifact/{request_id}")
         branch_commit = repo[branch_reference.target]
 
         def make_post_response(*args: object, **kwargs: object) -> object:
@@ -340,9 +331,7 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
         await ledger._on_story_signed(event)
 
         repo = pygit2.Repository(str(self._repo_path))
-        branch_reference = repo.lookup_reference(
-            f"refs/heads/artifact/{request_id}"
-        )
+        branch_reference = repo.lookup_reference(f"refs/heads/artifact/{request_id}")
         branch_commit = repo[branch_reference.target]
 
         def make_post_response(*args: object, **kwargs: object) -> object:

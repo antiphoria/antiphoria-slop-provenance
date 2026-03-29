@@ -157,9 +157,7 @@ class FetchRemoteEntriesTest(unittest.TestCase):
             publish_url=None,
             publish_headers={"apikey": "x"},
         )
-        self.assertIsNone(
-            adapter.fetch_remote_entries_by_artifact_hash("a" * 64)
-        )
+        self.assertIsNone(adapter.fetch_remote_entries_by_artifact_hash("a" * 64))
 
     def test_returns_none_when_no_headers(self) -> None:
         adapter = TransparencyLogAdapter(
@@ -167,9 +165,7 @@ class FetchRemoteEntriesTest(unittest.TestCase):
             publish_url="https://test.supabase.co/rest/v1/transparency_log",
             publish_headers={},
         )
-        self.assertIsNone(
-            adapter.fetch_remote_entries_by_artifact_hash("a" * 64)
-        )
+        self.assertIsNone(adapter.fetch_remote_entries_by_artifact_hash("a" * 64))
 
     def test_get_sends_correct_url_and_headers(self) -> None:
         captured_request: list[object] = []
@@ -177,16 +173,18 @@ class FetchRemoteEntriesTest(unittest.TestCase):
         def fake_urlopen(request: object, timeout: float = 10.0) -> object:
             captured_request.append(request)
             return _make_response(
-                json.dumps([
-                    {
-                        "id": 42,
-                        "payload": {
-                            "artifactHash": "b" * 64,
-                            "entryHash": "entry-hash-123",
+                json.dumps(
+                    [
+                        {
+                            "id": 42,
+                            "payload": {
+                                "artifactHash": "b" * 64,
+                                "entryHash": "entry-hash-123",
+                            },
+                            "created_at": "2024-01-01T00:00:00Z",
                         },
-                        "created_at": "2024-01-01T00:00:00Z",
-                    },
-                ]).encode("utf-8")
+                    ]
+                ).encode("utf-8")
             )
 
         adapter = TransparencyLogAdapter(
@@ -216,6 +214,7 @@ class FetchRemoteEntriesTest(unittest.TestCase):
 
     def test_returns_empty_list_when_no_matching_rows(self) -> None:
         """Successful fetch with no matches returns [] (verified empty), not None."""
+
         def fake_urlopen(request: object, timeout: float = 10.0) -> object:
             return _make_response(b"[]")
 
@@ -233,9 +232,7 @@ class FetchRemoteEntriesTest(unittest.TestCase):
         import urllib.error
 
         def fake_urlopen(request: object, timeout: float = 10.0) -> object:
-            raise urllib.error.HTTPError(
-                "https://x", 500, "Internal Server Error", {}, None
-            )
+            raise urllib.error.HTTPError("https://x", 500, "Internal Server Error", {}, None)
 
         adapter = TransparencyLogAdapter(
             log_path=self._log_path,
@@ -268,9 +265,7 @@ class FetchRemoteEntriesTest(unittest.TestCase):
         import urllib.error
 
         def fake_urlopen(request: object, timeout: float = 10.0) -> object:
-            raise urllib.error.HTTPError(
-                "https://x", 404, "Not Found", {}, None
-            )
+            raise urllib.error.HTTPError("https://x", 404, "Not Found", {}, None)
 
         adapter = TransparencyLogAdapter(
             log_path=self._log_path,
@@ -312,14 +307,16 @@ class EntryExistsInRemoteTest(unittest.TestCase):
     def test_returns_true_when_entry_hash_matches(self) -> None:
         def fake_urlopen(request: object, timeout: float = 10.0) -> object:
             return _make_response(
-                json.dumps([
-                    {
-                        "payload": {
-                            "artifactHash": "a" * 64,
-                            "entryHash": "entry-123",
+                json.dumps(
+                    [
+                        {
+                            "payload": {
+                                "artifactHash": "a" * 64,
+                                "entryHash": "entry-123",
+                            },
                         },
-                    },
-                ]).encode("utf-8")
+                    ]
+                ).encode("utf-8")
             )
 
         adapter = TransparencyLogAdapter(
@@ -328,21 +325,21 @@ class EntryExistsInRemoteTest(unittest.TestCase):
             publish_headers={"apikey": "x", "Authorization": "Bearer x"},
         )
         with patch("urllib.request.urlopen", fake_urlopen):
-            self.assertTrue(
-                adapter.entry_exists_in_remote("entry-123", "a" * 64)
-            )
+            self.assertTrue(adapter.entry_exists_in_remote("entry-123", "a" * 64))
 
     def test_returns_false_when_no_matching_entry_hash(self) -> None:
         def fake_urlopen(request: object, timeout: float = 10.0) -> object:
             return _make_response(
-                json.dumps([
-                    {
-                        "payload": {
-                            "artifactHash": "a" * 64,
-                            "entryHash": "other-entry",
+                json.dumps(
+                    [
+                        {
+                            "payload": {
+                                "artifactHash": "a" * 64,
+                                "entryHash": "other-entry",
+                            },
                         },
-                    },
-                ]).encode("utf-8")
+                    ]
+                ).encode("utf-8")
             )
 
         adapter = TransparencyLogAdapter(
@@ -351,9 +348,7 @@ class EntryExistsInRemoteTest(unittest.TestCase):
             publish_headers={"apikey": "x", "Authorization": "Bearer x"},
         )
         with patch("urllib.request.urlopen", fake_urlopen):
-            self.assertFalse(
-                adapter.entry_exists_in_remote("entry-123", "a" * 64)
-            )
+            self.assertFalse(adapter.entry_exists_in_remote("entry-123", "a" * 64))
 
     def test_returns_false_when_remote_not_configured(self) -> None:
         adapter = TransparencyLogAdapter(
@@ -361,9 +356,7 @@ class EntryExistsInRemoteTest(unittest.TestCase):
             publish_url=None,
             publish_headers={},
         )
-        self.assertFalse(
-            adapter.entry_exists_in_remote("entry-123", "a" * 64)
-        )
+        self.assertFalse(adapter.entry_exists_in_remote("entry-123", "a" * 64))
 
 
 class RepublishEntryIfMissingTest(unittest.TestCase):
@@ -379,14 +372,16 @@ class RepublishEntryIfMissingTest(unittest.TestCase):
     def test_skips_when_entry_already_exists(self) -> None:
         def fake_urlopen(request: object, timeout: float = 10.0) -> object:
             return _make_response(
-                json.dumps([
-                    {
-                        "payload": {
-                            "artifactHash": "a" * 64,
-                            "entryHash": "entry-123",
+                json.dumps(
+                    [
+                        {
+                            "payload": {
+                                "artifactHash": "a" * 64,
+                                "entryHash": "entry-123",
+                            },
                         },
-                    },
-                ]).encode("utf-8")
+                    ]
+                ).encode("utf-8")
             )
 
         adapter = TransparencyLogAdapter(

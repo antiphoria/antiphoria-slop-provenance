@@ -90,15 +90,11 @@ def _load_key_bytes(key_path: Path) -> bytes:
             encoded_lines.append(stripped)
         encoded = "".join(encoded_lines)
         if not encoded:
-            raise RuntimeError(
-                f"PQC PEM key file is missing encoded payload: '{key_path}'."
-            )
+            raise RuntimeError(f"PQC PEM key file is missing encoded payload: '{key_path}'.")
         try:
             return base64.b64decode(encoded, validate=True)
         except binascii.Error as exc:
-            raise RuntimeError(
-                f"PQC PEM key payload is invalid base64: '{key_path}'."
-            ) from exc
+            raise RuntimeError(f"PQC PEM key payload is invalid base64: '{key_path}'.") from exc
 
     return raw_bytes
 
@@ -122,15 +118,11 @@ def _load_ed25519_private_key(private_key_bytes: bytes) -> Ed25519PrivateKey:
 
     try:
         if private_key_bytes.lstrip().startswith(b"-----BEGIN"):
-            key = load_pem_private_key(
-                private_key_bytes, password=None
-            )
+            key = load_pem_private_key(private_key_bytes, password=None)
         else:
             key = Ed25519PrivateKey.from_private_bytes(private_key_bytes)
     except Exception as exc:
-        raise RuntimeError(
-            f"Failed to load Ed25519 private key: {exc!r}"
-        ) from exc
+        raise RuntimeError(f"Failed to load Ed25519 private key: {exc!r}") from exc
     if not isinstance(key, Ed25519PrivateKey):
         raise RuntimeError("Key is not Ed25519")
     return key
@@ -139,9 +131,7 @@ def _load_ed25519_private_key(private_key_bytes: bytes) -> Ed25519PrivateKey:
 def _ed25519_public_key_bytes(private_key: Ed25519PrivateKey) -> bytes:
     """Extract raw public key bytes from Ed25519 private key."""
 
-    return private_key.public_key().public_bytes(
-        Encoding.Raw, PublicFormat.Raw
-    )
+    return private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
 
 
 class CryptoNotaryAdapter:
@@ -175,9 +165,7 @@ class CryptoNotaryAdapter:
 
         await self._event_bus.subscribe(StoryGenerated, self._on_story_generated)
         await self._event_bus.subscribe(StoryCurated, self._on_story_curated)
-        await self._event_bus.subscribe(
-            StoryHumanRegistered, self._on_story_human_registered
-        )
+        await self._event_bus.subscribe(StoryHumanRegistered, self._on_story_human_registered)
 
     def _resolve_private_key(self) -> bytes:
         """Resolve and load private key bytes from configured path."""
@@ -195,9 +183,7 @@ class CryptoNotaryAdapter:
 
         if private_key_path_value is None:
             expected = ", ".join(_ENV_KEY_CANDIDATES)
-            raise RuntimeError(
-                f"Missing private key path config. Define one of: {expected}."
-            )
+            raise RuntimeError(f"Missing private key path config. Define one of: {expected}.")
 
         key_path = Path(private_key_path_value)
         if not key_path.is_absolute():
@@ -240,9 +226,7 @@ class CryptoNotaryAdapter:
             )
         key_bytes = key_path.read_bytes()
         if not key_bytes or not key_bytes.strip():
-            raise RuntimeError(
-                f"Ed25519 private key file is empty: '{key_path}'."
-            )
+            raise RuntimeError(f"Ed25519 private key file is empty: '{key_path}'.")
         try:
             key = _load_ed25519_private_key(key_bytes)
             pub_bytes = _ed25519_public_key_bytes(key)
@@ -268,9 +252,7 @@ class CryptoNotaryAdapter:
                 continue
         if public_key_path_value is None:
             expected = ", ".join(_PUBLIC_ENV_KEY_CANDIDATES)
-            raise RuntimeError(
-                f"Missing public key path config. Define one of: {expected}."
-            )
+            raise RuntimeError(f"Missing public key path config. Define one of: {expected}.")
         key_path = Path(public_key_path_value)
         if not key_path.is_absolute():
             key_path = (self._env_path.parent / key_path).resolve()
@@ -329,9 +311,7 @@ class CryptoNotaryAdapter:
                 request_id=event.request_id,
                 artifact=artifact,
                 body=event.body,
-                c2pa_manifest_hash=(
-                    None if c2pa_manifest is None else c2pa_manifest.manifest_hash
-                ),
+                c2pa_manifest_hash=(None if c2pa_manifest is None else c2pa_manifest.manifest_hash),
                 c2pa_manifest_bytes_b64=(
                     None
                     if c2pa_manifest is None
@@ -346,9 +326,7 @@ class CryptoNotaryAdapter:
 
         artifact, c2pa_manifest = await self._build_signed_artifact(
             title=(
-                event.title
-                if event.title is not None
-                else self._derive_title(event.curated_body)
+                event.title if event.title is not None else self._derive_title(event.curated_body)
             ),
             source="hybrid",
             model_id=event.model_id,
@@ -376,9 +354,7 @@ class CryptoNotaryAdapter:
                 request_id=event.request_id,
                 artifact=artifact,
                 body=event.curated_body,
-                c2pa_manifest_hash=(
-                    None if c2pa_manifest is None else c2pa_manifest.manifest_hash
-                ),
+                c2pa_manifest_hash=(None if c2pa_manifest is None else c2pa_manifest.manifest_hash),
                 c2pa_manifest_bytes_b64=(
                     None
                     if c2pa_manifest is None
@@ -421,9 +397,7 @@ class CryptoNotaryAdapter:
                 request_id=event.request_id,
                 artifact=artifact,
                 body=event.body,
-                c2pa_manifest_hash=(
-                    None if c2pa_manifest is None else c2pa_manifest.manifest_hash
-                ),
+                c2pa_manifest_hash=(None if c2pa_manifest is None else c2pa_manifest.manifest_hash),
                 c2pa_manifest_bytes_b64=(
                     None
                     if c2pa_manifest is None
@@ -505,9 +479,7 @@ class CryptoNotaryAdapter:
         signing_target = build_envelope_signing_target(
             envelope=unsigned_envelope,
             payload_sha256_hex=payload_hash,
-            manifest_sha256_hex=(
-                None if c2pa_manifest is None else c2pa_manifest.manifest_hash
-            ),
+            manifest_sha256_hex=(None if c2pa_manifest is None else c2pa_manifest.manifest_hash),
             prev_hash=None,
             canonicalization_version=CANONICALIZATION_VERSION,
         )
@@ -534,9 +506,7 @@ class CryptoNotaryAdapter:
         hybrid_signature = SignatureBlock(
             cryptoAlgorithm=CRYPTO_ALGORITHM_ED25519,
             artifactHash=payload_hash,
-            cryptographicSignature=base64.b64encode(
-                hybrid_sig_bytes
-            ).decode("ascii"),
+            cryptographicSignature=base64.b64encode(hybrid_sig_bytes).decode("ascii"),
             verificationAnchor=VerificationAnchor(
                 signerFingerprint=self._ed25519_signer_fingerprint,
             ),
@@ -598,9 +568,7 @@ class CryptoNotaryAdapter:
         )
         signing_hash = sha256_hex(canonical_json_bytes(signing_target))
         try:
-            normalized_signature = "".join(
-                envelope.signature.cryptographic_signature.split()
-            )
+            normalized_signature = "".join(envelope.signature.cryptographic_signature.split())
             signature_bytes = base64.b64decode(normalized_signature, validate=True)
         except binascii.Error as exc:
             raise RuntimeError("Invalid base64 signature payload in artifact.") from exc
@@ -617,9 +585,7 @@ class CryptoNotaryAdapter:
                 envelope.hybrid_signature
             )
             try:
-                hybrid_sig_b64 = "".join(
-                    envelope.hybrid_signature.cryptographic_signature.split()
-                )
+                hybrid_sig_b64 = "".join(envelope.hybrid_signature.cryptographic_signature.split())
                 hybrid_sig_bytes = base64.b64decode(hybrid_sig_b64, validate=True)
             except binascii.Error:
                 return False
@@ -668,9 +634,7 @@ class CryptoNotaryAdapter:
             )
         path_value = path_value.strip()
         if not path_value:
-            raise RuntimeError(
-                f"Missing {_ED25519_PUBLIC_KEY_ENV} for Ed25519 verification."
-            )
+            raise RuntimeError(f"Missing {_ED25519_PUBLIC_KEY_ENV} for Ed25519 verification.")
         key_path = Path(path_value)
         if not key_path.is_absolute():
             key_path = (self._env_path.parent / key_path).resolve()

@@ -40,9 +40,7 @@ def _make_response(body: bytes) -> object:
 def _build_story_signed_event(request_id: UUID, body: str) -> StorySigned:
     artifact = Artifact(
         title="Sync Test Artifact",
-        timestamp=__import__("datetime").datetime.now(
-            __import__("datetime").timezone.utc
-        ),
+        timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
         contentType="text/markdown",
         license="CC0-1.0",
         provenance=Provenance(
@@ -62,9 +60,7 @@ def _build_story_signed_event(request_id: UUID, body: str) -> StorySigned:
         signature=SignatureBlock(
             artifactHash=compute_payload_hash(body),
             cryptographicSignature="ZmFrZS1zaWduYXR1cmU=",
-            verificationAnchor=VerificationAnchor(
-                signerFingerprint="test-fingerprint"
-            ),
+            verificationAnchor=VerificationAnchor(signerFingerprint="test-fingerprint"),
         ),
     )
     return StorySigned(
@@ -81,9 +77,7 @@ class SyncTransparencyLogTest(unittest.IsolatedAsyncioTestCase):
         self._repo_temp = tempfile.TemporaryDirectory()
         self._repo_path = Path(self._repo_temp.name)
         pygit2.init_repository(str(self._repo_path), initial_head="master")
-        self._state_temp = tempfile.TemporaryDirectory(
-            ignore_cleanup_errors=True
-        )
+        self._state_temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self._state_db_path = Path(self._state_temp.name) / "state.db"
         self._old_state_db_path = os.getenv("STATE_DB_PATH")
         os.environ["STATE_DB_PATH"] = str(self._state_db_path)
@@ -109,9 +103,7 @@ class SyncTransparencyLogTest(unittest.IsolatedAsyncioTestCase):
         await ledger._on_story_signed(event)
 
         repo = pygit2.Repository(str(self._repo_path))
-        branch_ref = repo.lookup_reference(
-            f"refs/heads/artifact/{request_id}"
-        )
+        branch_ref = repo.lookup_reference(f"refs/heads/artifact/{request_id}")
         branch_commit = repo[branch_ref.target]
 
         log_path = self._repo_path / ".provenance" / "transparency-log.jsonl"
@@ -130,6 +122,7 @@ class SyncTransparencyLogTest(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch("urllib.request.urlopen") as mock_urlopen:
+
             def fake_urlopen(request: object, timeout: float = 10.0) -> object:
                 if getattr(request, "method", "GET") == "GET":
                     return _make_response(b"[]")
@@ -144,15 +137,14 @@ class SyncTransparencyLogTest(unittest.IsolatedAsyncioTestCase):
             )
 
         with patch("urllib.request.urlopen") as mock_urlopen:
+
             def fake_urlopen(request: object, timeout: float = 10.0) -> object:
                 if getattr(request, "method", "GET") == "GET":
                     return _make_response(b"[]")
                 return _make_response(b'[{"id": 1}]')
 
             mock_urlopen.side_effect = fake_urlopen
-            published, skipped = provenance_service.sync_transparency_log_to_remote(
-                self._repo_path
-            )
+            published, skipped = provenance_service.sync_transparency_log_to_remote(self._repo_path)
 
         self.assertEqual(published, 1)
         self.assertEqual(skipped, 0)
@@ -170,9 +162,7 @@ class SyncTransparencyLogTest(unittest.IsolatedAsyncioTestCase):
         await ledger._on_story_signed(event)
 
         repo = pygit2.Repository(str(self._repo_path))
-        branch_ref = repo.lookup_reference(
-            f"refs/heads/artifact/{request_id}"
-        )
+        branch_ref = repo.lookup_reference(f"refs/heads/artifact/{request_id}")
         branch_commit = repo[branch_ref.target]
 
         log_path = self._repo_path / ".provenance" / "transparency-log.jsonl"
@@ -191,6 +181,7 @@ class SyncTransparencyLogTest(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch("urllib.request.urlopen") as mock_urlopen:
+
             def fake_urlopen(request: object, timeout: float = 10.0) -> object:
                 if getattr(request, "method", "GET") == "GET":
                     return _make_response(b"[]")
@@ -215,24 +206,25 @@ class SyncTransparencyLogTest(unittest.IsolatedAsyncioTestCase):
         entry_hash = entries[0].entry_hash
 
         with patch("urllib.request.urlopen") as mock_urlopen:
+
             def fake_urlopen(request: object, timeout: float = 10.0) -> object:
                 if getattr(request, "method", "GET") == "GET":
                     return _make_response(
-                        json.dumps([
-                            {
-                                "payload": {
-                                    "artifactHash": artifact_hash,
-                                    "entryHash": entry_hash,
+                        json.dumps(
+                            [
+                                {
+                                    "payload": {
+                                        "artifactHash": artifact_hash,
+                                        "entryHash": entry_hash,
+                                    },
                                 },
-                            },
-                        ]).encode("utf-8")
+                            ]
+                        ).encode("utf-8")
                     )
                 return _make_response(b'[{"id": 1}]')
 
             mock_urlopen.side_effect = fake_urlopen
-            published, skipped = provenance_service.sync_transparency_log_to_remote(
-                self._repo_path
-            )
+            published, skipped = provenance_service.sync_transparency_log_to_remote(self._repo_path)
 
         self.assertEqual(published, 0)
         self.assertEqual(skipped, 1)

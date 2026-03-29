@@ -111,9 +111,7 @@ def get_webauthn_assertion(
 
     auth_data = assertion.auth_data
     client_data = assertion.client_data
-    cred_id = base64.urlsafe_b64encode(assertion.credential_id).decode(
-        "ascii"
-    ).rstrip("=")
+    cred_id = base64.urlsafe_b64encode(assertion.credential_id).decode("ascii").rstrip("=")
     client_data_hash = hashlib.sha256(bytes(client_data)).hexdigest()
     auth_data_b64 = base64.urlsafe_b64encode(auth_data).decode("ascii").rstrip("=")
     sig_b64 = base64.urlsafe_b64encode(assertion.signature).decode("ascii").rstrip("=")
@@ -180,9 +178,11 @@ def register_webauthn_credential(
     except Exception:
         return False
 
-    cred_id = base64.urlsafe_b64encode(
-        attestation.auth_data.credential_data.credential_id
-    ).decode("ascii").rstrip("=")
+    cred_id = (
+        base64.urlsafe_b64encode(attestation.auth_data.credential_data.credential_id)
+        .decode("ascii")
+        .rstrip("=")
+    )
     pub_key = attestation.auth_data.credential_data.public_key
     pub_key_cose = bytes(pub_key) if hasattr(pub_key, "__bytes__") else pub_key
     if not isinstance(pub_key_cose, bytes):

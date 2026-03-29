@@ -26,10 +26,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install system dependencies
+      - name: Install system dependencies and build liboqs
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgit2-dev pkg-config cmake ninja-build libssl-dev
+          sudo apt-get install -y libgit2-dev pkg-config cmake ninja-build libssl-dev build-essential
+          # Manually build and install the C library
+          git clone --branch main https://github.com/open-quantum-safe/liboqs.git
+          cd liboqs
+          mkdir build && cd build
+          cmake -GNinja -DOQS_USE_OPENSSL=ON -DCMAKE_INSTALL_PREFIX=/usr/local ..
+          ninja
+          sudo ninja install
+          sudo ldconfig
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

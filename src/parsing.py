@@ -49,10 +49,8 @@ def parse_artifact_markdown_text(text: str) -> tuple[Artifact, str]:
         raise RuntimeError("Artifact file has malformed YAML frontmatter.")
     frontmatter_text = text[4:delimiter_index]
     if re.search(r"&\w", frontmatter_text) or re.search(r"\*\w", frontmatter_text):
-        raise RuntimeError(
-            "YAML frontmatter contains anchors or aliases; rejected for security."
-        )
-    payload_text = text[delimiter_index + len("\n---\n"):]
+        raise RuntimeError("YAML frontmatter contains anchors or aliases; rejected for security.")
+    payload_text = text[delimiter_index + len("\n---\n") :]
     payload = payload_text.strip()
     if not payload:
         raise RuntimeError("Artifact payload is empty after metadata stripping.")

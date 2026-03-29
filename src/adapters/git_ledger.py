@@ -82,9 +82,7 @@ class GitLedgerAdapter:
         markdown_payload = self._render_markdown(event)
         relative_path = self._build_relative_artifact_path(event)
         c2pa_sidecar_payload = self._resolve_c2pa_sidecar_payload(event)
-        commit_message = (
-            f"ledger: notarize {event.artifact.title} " f"({event.request_id})"
-        )
+        commit_message = f"ledger: notarize {event.artifact.title} ({event.request_id})"
 
         commit_oid = await asyncio.to_thread(
             self._commit_markdown_sync,
@@ -125,13 +123,8 @@ class GitLedgerAdapter:
                 )
             except binascii.Error as exc:
                 raise RuntimeError("Invalid base64 C2PA sidecar payload.") from exc
-            if (
-                manifest_hash is not None
-                and sha256_hex(sidecar_payload) != manifest_hash
-            ):
-                raise RuntimeError(
-                    "C2PA manifest hash mismatch while writing sidecar bytes."
-                )
+            if manifest_hash is not None and sha256_hex(sidecar_payload) != manifest_hash:
+                raise RuntimeError("C2PA manifest hash mismatch while writing sidecar bytes.")
             return sidecar_payload
         if not self._enable_c2pa or manifest_hash is None:
             return None
@@ -146,9 +139,7 @@ class GitLedgerAdapter:
         try:
             generation_context = event.artifact.provenance.generation_context
             assert_secret_free("generation prompt", generation_context.prompt)
-            assert_secret_free(
-                "system instruction", generation_context.system_instruction
-            )
+            assert_secret_free("system instruction", generation_context.system_instruction)
             assert_secret_free("artifact body", event.body)
         except RuntimeError as exc:
             raise RuntimeError(f"{exc} request_id={event.request_id}") from exc
@@ -172,9 +163,7 @@ class GitLedgerAdapter:
         try:
             return pygit2.Repository(str(repository_path))
         except (KeyError, pygit2.GitError) as exc:
-            raise RuntimeError(
-                f"Invalid git repository path: '{repository_path}'."
-            ) from exc
+            raise RuntimeError(f"Invalid git repository path: '{repository_path}'.") from exc
 
     def _build_relative_artifact_path(self, event: StorySigned) -> str:
         """Build deterministic repo-relative artifact markdown path."""
@@ -232,9 +221,7 @@ class GitLedgerAdapter:
         """
         branch_name = f"artifact/{request_id}"
         ref_name = f"refs/heads/{branch_name}"
-        repo_hash = hashlib.sha256(
-            str(self._repository_path.resolve()).encode()
-        ).hexdigest()[:16]
+        repo_hash = hashlib.sha256(str(self._repository_path.resolve()).encode()).hexdigest()[:16]
         lock_dir = Path(tempfile.gettempdir()) / "antiphoria-slop-provenance" / "locks"
         lock_dir.mkdir(parents=True, exist_ok=True)
         lock_path = lock_dir / f"{repo_hash}_{ref_name.replace('/', '_')}.lock"
@@ -284,9 +271,7 @@ class GitLedgerAdapter:
         )
         return str(commit_id)
 
-    def _get_branch_head(
-        self, repo: pygit2.Repository, ref_name: str
-    ) -> pygit2.Commit | None:
+    def _get_branch_head(self, repo: pygit2.Repository, ref_name: str) -> pygit2.Commit | None:
         """Return current branch head commit for a given ref name."""
 
         try:
@@ -366,9 +351,7 @@ class GitLedgerAdapter:
         if c2pa_sidecar_payload is not None:
             sidecar_blob_oid = repo.create_blob(c2pa_sidecar_payload)
             sidecar_name = f"{path_obj.stem}.c2pa"
-        artifacts_tb.insert(
-            sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB
-            )
+        artifacts_tb.insert(sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB)
         artifacts_oid = artifacts_tb.write()
 
         # Git trees are single-level; insert expects one path component.
@@ -380,9 +363,7 @@ class GitLedgerAdapter:
                 if parent_tree_oid is not None
                 else repo.TreeBuilder()
             )
-            root_tb.insert(
-                self._artifacts_directory, artifacts_oid, pygit2.GIT_FILEMODE_TREE
-            )
+            root_tb.insert(self._artifacts_directory, artifacts_oid, pygit2.GIT_FILEMODE_TREE)
             return root_tb.write()
 
         # Nested path: traverse down to build tree_stack, then build up.
@@ -404,9 +385,7 @@ class GitLedgerAdapter:
         current_mode = pygit2.GIT_FILEMODE_TREE
         for i, part in reversed(list(enumerate(path_parts))):
             tb = (
-                repo.TreeBuilder(tree_stack[i])
-                if tree_stack[i] is not None
-                else repo.TreeBuilder()
+                repo.TreeBuilder(tree_stack[i]) if tree_stack[i] is not None else repo.TreeBuilder()
             )
             tb.insert(part, current_oid, current_mode)
             current_oid = tb.write()

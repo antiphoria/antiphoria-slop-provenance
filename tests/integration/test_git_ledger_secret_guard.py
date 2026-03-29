@@ -85,8 +85,8 @@ class GitLedgerSecretGuardTest(unittest.IsolatedAsyncioTestCase):
         event = _build_story_signed_event(
             (
                 "Prompt with leaked key "
-                "AIzaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-            )  # pragma: allowlist secret
+                "AIzaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"  # pragma: allowlist secret
+            )
         )
 
         with self.assertRaises(RuntimeError):
@@ -97,16 +97,12 @@ class GitLedgerSecretGuardTest(unittest.IsolatedAsyncioTestCase):
             repo.lookup_reference(f"refs/heads/artifact/{event.request_id}")
 
     async def test_commits_when_prompt_and_body_are_clean(self) -> None:
-        event = _build_story_signed_event(
-            "Write a deterministic noir micro-story."
-        )
+        event = _build_story_signed_event("Write a deterministic noir micro-story.")
 
         await self._adapter._on_story_signed(event)
 
         repo = pygit2.Repository(str(self._repo_path))
-        reference = repo.lookup_reference(
-            f"refs/heads/artifact/{event.request_id}"
-        )
+        reference = repo.lookup_reference(f"refs/heads/artifact/{event.request_id}")
         self.assertIsNotNone(reference)
 
     async def test_writes_exact_c2pa_sidecar_bytes_from_event(self) -> None:
@@ -120,18 +116,14 @@ class GitLedgerSecretGuardTest(unittest.IsolatedAsyncioTestCase):
         sidecar_bytes = b"\x00\x01signed-c2pa-sidecar-bytes"
         event = _build_story_signed_event(
             "Write a deterministic noir micro-story.",
-            c2pa_manifest_bytes_b64=base64.b64encode(sidecar_bytes).decode(
-                "ascii"
-            ),
+            c2pa_manifest_bytes_b64=base64.b64encode(sidecar_bytes).decode("ascii"),
             c2pa_manifest_hash=hashlib.sha256(sidecar_bytes).hexdigest(),
         )
 
         await adapter._on_story_signed(event)
 
         repo = pygit2.Repository(str(self._repo_path))
-        reference = repo.lookup_reference(
-            f"refs/heads/artifact/{event.request_id}"
-        )
+        reference = repo.lookup_reference(f"refs/heads/artifact/{event.request_id}")
         commit_obj = repo[reference.target]
         self.assertIsInstance(commit_obj, pygit2.Commit)
         sidecar_entry = commit_obj.tree[f"{event.request_id}.c2pa"]

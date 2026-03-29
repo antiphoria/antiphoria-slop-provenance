@@ -111,12 +111,9 @@ class MvpC2PAManifestProvider:
                     {
                         "action": "c2pa.created",
                         "digitalSourceType": (
-                            "http://cv.iptc.org/newscodes/digitalsourcetype/"
-                            "trainedAlgorithmicMedia"
+                            "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"
                         ),
-                        "when": envelope.timestamp.astimezone(
-                            timezone.utc
-                        ).isoformat(),
+                        "when": envelope.timestamp.astimezone(timezone.utc).isoformat(),
                     }
                 ],
                 "c2pa.asset": {
@@ -204,11 +201,7 @@ class SdkC2PAManifestProvider:
                                     "digitalsourcetype/"
                                     "trainedAlgorithmicMedia"
                                 ),
-                                "when": (
-                                    envelope.timestamp.astimezone(
-                                        timezone.utc
-                                    ).isoformat()
-                                ),
+                                "when": (envelope.timestamp.astimezone(timezone.utc).isoformat()),
                             }
                         ]
                     },
@@ -251,9 +244,7 @@ class SdkC2PAManifestProvider:
                 f"supported. Use one of: {', '.join(_C2PA_ALGORITHM_VALUES)}."
             )
         try:
-            alg_constant = getattr(
-                c2pa.C2paSigningAlg, self._settings.algorithm
-            )
+            alg_constant = getattr(c2pa.C2paSigningAlg, self._settings.algorithm)
         except AttributeError as exc:
             raise RuntimeError(
                 f"C2PA SDK does not support algorithm '{self._settings.algorithm}'. "
@@ -326,8 +317,7 @@ def build_c2pa_validation_payload(
         canonicalize_body_for_hash(body)
         if (
             envelope.signature is not None
-            and envelope.signature.payload_canonicalization
-            == "eternity.canonicalization.v1"
+            and envelope.signature.payload_canonicalization == "eternity.canonicalization.v1"
         )
         else body.encode("utf-8")
     )
@@ -429,11 +419,7 @@ def validate_c2pa_sidecar(
             return C2PAManifestValidation(
                 valid=False,
                 validation_state=validation_state,
-                errors=errors
-                or [
-                    f"C2PA validation failed with state "
-                    f"'{validation_state}'."
-                ],
+                errors=errors or [f"C2PA validation failed with state '{validation_state}'."],
             )
         markdown_assertion_errors = _validate_sdk_markdown_assertion(
             manifest_store_json=manifest_store_json,
@@ -459,9 +445,7 @@ def validate_c2pa_sidecar(
     )
     supported = _read_supported_formats(c2pa)
     if supported:
-        filtered = [
-            fmt for fmt in candidate_formats if fmt.lower() in supported
-        ]
+        filtered = [fmt for fmt in candidate_formats if fmt.lower() in supported]
         if filtered:
             candidate_formats = filtered
     last_error: Exception | None = None
@@ -489,10 +473,13 @@ def validate_c2pa_sidecar(
                         manifest_store = json.loads(manifest_store_json)
                     except json.JSONDecodeError:
                         manifest_store = {}
-                    if _read_assertion_data(
-                        manifest_store=manifest_store,
-                        label=_SDK_MARKDOWN_ASSERTION_LABEL,
-                    ) is not None:
+                    if (
+                        _read_assertion_data(
+                            manifest_store=manifest_store,
+                            label=_SDK_MARKDOWN_ASSERTION_LABEL,
+                        )
+                        is not None
+                    ):
                         markdown_errors = _validate_sdk_markdown_assertion(
                             manifest_store_json=manifest_store_json,
                             body=body_for_mvp,
@@ -511,11 +498,7 @@ def validate_c2pa_sidecar(
             return C2PAManifestValidation(
                 valid=False,
                 validation_state=validation_state,
-                errors=errors
-                or [
-                    f"C2PA validation failed with state "
-                    f"'{validation_state}'."
-                ],
+                errors=errors or [f"C2PA validation failed with state '{validation_state}'."],
             )
         except Exception as exc:  # noqa: BLE001
             last_error = exc
@@ -524,17 +507,13 @@ def validate_c2pa_sidecar(
         return C2PAManifestValidation(
             valid=False,
             validation_state=None,
-            errors=[
-                "C2PA validation failed for all candidate formats: "
-                f"{candidate_formats}"
-            ],
+            errors=[f"C2PA validation failed for all candidate formats: {candidate_formats}"],
         )
     return C2PAManifestValidation(
         valid=False,
         validation_state=None,
         errors=[
-            "C2PA validation failed for all candidate formats: "
-            f"{candidate_formats}",
+            f"C2PA validation failed for all candidate formats: {candidate_formats}",
             str(last_error),
         ],
     )
@@ -598,10 +577,7 @@ def _validate_sdk_markdown_assertion(
     """Validate custom SDK markdown assertion against canonical payload."""
 
     if body is None:
-        return [
-            "SDK C2PA validation requires artifact body for "
-            "org.antiphoria.markdown checks."
-        ]
+        return ["SDK C2PA validation requires artifact body for org.antiphoria.markdown checks."]
     try:
         manifest_store = json.loads(manifest_store_json)
     except json.JSONDecodeError as exc:
@@ -611,24 +587,16 @@ def _validate_sdk_markdown_assertion(
         label=_SDK_MARKDOWN_ASSERTION_LABEL,
     )
     if not isinstance(assertion_data, dict):
-        return [
-            "SDK C2PA assertion "
-            f"'{_SDK_MARKDOWN_ASSERTION_LABEL}' missing or malformed."
-        ]
+        return [f"SDK C2PA assertion '{_SDK_MARKDOWN_ASSERTION_LABEL}' missing or malformed."]
     errors: list[str] = []
     expected_hash = compute_payload_hash(body)
     stored_hash = assertion_data.get("payloadHash")
     # Compare canonicalized forms: C2PA stores raw body, commit stores canonicalized
     stored_content = assertion_data.get("content") or ""
     if canonicalize_body(stored_content) != canonicalize_body(body):
-        errors.append(
-            "SDK markdown assertion content mismatch against artifact payload."
-        )
+        errors.append("SDK markdown assertion content mismatch against artifact payload.")
     if assertion_data.get("payloadHash") != expected_hash:
-        errors.append(
-            "SDK markdown assertion payloadHash mismatch against artifact "
-            "payload hash."
-        )
+        errors.append("SDK markdown assertion payloadHash mismatch against artifact payload hash.")
     return errors
 
 
@@ -658,10 +626,7 @@ def _read_assertion_data(manifest_store: Any, label: str) -> Any | None:
     assertions = active_manifest.get("assertions")
     if isinstance(assertions, list):
         for assertion in assertions:
-            if (
-                isinstance(assertion, dict)
-                and assertion.get("label") == label
-            ):
+            if isinstance(assertion, dict) and assertion.get("label") == label:
                 return assertion.get("data")
         return None
     if isinstance(assertions, dict):
@@ -681,9 +646,7 @@ def _normalize_private_key_to_pkcs8(pem: str) -> str:
     try:
         key = load_pem_private_key(pem.encode("utf-8"), password=None)
     except Exception as exc:
-        raise RuntimeError(
-            f"C2PA private key could not be loaded: {exc}"
-        ) from exc
+        raise RuntimeError(f"C2PA private key could not be loaded: {exc}") from exc
     pkcs8_bytes = key.private_bytes(
         encoding=Encoding.PEM,
         format=PrivateFormat.PKCS8,
@@ -822,7 +785,6 @@ def _load_c2pa_module() -> Any:
         import c2pa  # type: ignore
     except ImportError as exc:
         raise RuntimeError(
-            "C2PA SDK mode requires dependency 'c2pa-python'. "
-            "Install it and retry."
+            "C2PA SDK mode requires dependency 'c2pa-python'. Install it and retry."
         ) from exc
     return c2pa

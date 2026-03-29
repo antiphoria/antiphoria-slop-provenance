@@ -46,6 +46,8 @@ def _sanitize_for_log(raw: str, max_len: int = 200) -> str:
         flags=re.IGNORECASE,
     )
     return out[:max_len] + "..." if len(out) > max_len else out
+
+
 _DEFAULT_LEDGER_AUTHOR_NAME = "Antiphoria Slop Provenance"
 _DEFAULT_LEDGER_AUTHOR_EMAIL = "bot@antiphoria.local"
 
@@ -188,9 +190,7 @@ class ProvenanceService:
             ref_name=branch_ref,
             relative_path=_BRANCH_LOG_PATH,
         )
-        entries = self._transparency_log_adapter.parse_entries_from_jsonl(
-            existing_log
-        )
+        entries = self._transparency_log_adapter.parse_entries_from_jsonl(existing_log)
         matches = [e for e in entries if e.artifact_hash == artifact_hash]
         if matches:
             last = matches[-1]
@@ -202,9 +202,7 @@ class ProvenanceService:
                 anchored_at=last.anchored_at,
                 log_path=_BRANCH_LOG_PATH,
             )
-        previous_entry_hash = self._resolve_previous_entry_hash(
-            repository_path, existing_log
-        )
+        previous_entry_hash = self._resolve_previous_entry_hash(repository_path, existing_log)
         entry, serializable = self._transparency_log_adapter.build_entry_record(
             artifact_hash=artifact_hash,
             artifact_id=str(envelope.id),
@@ -282,9 +280,7 @@ class ProvenanceService:
         self._assert_artifact_hash_matches_signature(
             artifact_hash=artifact_hash,
             signature_artifact_hash=(
-                None
-                if envelope.signature is None
-                else envelope.signature.artifact_hash
+                None if envelope.signature is None else envelope.signature.artifact_hash
             ),
         )
 
@@ -294,9 +290,7 @@ class ProvenanceService:
             ref_name=branch_ref,
             relative_path=_BRANCH_LOG_PATH,
         )
-        entries = self._transparency_log_adapter.parse_entries_from_jsonl(
-            existing_log
-        )
+        entries = self._transparency_log_adapter.parse_entries_from_jsonl(existing_log)
         matches = [e for e in entries if e.artifact_hash == artifact_hash]
         if matches:
             last = matches[-1]
@@ -308,9 +302,7 @@ class ProvenanceService:
                 anchored_at=last.anchored_at,
                 log_path=_BRANCH_LOG_PATH,
             )
-        previous_entry_hash = self._resolve_previous_entry_hash(
-            repository_path, existing_log
-        )
+        previous_entry_hash = self._resolve_previous_entry_hash(repository_path, existing_log)
         entry, serializable = self._transparency_log_adapter.build_entry_record(
             artifact_hash=artifact_hash,
             artifact_id=str(envelope.id),
@@ -415,10 +407,7 @@ class ProvenanceService:
             tsa_ca_cert_path=tsa_ca_cert_path,
             digest_algorithm=digest_algorithm,
         )
-        if (
-            outcome.token_base64 is not None
-            and request_id is not None
-        ):
+        if outcome.token_base64 is not None and request_id is not None:
             ref_name = f"refs/heads/artifact/{request_id}"
 
             # Bake RFC3161 token into frontmatter (pure frontmatter format)
@@ -552,9 +541,7 @@ class ProvenanceService:
             artifact_hash=artifact_hash,
             signature_artifact_hash=signature_artifact_hash,
         )
-        matches = self._transparency_log_adapter.find_entries_by_artifact_hash(
-            artifact_hash
-        )
+        matches = self._transparency_log_adapter.find_entries_by_artifact_hash(artifact_hash)
         if matches:
             return matches[-1]
         return self._transparency_log_adapter.append_entry(
@@ -573,9 +560,7 @@ class ProvenanceService:
         if signature_artifact_hash is None:
             raise RuntimeError("Artifact envelope is missing signature block.")
         if artifact_hash != signature_artifact_hash:
-            raise RuntimeError(
-                "Artifact hash mismatch for transparency anchor request."
-            )
+            raise RuntimeError("Artifact hash mismatch for transparency anchor request.")
 
     @staticmethod
     def blob_exists_on_branch(
@@ -658,9 +643,7 @@ class ProvenanceService:
             raise RuntimeError(f"Object '{commit_oid}' is not a commit.")
         blob_obj = tree_get_blob(repo, commit_obj.tree, ledger_path)
         if blob_obj is None:
-            raise RuntimeError(
-                f"Committed artifact path '{ledger_path}' not found in commit."
-            )
+            raise RuntimeError(f"Committed artifact path '{ledger_path}' not found in commit.")
         return bytes(blob_obj.data).decode("utf-8")
 
     @staticmethod
@@ -713,9 +696,7 @@ class ProvenanceService:
             return str(entry_hash)
         return None
 
-    def sync_transparency_log_to_remote(
-        self, repository_path: Path
-    ) -> tuple[int, int]:
+    def sync_transparency_log_to_remote(self, repository_path: Path) -> tuple[int, int]:
         """Republish local transparency log entries to remote if missing. Idempotent.
 
         Iterates all artifact branches, reads .provenance/transparency-log.jsonl,
@@ -742,9 +723,7 @@ class ProvenanceService:
                 )
             except RuntimeError:
                 continue
-            entries = self._transparency_log_adapter.parse_entries_from_jsonl(
-                log_content
-            )
+            entries = self._transparency_log_adapter.parse_entries_from_jsonl(log_content)
             for entry in entries:
                 serializable = {
                     "entryId": entry.entry_id,
@@ -760,9 +739,7 @@ class ProvenanceService:
                 }
                 if entry.bitcoin_block_height is not None:
                     serializable["bitcoinBlockHeight"] = entry.bitcoin_block_height
-                ok, msg = self._transparency_log_adapter.republish_entry_if_missing(
-                    serializable
-                )
+                ok, msg = self._transparency_log_adapter.republish_entry_if_missing(serializable)
                 if ok:
                     published += 1
                     _logger.info(
@@ -780,10 +757,13 @@ class ProvenanceService:
         branch_log_content: str,
     ) -> str | None:
         """Resolve previous entry hash from global ref, then branch-local fallback."""
-        global_ref = read_env_optional(
-            "TRANSPARENCY_LOG_GLOBAL_REF",
-            env_path=self._env_path,
-        ) or "refs/heads/main"
+        global_ref = (
+            read_env_optional(
+                "TRANSPARENCY_LOG_GLOBAL_REF",
+                env_path=self._env_path,
+            )
+            or "refs/heads/main"
+        )
         global_log = ""
         try:
             global_log = self._read_branch_file(
@@ -793,9 +773,8 @@ class ProvenanceService:
             )
         except RuntimeError:
             pass
-        return (
-            self._read_latest_entry_hash(global_log)
-            or self._read_latest_entry_hash(branch_log_content)
+        return self._read_latest_entry_hash(global_log) or self._read_latest_entry_hash(
+            branch_log_content
         )
 
     def _commit_branch_file(
@@ -806,9 +785,7 @@ class ProvenanceService:
         payload_text: str,
         commit_message: str,
     ) -> None:
-        repo_hash = hashlib.sha256(
-            str(repository_path.resolve()).encode()
-        ).hexdigest()[:16]
+        repo_hash = hashlib.sha256(str(repository_path.resolve()).encode()).hexdigest()[:16]
         lock_dir = Path(tempfile.gettempdir()) / "antiphoria-slop-provenance" / "locks"
         lock_dir.mkdir(parents=True, exist_ok=True)
         lock_path = lock_dir / f"{repo_hash}_{ref_name.replace('/', '_')}.lock"
@@ -831,9 +808,7 @@ class ProvenanceService:
     ) -> None:
         """Commit binary blob to branch (e.g. .ots files)."""
 
-        repo_hash = hashlib.sha256(
-            str(repository_path.resolve()).encode()
-        ).hexdigest()[:16]
+        repo_hash = hashlib.sha256(str(repository_path.resolve()).encode()).hexdigest()[:16]
         lock_dir = Path(tempfile.gettempdir()) / "antiphoria-slop-provenance" / "locks"
         lock_dir.mkdir(parents=True, exist_ok=True)
         lock_path = lock_dir / f"{repo_hash}_{ref_name.replace('/', '_')}.lock"
@@ -931,9 +906,7 @@ class ProvenanceService:
                 entry = current_tree[part]
                 current_tree = repo[entry.id]
                 if not isinstance(current_tree, pygit2.Tree):
-                    raise RuntimeError(
-                        f"Path part '{part}' exists but is not a directory."
-                    )
+                    raise RuntimeError(f"Path part '{part}' exists but is not a directory.")
             else:
                 current_tree = None
             tree_stack.append(current_tree)
@@ -944,9 +917,7 @@ class ProvenanceService:
         # Build back up
         for i, part in reversed(list(enumerate(path_parts))):
             tb = (
-                repo.TreeBuilder(tree_stack[i])
-                if tree_stack[i] is not None
-                else repo.TreeBuilder()
+                repo.TreeBuilder(tree_stack[i]) if tree_stack[i] is not None else repo.TreeBuilder()
             )
             tb.insert(part, current_oid, current_mode)
             current_oid = tb.write()

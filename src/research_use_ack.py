@@ -69,14 +69,8 @@ def argv_requests_help_only(argv: list[str]) -> bool:
 _PROMPT_LINES = (
     "",
     "Use restriction:",
-    (
-        "  This software must be used in a research setting only "
-        "and for artistic purposes."
-    ),
-    (
-        "  It is not a legal, regulatory, or commercial "
-        "certification service."
-    ),
+    ("  This software must be used in a research setting only and for artistic purposes."),
+    ("  It is not a legal, regulatory, or commercial certification service."),
     "  See docs/TERMS_OF_USE.md and docs/DISCLAIMER.md in the repository.",
     "",
     "Type y (yes) to confirm and continue, or anything else to exit.",
@@ -89,9 +83,7 @@ def prompt_and_confirm_research_use() -> bool:
     for line in _PROMPT_LINES:
         print(line, file=sys.stderr)
     try:
-        reply = input(
-            "Confirm research / artistic use only [y/N]: "
-        ).strip().lower()
+        reply = input("Confirm research / artistic use only [y/N]: ").strip().lower()
     except EOFError:
         return False
     return reply in {"y", "yes"}

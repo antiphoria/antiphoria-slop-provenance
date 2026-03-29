@@ -49,7 +49,9 @@ async def process_single_ots_record(
                 _logger.info(
                     "process_single_ots_record request_id=%s artifact_hash=%s",
                     request_id,
-                    record.artifact_hash[:16] + "..." if len(record.artifact_hash) > 16 else record.artifact_hash,
+                    record.artifact_hash[:16] + "..."
+                    if len(record.artifact_hash) > 16
+                    else record.artifact_hash,
                     extra=get_log_extra(),
                 )
         except (ValueError, TypeError):
@@ -59,9 +61,7 @@ async def process_single_ots_record(
             )
             return
         try:
-            artifact_record = await asyncio.to_thread(
-                repository.get_artifact_record, request_id
-            )
+            artifact_record = await asyncio.to_thread(repository.get_artifact_record, request_id)
             ledger_path = (
                 artifact_record.ledger_path
                 if artifact_record and artifact_record.ledger_path

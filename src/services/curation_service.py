@@ -35,7 +35,7 @@ def extract_markdown_body(markdown_text: str) -> str:
         second_delimiter_index = body.find("\n---\n", 4)
         if second_delimiter_index == -1:
             raise RuntimeError("Invalid markdown frontmatter block.")
-        body = body[second_delimiter_index + len("\n---\n"):]
+        body = body[second_delimiter_index + len("\n---\n") :]
     stripped = body.strip()
     if not stripped:
         raise RuntimeError("Curated artifact body is empty after metadata stripping.")

@@ -76,9 +76,7 @@ class GeminiEngineAdapter:
     async def start(self) -> None:
         """Subscribe to story request events."""
 
-        await self._event_bus.subscribe(
-            StoryRequested, self._on_story_requested
-        )
+        await self._event_bus.subscribe(StoryRequested, self._on_story_requested)
 
     async def _on_story_requested(self, event: StoryRequested) -> None:
         """Generate text and emit `StoryGenerated`.
@@ -163,9 +161,7 @@ class GeminiEngineAdapter:
                 f"Environment variable '{_DUMMY_DELAY_ENV}' must be numeric."
             ) from exc
         if delay < 0:
-            raise RuntimeError(
-                f"Environment variable '{_DUMMY_DELAY_ENV}' must be >= 0."
-            )
+            raise RuntimeError(f"Environment variable '{_DUMMY_DELAY_ENV}' must be >= 0.")
         return delay
 
     @staticmethod

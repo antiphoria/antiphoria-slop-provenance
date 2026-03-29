@@ -38,7 +38,5 @@ def _resolve_artifact_branch_target(
 
     blob_obj = repo[tree_entry.id]
     if not isinstance(blob_obj, pygit2.Blob):
-        raise RuntimeError(
-            f"Artifact path '{artifact_path}' on '{branch_name}' is not a blob."
-        )
+        raise RuntimeError(f"Artifact path '{artifact_path}' on '{branch_name}' is not a blob.")
     return branch_name, str(commit_obj.id), artifact_path

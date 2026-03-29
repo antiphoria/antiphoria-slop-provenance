@@ -44,9 +44,7 @@ class RFC3161TSAAdapterTest(unittest.TestCase):
                                 args=[],
                                 returncode=1,
                                 stdout="",
-                                stderr=(
-                                    "unable to get local issuer certificate"
-                                ),
+                                stderr=("unable to get local issuer certificate"),
                             )
                             second = CompletedProcess(
                                 args=[],

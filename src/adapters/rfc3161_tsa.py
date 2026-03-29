@@ -52,9 +52,7 @@ class RFC3161TSAAdapter:
         """Request RFC3161 token for a digest hex string."""
 
         if self._tsa_url is None:
-            raise RuntimeError(
-                "RFC3161 TSA URL is missing. Configure RFC3161_TSA_URL."
-            )
+            raise RuntimeError("RFC3161 TSA URL is missing. Configure RFC3161_TSA_URL.")
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             query_path = temp_path / "request.tsq"
@@ -128,10 +126,7 @@ class RFC3161TSAAdapter:
                 if process.returncode == 0:
                     return TimestampVerification(
                         ok=True,
-                        message=(
-                            "RFC3161 verification succeeded "
-                            f"using '{ca_path}'."
-                        ),
+                        message=(f"RFC3161 verification succeeded using '{ca_path}'."),
                     )
                 failures.append(
                     self._format_verify_failure(
@@ -305,9 +300,7 @@ class RFC3161TSAAdapter:
             if tsa_ca_cert_path.exists():
                 candidates.append(tsa_ca_cert_path)
             else:
-                notes.append(
-                    f"Configured CA file missing: '{tsa_ca_cert_path}'."
-                )
+                notes.append(f"Configured CA file missing: '{tsa_ca_cert_path}'.")
 
         certifi_path = self._resolve_certifi_ca_bundle()
         if certifi_path is not None and certifi_path not in candidates:

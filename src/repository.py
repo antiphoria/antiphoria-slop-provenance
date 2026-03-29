@@ -102,6 +102,7 @@ class DedupRepository:
                 (message_id, consumer_name),
             )
 
+
 ArtifactLifecycleStatus = Literal[
     "requested",
     "generated",
@@ -218,8 +219,7 @@ class SQLiteRepository:
                 """
             )
             existing_columns = {
-                row["name"]
-                for row in connection.execute("PRAGMA table_info(artifact_records);")
+                row["name"] for row in connection.execute("PRAGMA table_info(artifact_records);")
             }
             if "prompt" not in existing_columns:
                 connection.execute(
@@ -295,6 +295,7 @@ class SQLiteRepository:
                 );
                 """
             )
+
     def create_artifact_record(
         self,
         request_id: UUID,
@@ -367,9 +368,7 @@ class SQLiteRepository:
                 (str(request_id),),
             ).fetchone()
             if existing is None:
-                raise RuntimeError(
-                    f"Artifact record not found for request_id={request_id}."
-                )
+                raise RuntimeError(f"Artifact record not found for request_id={request_id}.")
             connection.execute(
                 """
                 UPDATE artifact_records
@@ -461,9 +460,7 @@ class SQLiteRepository:
                 (str(request_id),),
             ).fetchone()
             if existing is None:
-                raise RuntimeError(
-                    f"Artifact record not found for request_id={request_id}."
-                )
+                raise RuntimeError(f"Artifact record not found for request_id={request_id}.")
 
             connection.execute(
                 """
@@ -656,13 +653,9 @@ class SQLiteRepository:
             return None
         return {
             "fingerprint": str(row["fingerprint"]),
-            "key_version": ""
-            if row["key_version"] is None
-            else str(row["key_version"]),
+            "key_version": "" if row["key_version"] is None else str(row["key_version"]),
             "status": str(row["status"]),
-            "metadata_json": (
-                "" if row["metadata_json"] is None else str(row["metadata_json"])
-            ),
+            "metadata_json": ("" if row["metadata_json"] is None else str(row["metadata_json"])),
             "created_at": str(row["created_at"]),
             "updated_at": str(row["updated_at"]),
         }
@@ -732,12 +725,8 @@ class SQLiteRepository:
             {
                 "id": int(row["id"]),
                 "event_type": str(row["event_type"]),
-                "request_id": (
-                    None if row["request_id"] is None else str(row["request_id"])
-                ),
-                "artifact_id": (
-                    None if row["artifact_id"] is None else str(row["artifact_id"])
-                ),
+                "request_id": (None if row["request_id"] is None else str(row["request_id"])),
+                "artifact_id": (None if row["artifact_id"] is None else str(row["artifact_id"])),
                 "payload_json": str(row["payload_json"]),
                 "created_at": str(row["created_at"]),
             }

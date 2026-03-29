@@ -26,7 +26,7 @@ def empty_git_repo(tmp_path: Path) -> Path:
 @pytest.fixture
 def fake_ots_binary(tmp_path: Path) -> Path:
     """Fake OTS CLI. MUST parse sys.argv: stamp writes sys.argv[2]+'.ots'; upgrade overwrites sys.argv[2]."""
-    script_content = '''import sys
+    script_content = """import sys
 from pathlib import Path
 if len(sys.argv) < 3:
     sys.exit(1)
@@ -38,7 +38,7 @@ elif cmd == "upgrade":
     path.write_bytes(b"fake_ots_upgraded_dummy")
 else:
     sys.exit(1)
-'''
+"""
     if sys.platform == "win32":
         exe = tmp_path / "fake_ots.cmd"
         script = tmp_path / "fake_ots.py"

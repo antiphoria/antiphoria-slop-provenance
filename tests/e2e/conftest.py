@@ -63,22 +63,24 @@ def isolated_env(tmp_path: Path):
 
     artifact_db = state_dir / "artifacts.db"
     env = os.environ.copy()
-    env.update({
-        "LEDGER_REPO_PATH": str(ledger_dir),
-        "ORCHESTRATOR_STATE_DIR": str(state_dir),
-        "ARTIFACT_DB_PATH": str(artifact_db),
-        "GENERATOR_DUMMY_MODE": "true",
-        "ENABLE_OTS_FORGE": "false",
-        "ENABLE_C2PA": "false",
-        "TRANSPARENCY_LOG_PUBLISH_URL": "",
-        "RFC3161_TSA_URL": "",
-        "PQC_PRIVATE_KEY_PATH": str(priv_path) if priv_path.exists() else "",
-        "OQS_PUBLIC_KEY_PATH": str(pub_path) if pub_path.exists() else "",
-        "C2PA_PRIVATE_KEY_PATH": "",
-        "ED25519_PRIVATE_KEY_PATH": str(ed_priv_path),
-        "ED25519_PUBLIC_KEY_PATH": str(ed_pub_path),
-        "ANTIPHORIA_SLOP_PROVENANCE_RESEARCH_ACK": "1",
-    })
+    env.update(
+        {
+            "LEDGER_REPO_PATH": str(ledger_dir),
+            "ORCHESTRATOR_STATE_DIR": str(state_dir),
+            "ARTIFACT_DB_PATH": str(artifact_db),
+            "GENERATOR_DUMMY_MODE": "true",
+            "ENABLE_OTS_FORGE": "false",
+            "ENABLE_C2PA": "false",
+            "TRANSPARENCY_LOG_PUBLISH_URL": "",
+            "RFC3161_TSA_URL": "",
+            "PQC_PRIVATE_KEY_PATH": str(priv_path) if priv_path.exists() else "",
+            "OQS_PUBLIC_KEY_PATH": str(pub_path) if pub_path.exists() else "",
+            "C2PA_PRIVATE_KEY_PATH": "",
+            "ED25519_PRIVATE_KEY_PATH": str(ed_priv_path),
+            "ED25519_PUBLIC_KEY_PATH": str(ed_pub_path),
+            "ANTIPHORIA_SLOP_PROVENANCE_RESEARCH_ACK": "1",
+        }
+    )
     return env, ledger_dir, state_dir
 
 
@@ -95,9 +97,7 @@ def tsa_mock(httpserver):
     return httpserver.url_for("/")
 
 
-def run_cli(
-    args: list[str], env: dict, timeout: int = 15
-) -> subprocess.CompletedProcess:
+def run_cli(args: list[str], env: dict, timeout: int = 15) -> subprocess.CompletedProcess:
     """Run CLI via current Python. Guarantees exact source code under test."""
     return subprocess.run(
         [sys.executable, "-m", "src.cli"] + args,

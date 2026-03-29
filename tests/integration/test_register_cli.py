@@ -57,9 +57,7 @@ def _build_human_story_signed_event(
         signature=SignatureBlock(
             artifactHash=artifact_hash,
             cryptographicSignature="ZmFrZS1zaWduYXR1cmU=",
-            verificationAnchor=VerificationAnchor(
-                signerFingerprint="test-fingerprint"
-            ),
+            verificationAnchor=VerificationAnchor(signerFingerprint="test-fingerprint"),
         ),
     )
     return StorySigned(
@@ -115,7 +113,7 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
         markdown_text = bytes(blob.data).decode("utf-8")
 
         self.assertIn('source: "human"', markdown_text)
-        self.assertIn("modelId: \"human\"", markdown_text)
+        self.assertIn('modelId: "human"', markdown_text)
         self.assertIn("Human-authored. No AI generation.", markdown_text)
         self.assertIn("usageMetrics: null", markdown_text)
         self.assertIn("embeddedWatermark: null", markdown_text)
@@ -138,6 +136,7 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
             artifact_path = Path(f.name)
 
         try:
+
             async def _fake_on_story_human_registered(
                 self: object, event: StoryHumanRegistered
             ) -> None:
@@ -185,17 +184,20 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
             markdown_text = bytes(blob.data).decode("utf-8")
 
             self.assertIn('source: "human"', markdown_text)
-            self.assertIn("modelId: \"human\"", markdown_text)
+            self.assertIn('modelId: "human"', markdown_text)
             self.assertIn("My Human Story", markdown_text)
 
             # Attest passes (patch verifier to accept fake signature; skip remote anchor
             # since the test artifact is not published to Supabase)
-            with patch(
-                "src.adapters.crypto_notary.CryptoNotaryAdapter.verify_artifact_payload",
-                return_value=True,
-            ), patch(
-                "src.services.verification_service.VerificationService._verify_remote_anchor",
-                return_value=True,
+            with (
+                patch(
+                    "src.adapters.crypto_notary.CryptoNotaryAdapter.verify_artifact_payload",
+                    return_value=True,
+                ),
+                patch(
+                    "src.services.verification_service.VerificationService._verify_remote_anchor",
+                    return_value=True,
+                ),
             ):
                 attest_args = cli.build_parser().parse_args(
                     [
@@ -239,6 +241,7 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
 
         try:
             with patch("builtins.input") as mock_input:
+
                 async def _fake_on_story_human_registered(
                     self: object, event: StoryHumanRegistered
                 ) -> None:

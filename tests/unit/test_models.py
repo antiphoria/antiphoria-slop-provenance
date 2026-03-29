@@ -83,9 +83,7 @@ def test_author_attestation_validation_error(payload: dict, match: str) -> None:
 
 def test_author_attestation_rejects_excessive_attestations() -> None:
     """AuthorAttestation raises ValidationError for more than 64 attestations."""
-    attestations = [
-        {"question": f"Q{i}", "answer": "a"} for i in range(65)
-    ]
+    attestations = [{"question": f"Q{i}", "answer": "a"} for i in range(65)]
     with pytest.raises(ValidationError, match="64"):
         AuthorAttestation.model_validate(
             {"classification": "fiction", "attestations": attestations}

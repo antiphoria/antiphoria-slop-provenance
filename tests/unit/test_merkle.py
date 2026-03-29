@@ -135,9 +135,9 @@ def test_verify_merkle_proof_odd_sized_trees() -> None:
         root = build_merkle_root(hashes)
         for i in range(n):
             proof = build_merkle_proof(hashes, i)
-            assert verify_merkle_proof(
-                hashes[i], proof, root, i, tree_size=n
-            ), f"Failed for n={n} index={i}"
+            assert verify_merkle_proof(hashes[i], proof, root, i, tree_size=n), (
+                f"Failed for n={n} index={i}"
+            )
 
 
 try:

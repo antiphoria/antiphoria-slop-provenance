@@ -74,8 +74,9 @@ class CryptoNotaryC2PATest(unittest.IsolatedAsyncioTestCase):
         def _fake_sign_ed25519(_sk: bytes, _msg: bytes) -> bytes:
             return b"x" * 64  # Ed25519 sig length
 
-        with patch("src.adapters.crypto_notary._sign_ml_dsa", _fake_sign), patch(
-            "src.adapters.crypto_notary._sign_ed25519", _fake_sign_ed25519
+        with (
+            patch("src.adapters.crypto_notary._sign_ml_dsa", _fake_sign),
+            patch("src.adapters.crypto_notary._sign_ed25519", _fake_sign_ed25519),
         ):
             artifact, _ = await adapter._build_signed_artifact(
                 title="Human Story",
@@ -96,9 +97,7 @@ class CryptoNotaryC2PATest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIsNotNone(artifact.provenance.author_attestation)
-        self.assertEqual(
-            artifact.provenance.author_attestation.classification, "satire"
-        )
+        self.assertEqual(artifact.provenance.author_attestation.classification, "satire")
         self.assertEqual(
             len(artifact.provenance.author_attestation.attestations),
             4,

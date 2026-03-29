@@ -54,9 +54,7 @@ def read_env_required(env_key: str, env_path: Path | None = None) -> str:
 
     value = read_env_optional(env_key, env_path=env_path)
     if value is None:
-        raise RuntimeError(
-            f"Missing required environment variable '{env_key}'."
-        )
+        raise RuntimeError(f"Missing required environment variable '{env_key}'.")
     return value
 
 
@@ -75,9 +73,7 @@ def read_env_bool(
         return True
     if normalized in {"0", "false", "no", "off"}:
         return False
-    raise RuntimeError(
-        f"Environment variable '{env_key}' must be a boolean value."
-    )
+    raise RuntimeError(f"Environment variable '{env_key}' must be a boolean value.")
 
 
 def read_env_int(
@@ -93,9 +89,7 @@ def read_env_int(
     try:
         return int(value)
     except ValueError as exc:
-        raise RuntimeError(
-            f"Environment variable '{env_key}' must be an integer."
-        ) from exc
+        raise RuntimeError(f"Environment variable '{env_key}' must be an integer.") from exc
 
 
 def get_project_env_path() -> Path:
@@ -153,9 +147,7 @@ def resolve_state_db_path(
             return base / "dedup" / f"{service_name}.db"
         return base / "state.db"
     if project_root is not None and service_name:
-        return (
-            project_root / ".orchestrator-state" / "dedup" / f"{service_name}.db"
-        ).resolve()
+        return (project_root / ".orchestrator-state" / "dedup" / f"{service_name}.db").resolve()
     return None
 
 
@@ -169,16 +161,12 @@ def read_env_choice(
 
     normalized_allowed = {value.lower(): value for value in allowed_values}
     if default.lower() not in normalized_allowed:
-        raise RuntimeError(
-            f"Default '{default}' is not in allowed values for '{env_key}'."
-        )
+        raise RuntimeError(f"Default '{default}' is not in allowed values for '{env_key}'.")
     value = read_env_optional(env_key, env_path=env_path)
     if value is None:
         return normalized_allowed[default.lower()]
     normalized = value.strip().lower()
     if normalized not in normalized_allowed:
         allowed = ", ".join(allowed_values)
-        raise RuntimeError(
-            f"Environment variable '{env_key}' must be one of: {allowed}."
-        )
+        raise RuntimeError(f"Environment variable '{env_key}' must be one of: {allowed}.")
     return normalized_allowed[normalized]
