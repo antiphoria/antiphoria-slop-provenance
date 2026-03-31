@@ -67,23 +67,23 @@ def build_merkle_root(entry_hashes: list[str]) -> str:
 def build_merkle_proof(entry_hashes: list[str], leaf_index: int) -> list[str]:
     """Build Merkle inclusion proof for leaf at index.
 
-    Returns list of sibling hashes from leaf level up to (but not including) root.
+    Returns list of sibling hashes from leaf level up to
+    (but not including) root.
     Verification requires leaf_index to reconstruct the path.
     """
     if not entry_hashes:
         raise ValueError("entry_hashes cannot be empty")
     if leaf_index < 0 or leaf_index >= len(entry_hashes):
-        raise ValueError(f"leaf_index {leaf_index} out of range [0, {len(entry_hashes)})")
+        raise ValueError(
+            f"leaf_index {leaf_index} out of range [0, {len(entry_hashes)})"
+        )
     proof: list[str] = []
     current = [_hash_leaf(bytes.fromhex(h)) for h in entry_hashes]
     index = leaf_index
     while len(current) > 1:
         sibling_index = index ^ 1
-        promoted = sibling_index >= len(current)
-        if not promoted:
+        if sibling_index < len(current):
             proof.append(current[sibling_index].hex())
-        else:
-            proof.append(_subtree_root(current[:index]).hex())
         next_level: list[bytes] = []
         for i in range(0, len(current), 2):
             left = current[i]
@@ -94,8 +94,6 @@ def build_merkle_proof(entry_hashes: list[str], leaf_index: int) -> list[str]:
                 next_level.append(left)
         current = next_level
         index = index // 2
-        if promoted and len(current) == 2:
-            break
     return proof
 
 
@@ -122,20 +120,38 @@ def verify_merkle_proof(
     root_lower = root.lower()
     current = _hash_leaf(bytes.fromhex(leaf_hash))
     index = leaf_index
-    size = tree_size
-    for sibling_hex in proof:
-        sibling = bytes.fromhex(sibling_hex)
-        if size is not None and size % 2 == 1 and index == size - 1:
-            on_right = True
-        else:
+    if tree_size is None:
+        for sibling_hex in proof:
+            sibling = bytes.fromhex(sibling_hex)
             on_right = index % 2 == 1
-        if on_right:
-            current = _hash_internal(sibling, current)
-        else:
-            current = _hash_internal(current, sibling)
-        if current.hex() == root_lower:
-            return True
+            if on_right:
+                current = _hash_internal(sibling, current)
+            else:
+                current = _hash_internal(current, sibling)
+            index = index // 2
+        return current.hex() == root_lower
+
+    if tree_size <= 0 or leaf_index < 0 or leaf_index >= tree_size:
+        return False
+
+    size = tree_size
+    proof_index = 0
+    while size > 1:
+        is_right = index % 2 == 1
+        sibling_index = index - 1 if is_right else index + 1
+        has_sibling = 0 <= sibling_index < size
+        if has_sibling:
+            if proof_index >= len(proof):
+                return False
+            sibling = bytes.fromhex(proof[proof_index])
+            proof_index += 1
+            if is_right:
+                current = _hash_internal(sibling, current)
+            else:
+                current = _hash_internal(current, sibling)
         index = index // 2
-        if size is not None:
-            size = (size + 1) // 2
+        size = (size + 1) // 2
+
+    if proof_index != len(proof):
+        return False
     return current.hex() == root_lower

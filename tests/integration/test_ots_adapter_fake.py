@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import subprocess
 
 import pytest
 
@@ -27,4 +28,25 @@ def test_upgrade_ots_proof_with_fake_binary(fake_ots_binary) -> None:
     )
     assert upgraded is True
     assert final_bytes == b"fake_ots_upgraded_dummy"
+    assert block_height is None
+
+
+def test_verify_ots_proof_rejects_invalid_output(monkeypatch) -> None:
+    adapter = OTSAdapter(ots_bin="fake-ots")
+
+    def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = (args, kwargs)
+        return subprocess.CompletedProcess(
+            args=["ots", "verify"],
+            returncode=0,
+            stdout="invalid proof",
+            stderr="",
+        )
+
+    monkeypatch.setattr("src.adapters.ots_adapter.subprocess.run", fake_run)
+    ok, block_height = adapter.verify_ots_proof(
+        payload_bytes=b"payload",
+        ots_bytes=b"proof",
+    )
+    assert ok is False
     assert block_height is None

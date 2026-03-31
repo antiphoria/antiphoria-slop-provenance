@@ -10,7 +10,9 @@ from unittest.mock import MagicMock, patch
 
 from src.adapters.transparency_log import (
     TransparencyLogAdapter,
+    _sanitize_for_log,
     build_supabase_publish_config,
+    update_merkle_anchor_block_height,
 )
 
 
@@ -227,8 +229,8 @@ class FetchRemoteEntriesTest(unittest.TestCase):
             result = adapter.fetch_remote_entries_by_artifact_hash("d" * 64)
         self.assertEqual(result, [])
 
-    def test_returns_none_on_transient_http_5xx(self) -> None:
-        """HTTP 502/503/504 return None (transient) for attestation skip."""
+    def test_raises_on_transient_http_5xx(self) -> None:
+        """Transient HTTP errors raise (fail-closed) when remote is configured."""
         import urllib.error
 
         def fake_urlopen(request: object, timeout: float = 10.0) -> object:
@@ -241,11 +243,12 @@ class FetchRemoteEntriesTest(unittest.TestCase):
         )
 
         with patch("urllib.request.urlopen", fake_urlopen):
-            result = adapter.fetch_remote_entries_by_artifact_hash("c" * 64)
-        self.assertIsNone(result)
+            with self.assertRaises(RuntimeError) as ctx:
+                adapter.fetch_remote_entries_by_artifact_hash("c" * 64)
+        self.assertIn("Remote transparency log fetch failed", str(ctx.exception))
 
-    def test_returns_none_on_urlerror(self) -> None:
-        """URLError (timeout, connection refused) returns None for attestation skip."""
+    def test_raises_on_urlerror(self) -> None:
+        """URLError now raises (fail-closed) when remote is configured."""
         import urllib.error
 
         def fake_urlopen(request: object, timeout: float = 10.0) -> object:
@@ -257,8 +260,9 @@ class FetchRemoteEntriesTest(unittest.TestCase):
             publish_headers={"apikey": "x", "Authorization": "Bearer x"},
         )
         with patch("urllib.request.urlopen", fake_urlopen):
-            result = adapter.fetch_remote_entries_by_artifact_hash("e" * 64)
-        self.assertIsNone(result)
+            with self.assertRaises(RuntimeError) as ctx:
+                adapter.fetch_remote_entries_by_artifact_hash("e" * 64)
+        self.assertIn("Remote transparency log fetch failed", str(ctx.exception))
 
     def test_raises_on_non_transient_http_error(self) -> None:
         """HTTP 4xx raises RuntimeError (non-transient)."""
@@ -452,3 +456,53 @@ class RepublishEntryIfMissingTest(unittest.TestCase):
         published, msg = adapter.republish_entry_if_missing(serializable)
         self.assertFalse(published)
         self.assertIn("not configured", msg)
+
+
+class TransparencyLogSanitizerTest(unittest.TestCase):
+    """Validate secret redaction helper for log safety."""
+
+    def test_sanitizes_bearer_token_value(self) -> None:
+        redacted = _sanitize_for_log("Authorization: Bearer sk-secret-token")
+        self.assertNotIn("sk-secret-token", redacted)
+        self.assertNotIn("Bearer sk-secret-token", redacted)
+        self.assertIn("***", redacted)
+
+
+class MerkleAnchorPatchUrlEncodingTest(unittest.TestCase):
+    """Validate row_id is URL-encoded in PATCH filter."""
+
+    def test_patch_url_encodes_row_id(self) -> None:
+        captured_requests: list[object] = []
+
+        def fake_urlopen(request: object, timeout: float = 10.0) -> object:
+            _ = timeout
+            captured_requests.append(request)
+            if getattr(request, "method", "GET") == "GET":
+                body = json.dumps(
+                    [
+                        {
+                            "id": "1&payload->>entryHash=eq.tampered",
+                            "payload": {
+                                "rootHash": "abc",
+                                "entryCount": 1,
+                                "anchoredAt": "2024-01-01T00:00:00Z",
+                            },
+                        }
+                    ]
+                ).encode("utf-8")
+                return _make_response(body)
+            return _make_response(b"{}")
+
+        with patch("urllib.request.urlopen", fake_urlopen):
+            ok = update_merkle_anchor_block_height(
+                root_hash="abc",
+                bitcoin_block_height=123,
+                publish_url="https://test.supabase.co/rest/v1/merkle_anchors",
+                publish_headers={"apikey": "k", "Authorization": "Bearer k"},
+            )
+        self.assertTrue(ok)
+        self.assertGreaterEqual(len(captured_requests), 2)
+        patch_request = captured_requests[1]
+        patch_url = patch_request.full_url
+        self.assertIn("id=eq.1%26payload-%3E%3EentryHash%3Deq.tampered", patch_url)
+        self.assertNotIn("&payload->>entryHash=eq.tampered", patch_url)

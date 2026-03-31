@@ -134,6 +134,15 @@ class RFC3161TSAAdapterTest(unittest.TestCase):
 
             self.assertEqual(env.get("OPENSSL_CONF"), str(openssl_conf))
 
+    def test_md5_digest_algorithm_is_rejected(self) -> None:
+        adapter = RFC3161TSAAdapter(tsa_url="https://example.invalid/tsr")
+        with self.assertRaises(ValueError):
+            adapter._build_query_file(
+                output_path=Path("dummy.tsq"),
+                digest_hex="a" * 32,
+                digest_algorithm="md5",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

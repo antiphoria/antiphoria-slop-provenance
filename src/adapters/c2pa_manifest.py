@@ -151,7 +151,7 @@ class SdkC2PAManifestProvider:
             asset_format=_SDK_CARRIER_FORMAT,
         )
         try:
-            builder = c2pa.Builder.from_json(manifest_definition)
+            builder = c2pa.Builder.from_json(json.dumps(manifest_definition, sort_keys=True))
             try:
                 builder.set_no_embed()
                 signer = self._build_signer(c2pa)

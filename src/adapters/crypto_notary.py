@@ -430,6 +430,8 @@ class CryptoNotaryAdapter:
 
         if self._private_key is None:
             raise RuntimeError("Private key is required for signing operations.")
+        if self._ed25519_private_key is None:
+            raise RuntimeError("Ed25519 private key is required for signing operations.")
         payload_hash = compute_payload_hash(body)
         unsigned_envelope = Artifact(
             title=title,
@@ -554,6 +556,8 @@ class CryptoNotaryAdapter:
 
         if envelope.signature is None:
             raise RuntimeError("Artifact envelope is missing signature block.")
+        if envelope.signature.crypto_algorithm != CRYPTO_ALGORITHM_ML_DSA_44:
+            return False
         payload_hash = compute_payload_hash(payload)
         if allow_redacted:
             payload_hash = envelope.signature.artifact_hash
@@ -581,6 +585,8 @@ class CryptoNotaryAdapter:
         if not is_valid:
             return False
         if envelope.hybrid_signature is not None:
+            if envelope.hybrid_signature.crypto_algorithm != CRYPTO_ALGORITHM_ED25519:
+                return False
             ed25519_pub = self._resolve_ed25519_public_key_for_verification(
                 envelope.hybrid_signature
             )
@@ -608,14 +614,17 @@ class CryptoNotaryAdapter:
     ) -> bool:
         """Verify one ML-DSA signature over a canonical signing-hash string."""
 
-        with oqs.Signature(_ML_DSA_ALGORITHM) as verifier:
-            return bool(
-                verifier.verify(
-                    signing_hash.encode("utf-8"),
-                    signature_bytes,
-                    public_key,
+        try:
+            with oqs.Signature(_ML_DSA_ALGORITHM) as verifier:
+                return bool(
+                    verifier.verify(
+                        signing_hash.encode("utf-8"),
+                        signature_bytes,
+                        public_key,
+                    )
                 )
-            )
+        except Exception:  # noqa: BLE001
+            return False
 
     def _resolve_ed25519_public_key_for_verification(
         self,
@@ -624,9 +633,11 @@ class CryptoNotaryAdapter:
         """Resolve Ed25519 public key for hybrid signature verification."""
 
         fingerprint = hybrid_sig.verification_anchor.signer_fingerprint
-        sanitized = fingerprint.replace(":", "_").replace("-", "_")
-        env_key = f"ED25519_PUBLIC_KEY_{sanitized}"
-        path_value = read_env_optional(env_key, env_path=self._env_path)
+        path_value: str | None = None
+        if fingerprint:
+            sanitized = fingerprint.replace(":", "_").replace("-", "_")
+            env_key = f"ED25519_PUBLIC_KEY_{sanitized}"
+            path_value = read_env_optional(env_key, env_path=self._env_path)
         if not path_value:
             path_value = read_env_required(
                 _ED25519_PUBLIC_KEY_ENV,

@@ -13,6 +13,12 @@ from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pygit2
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+)
 
 from src import cli
 from src.adapters.git_ledger import GitLedgerAdapter
@@ -78,8 +84,25 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
         self._state_db_path = Path(self._state_temp.name) / "state.db"
         self._old_state_db_path = os.getenv("STATE_DB_PATH")
         self._old_enable_ots = os.getenv("ENABLE_OTS_FORGE")
+        self._old_pqc_private_key_path = os.getenv("PQC_PRIVATE_KEY_PATH")
+        self._old_ed25519_private_key_path = os.getenv("ED25519_PRIVATE_KEY_PATH")
+        self._key_temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        key_dir = Path(self._key_temp.name)
+        pqc_private_key_path = key_dir / "pqc-private.key"
+        pqc_private_key_path.write_bytes(b"test-private-key-bytes")
+        ed25519_private_key = Ed25519PrivateKey.generate()
+        ed25519_private_key_path = key_dir / "ed25519-private.pem"
+        ed25519_private_key_path.write_bytes(
+            ed25519_private_key.private_bytes(
+                encoding=Encoding.PEM,
+                format=PrivateFormat.PKCS8,
+                encryption_algorithm=NoEncryption(),
+            )
+        )
         os.environ["STATE_DB_PATH"] = str(self._state_db_path)
         os.environ["ENABLE_OTS_FORGE"] = "false"
+        os.environ["PQC_PRIVATE_KEY_PATH"] = str(pqc_private_key_path)
+        os.environ["ED25519_PRIVATE_KEY_PATH"] = str(ed25519_private_key_path)
 
     def tearDown(self) -> None:
         if self._old_state_db_path is None:
@@ -90,7 +113,16 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
             os.environ.pop("ENABLE_OTS_FORGE", None)
         else:
             os.environ["ENABLE_OTS_FORGE"] = self._old_enable_ots
+        if self._old_pqc_private_key_path is None:
+            os.environ.pop("PQC_PRIVATE_KEY_PATH", None)
+        else:
+            os.environ["PQC_PRIVATE_KEY_PATH"] = self._old_pqc_private_key_path
+        if self._old_ed25519_private_key_path is None:
+            os.environ.pop("ED25519_PRIVATE_KEY_PATH", None)
+        else:
+            os.environ["ED25519_PRIVATE_KEY_PATH"] = self._old_ed25519_private_key_path
         self._state_temp.cleanup()
+        self._key_temp.cleanup()
         self._repo_temp.cleanup()
 
     async def test_human_provenance_ledger_render_and_parse(self) -> None:

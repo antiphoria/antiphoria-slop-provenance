@@ -74,6 +74,8 @@ class _FakeC2paModule:
 
         @classmethod
         def from_json(cls, manifest_json: object) -> "_FakeC2paModule.Builder":
+            if not isinstance(manifest_json, str):
+                raise TypeError("from_json expects JSON string")
             return cls(manifest_json)
 
         def set_no_embed(self) -> None:
@@ -245,8 +247,9 @@ class C2PAManifestTest(unittest.TestCase):
             _FakeC2paModule.last_payload,
             payload_bytes,
         )
-        self.assertIsInstance(_FakeC2paModule.last_manifest_json, dict)
-        assertions = _FakeC2paModule.last_manifest_json["assertions"]
+        self.assertIsInstance(_FakeC2paModule.last_manifest_json, str)
+        manifest_json_obj = json.loads(_FakeC2paModule.last_manifest_json)
+        assertions = manifest_json_obj["assertions"]
         markdown_assertion = next(
             assertion
             for assertion in assertions

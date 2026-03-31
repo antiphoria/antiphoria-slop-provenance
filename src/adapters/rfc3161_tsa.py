@@ -10,7 +10,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-_ALLOWED_DIGEST_ALGORITHMS = frozenset(("sha256", "sha384", "sha512", "md5"))
+_ALLOWED_DIGEST_ALGORITHMS = frozenset(("sha256", "sha384", "sha512"))
 
 
 @dataclass(frozen=True)

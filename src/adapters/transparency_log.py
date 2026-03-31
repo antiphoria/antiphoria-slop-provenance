@@ -27,10 +27,11 @@ def _sanitize_for_log(raw: str, max_len: int = 200) -> str:
     """Truncate and redact secret-like substrings before logging."""
     if not raw:
         return raw
+    out = re.sub(r"Bearer\s+[^\s]+", "Bearer ***", raw, flags=re.IGNORECASE)
     out = re.sub(
-        r"(Bearer|apikey|Authorization)[=:\s]+[^\s]+",
+        r"(apikey|Authorization)[=:\s]+[^\s]+",
         r"\1=***",
-        raw,
+        out,
         flags=re.IGNORECASE,
     )
     return out[:max_len] + "..." if len(out) > max_len else out
@@ -194,7 +195,8 @@ def update_merkle_anchor_block_height(
     if row_id is None:
         return False
     payload = {**payload, "bitcoinBlockHeight": bitcoin_block_height}
-    patch_url = f"{publish_url.rstrip('/')}?id=eq.{row_id}"
+    patch_query = urllib.parse.urlencode([("id", f"eq.{row_id}")])
+    patch_url = f"{publish_url.rstrip('/')}?{patch_query}"
     body = {"payload": payload}
     headers = {
         "Content-Type": "application/json",
@@ -617,26 +619,20 @@ class TransparencyLogAdapter:
                     return []
                 data = json.loads(raw)
                 if not isinstance(data, list):
-                    return []
+                    raise RuntimeError(
+                        "Remote transparency log fetch returned unexpected non-list JSON body."
+                    )
                 return [row for row in data if isinstance(row, dict)]
         except urllib.error.HTTPError as exc:
-            if exc.code in (500, 502, 503, 504):
-                _logger.warning(
-                    "Remote transparency log fetch failed (HTTP %s) for artifact_hash=%s",
-                    exc.code,
-                    artifact_hash,
-                )
-                return None
             raise RuntimeError(
-                f"Remote transparency log fetch failed for artifact_hash={artifact_hash}: {exc}"
+                "Remote transparency log fetch failed for "
+                f"artifact_hash={artifact_hash} with HTTP {exc.code}"
             ) from exc
         except (urllib.error.URLError, socket.timeout, OSError) as exc:
-            _logger.warning(
-                "Remote transparency log fetch failed (transient) for artifact_hash=%s: %s",
-                artifact_hash,
-                _sanitize_for_log(str(exc)),
-            )
-            return None
+            raise RuntimeError(
+                "Remote transparency log fetch failed for "
+                f"artifact_hash={artifact_hash}: {_sanitize_for_log(str(exc))}"
+            ) from exc
         except json.JSONDecodeError as exc:
             raise RuntimeError(
                 f"Remote transparency log fetch failed for artifact_hash={artifact_hash}: {exc}"

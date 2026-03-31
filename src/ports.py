@@ -6,10 +6,40 @@ from pathlib import Path
 from typing import Protocol
 from uuid import UUID
 
-from src.adapters.rfc3161_tsa import TimestampVerification
 from src.models import Artifact
-from src.services.provenance_service import AnchorOutcome, TimestampOutcome
-from src.services.verification_service import AuditReport
+
+
+class TimestampVerificationPort(Protocol):
+    """Minimal timestamp verification result contract."""
+
+    ok: bool
+    message: str
+
+
+class AnchorOutcomePort(Protocol):
+    """Minimal anchor outcome contract for provenance workflows."""
+
+    artifact_id: str
+    artifact_hash: str
+    entry_id: str
+    entry_hash: str
+    log_path: str
+
+
+class TimestampOutcomePort(Protocol):
+    """Minimal timestamp outcome contract for provenance workflows."""
+
+    created_at: str
+    tsa_url: str
+    digest_algorithm: str
+    verification: TimestampVerificationPort
+
+
+class AuditReportPort(Protocol):
+    """Minimal verification report contract for audit workflows."""
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize report payload to JSON-friendly dict."""
 
 
 class RepositoryPort(Protocol):
@@ -61,7 +91,7 @@ class RepositoryPort(Protocol):
         artifact_hash: str,
         tsa_adapter: object,
         tsa_ca_cert_path: Path | None,
-    ) -> TimestampVerification:
+    ) -> TimestampVerificationPort:
         """Verify latest timestamp record for one artifact hash."""
 
 
@@ -79,7 +109,7 @@ class ProvenanceServicePort(Protocol):
         self,
         artifact_path: Path,
         request_id: UUID | None,
-    ) -> AnchorOutcome:
+    ) -> AnchorOutcomePort:
         """Anchor one artifact in transparency log."""
 
     def anchor_committed_artifact(
@@ -88,7 +118,7 @@ class ProvenanceServicePort(Protocol):
         commit_oid: str,
         ledger_path: str,
         request_id: UUID,
-    ) -> AnchorOutcome:
+    ) -> AnchorOutcomePort:
         """Anchor one committed artifact directly from git objects."""
 
     def timestamp_artifact(
@@ -97,7 +127,7 @@ class ProvenanceServicePort(Protocol):
         request_id: UUID | None,
         tsa_ca_cert_path: Path | None,
         digest_algorithm: str = "sha256",
-    ) -> TimestampOutcome:
+    ) -> TimestampOutcomePort:
         """Request and verify RFC3161 timestamp for one artifact."""
 
     def timestamp_committed_artifact(
@@ -108,7 +138,7 @@ class ProvenanceServicePort(Protocol):
         request_id: UUID | None,
         tsa_ca_cert_path: Path | None,
         digest_algorithm: str = "sha256",
-    ) -> TimestampOutcome:
+    ) -> TimestampOutcomePort:
         """Request/verify timestamp for one committed artifact."""
 
 
@@ -119,5 +149,5 @@ class VerificationServicePort(Protocol):
         self,
         artifact_path: Path,
         tsa_ca_cert_path: Path | None,
-    ) -> AuditReport:
+    ) -> AuditReportPort:
         """Generate one full-chain audit report."""

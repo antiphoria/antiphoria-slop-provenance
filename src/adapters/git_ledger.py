@@ -332,16 +332,17 @@ class GitLedgerAdapter:
             current: pygit2.Tree | None = parent_tree
             for part in parts:
                 if current is None or part not in current:
+                    current = None
                     break
                 entry = current[part]
-                if not entry:
-                    break
                 obj = repo[entry.id]
                 if isinstance(obj, pygit2.Tree):
                     current = obj
-                    artifacts_parent_oid = obj.id
                 else:
+                    current = None
                     break
+            if current is not None:
+                artifacts_parent_oid = current.id
         artifacts_tb = (
             repo.TreeBuilder(artifacts_parent_oid)
             if artifacts_parent_oid is not None
@@ -351,7 +352,7 @@ class GitLedgerAdapter:
         if c2pa_sidecar_payload is not None:
             sidecar_blob_oid = repo.create_blob(c2pa_sidecar_payload)
             sidecar_name = f"{path_obj.stem}.c2pa"
-        artifacts_tb.insert(sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB)
+            artifacts_tb.insert(sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB)
         artifacts_oid = artifacts_tb.write()
 
         # Git trees are single-level; insert expects one path component.

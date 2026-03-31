@@ -33,12 +33,11 @@ from src.adapters.gemini_engine import GeminiEngineAdapter
 from src.adapters.git_ledger import GitLedgerAdapter
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.provenance_telemetry import ProvenanceTelemetryAdapter
-from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
 from src.adapters.transparency_log import (
     TransparencyLogAdapter,
     build_supabase_publish_config,
 )
-from src.adapters.ots_adapter import OTSAdapter, build_ots_adapter, resolve_ots_binary
+from src.adapters.ots_adapter import build_ots_adapter
 from src.env_config import (
     get_project_env_path,
     read_env_bool,
@@ -76,6 +75,16 @@ from src.logging_config import (
     bind_log_context,
     clear_log_context,
     should_log_route,
+)
+from src.runtime.cli_composition import (
+    build_provenance_services as _compose_provenance_services,
+    build_repository as _compose_repository,
+    resolve_tsa_ca_cert_path as _compose_tsa_ca_cert_path,
+)
+from src.runtime.cli_routing import (
+    AsyncCommandHandler,
+    SyncCommandHandler,
+    dispatch_command,
 )
 from src.runtime.service_runtime import configure_logging
 from src.research_use_ack import (
@@ -654,17 +663,7 @@ def _validate_external_repo_path(repository_path: Path) -> None:
 
 def _build_repository() -> SQLiteRepository:
     """Build SQLite repository for shared artifact lifecycle (cache)."""
-
-    env_path = get_project_env_path()
-    project_root = env_path.parent
-    artifact_db_path = resolve_artifact_db_path(
-        env_path=env_path,
-        project_root=project_root,
-    )
-    if artifact_db_path is None:
-        artifact_db_path = (project_root / ".orchestrator-state" / "artifacts.db").resolve()
-    artifact_db_path.parent.mkdir(parents=True, exist_ok=True)
-    return SQLiteRepository(db_path=artifact_db_path)
+    return _compose_repository(env_path=get_project_env_path())
 
 
 def _build_provenance_services(
@@ -673,64 +672,12 @@ def _build_provenance_services(
     tsa_url_override: str | None = None,
 ) -> tuple[ProvenanceService, VerificationService]:
     """Build provenance + verification services."""
-
-    transparency_log_path = repository_path / ".provenance" / "transparency-log.jsonl"
-    env_path = Path(__file__).resolve().parents[1] / ".env"
-    publish_url = _read_env_optional("TRANSPARENCY_LOG_PUBLISH_URL", env_path=env_path)
-    publish_headers, publish_supabase_format = build_supabase_publish_config(
-        publish_url, env_path=env_path
-    )
-    transparency_log_adapter = TransparencyLogAdapter(
-        log_path=transparency_log_path,
-        publish_url=publish_url,
-        publish_headers=publish_headers if publish_headers else None,
-        publish_supabase_format=publish_supabase_format,
-    )
-    tsa_url = tsa_url_override or _read_env_optional("RFC3161_TSA_URL", env_path=env_path)
-    if tsa_url is not None and not tsa_url.strip():
-        tsa_url = None
-    tsa_untrusted_path = _read_env_optional("RFC3161_TSA_UNTRUSTED_CERT_PATH", env_path=env_path)
-    openssl_bin = _read_env_optional("OPENSSL_BIN", env_path=env_path) or "openssl"
-    openssl_conf = _read_env_optional("OPENSSL_CONF", env_path=env_path)
-    tsa_adapter = (
-        None
-        if tsa_url is None
-        else RFC3161TSAAdapter(
-            tsa_url=tsa_url,
-            openssl_bin=openssl_bin,
-            untrusted_cert_path=(
-                None if tsa_untrusted_path is None else Path(tsa_untrusted_path).resolve()
-            ),
-            openssl_conf_path=(None if openssl_conf is None else Path(openssl_conf).resolve()),
-        )
-    )
-    key_registry = KeyRegistryAdapter(repository=repository)
-    ots_adapter = None
-    if _read_env_bool("ENABLE_OTS_FORGE", default=False, env_path=env_path):
-        ots_bin = resolve_ots_binary(env_path=env_path)
-        ots_adapter = OTSAdapter(ots_bin=ots_bin)
-    provenance_service = ProvenanceService(
+    return _compose_provenance_services(
         repository=repository,
-        transparency_log_adapter=transparency_log_adapter,
-        tsa_adapter=tsa_adapter,
-        key_registry=key_registry,
-        ots_adapter=ots_adapter,
-        env_path=env_path,
+        repository_path=repository_path,
+        tsa_url_override=tsa_url_override,
+        env_path=get_project_env_path(),
     )
-    verification_service = VerificationService(
-        repository=repository,
-        transparency_log_adapter=transparency_log_adapter,
-        tsa_adapter=tsa_adapter,
-        key_registry=key_registry,
-        artifact_verifier=CryptoNotaryAdapter(
-            event_bus=EventBus(),
-            env_path=env_path,
-            require_private_key=False,
-        ),
-        ots_adapter=ots_adapter,
-        env_path=env_path,
-    )
-    return provenance_service, verification_service
 
 
 def _resolve_tsa_ca_cert_path(
@@ -738,12 +685,7 @@ def _resolve_tsa_ca_cert_path(
     env_path: Path | None = None,
 ) -> Path | None:
     """Resolve optional TSA CA cert path from arg or env."""
-
-    resolved_env = env_path or get_project_env_path()
-    raw_path = explicit_path or _read_env_optional("RFC3161_CA_CERT_PATH", env_path=resolved_env)
-    if raw_path is None:
-        return None
-    return Path(raw_path).resolve()
+    return _compose_tsa_ca_cert_path(explicit_path=explicit_path, env_path=env_path)
 
 
 def _print_attest_next_step(repository_path: Path, request_id: UUID) -> None:
@@ -2362,6 +2304,39 @@ def _run_admin_revoke_key_command(args: argparse.Namespace) -> int:
     return 0
 
 
+_ASYNC_COMMAND_HANDLERS: dict[str, AsyncCommandHandler] = {
+    "generate": _run_generate_command,
+    "curate": _run_curate_command,
+    "register": _run_register_command,
+    "verify": _run_verify_command,
+    "anchor": _run_anchor_command,
+    "timestamp": _run_timestamp_command,
+    "audit": _run_audit_command,
+    "attest": _run_attest_command,
+    "upgrade": _run_upgrade_command,
+    "process-pending": _run_process_pending_command,
+    "events": _run_events_command,
+}
+
+_SYNC_COMMAND_HANDLERS: dict[str, SyncCommandHandler] = {
+    "redact": _run_redact_command,
+    "forge-status": _run_forge_status_command,
+    "recover-failed": _run_recover_failed_command,
+    "anchor-merkle-root": _run_anchor_merkle_root_command,
+    "upgrade-merkle-ots": _run_upgrade_merkle_ots_command,
+    "sync-transparency-log": _run_sync_transparency_log_command,
+    "verify-transparency-log": _run_verify_transparency_log_command,
+    "verify-hash": _run_verify_hash_command,
+    "verify-inclusion": _run_verify_inclusion_command,
+    "build-inclusion-proof": _run_build_inclusion_proof_command,
+    "webauthn-register": _run_webauthn_register_command,
+}
+
+_ADMIN_COMMAND_HANDLERS: dict[str, SyncCommandHandler] = {
+    "revoke-key": _run_admin_revoke_key_command,
+}
+
+
 async def _dispatch(args: argparse.Namespace) -> int:
     """Dispatch parsed CLI args to command handlers."""
 
@@ -2374,56 +2349,12 @@ async def _dispatch(args: argparse.Namespace) -> int:
 
 async def _dispatch_impl(args: argparse.Namespace) -> int:
     """Inner dispatch without context management."""
-
-    if args.command == "generate":
-        return await _run_generate_command(args)
-    if args.command == "curate":
-        return await _run_curate_command(args)
-    if args.command == "register":
-        return await _run_register_command(args)
-    if args.command == "verify":
-        return await _run_verify_command(args)
-    if args.command == "redact":
-        return _run_redact_command(args)
-    if args.command == "anchor":
-        return await _run_anchor_command(args)
-    if args.command == "timestamp":
-        return await _run_timestamp_command(args)
-    if args.command == "audit":
-        return await _run_audit_command(args)
-    if args.command == "attest":
-        return await _run_attest_command(args)
-    if args.command == "forge-status":
-        return _run_forge_status_command(args)
-    if args.command == "upgrade":
-        return await _run_upgrade_command(args)
-    if args.command == "process-pending":
-        return await _run_process_pending_command(args)
-    if args.command == "recover-failed":
-        return _run_recover_failed_command(args)
-    if args.command == "anchor-merkle-root":
-        return _run_anchor_merkle_root_command(args)
-    if args.command == "upgrade-merkle-ots":
-        return _run_upgrade_merkle_ots_command(args)
-    if args.command == "sync-transparency-log":
-        return _run_sync_transparency_log_command(args)
-    if args.command == "verify-transparency-log":
-        return _run_verify_transparency_log_command(args)
-    if args.command == "verify-hash":
-        return _run_verify_hash_command(args)
-    if args.command == "verify-inclusion":
-        return _run_verify_inclusion_command(args)
-    if args.command == "build-inclusion-proof":
-        return _run_build_inclusion_proof_command(args)
-    if args.command == "webauthn-register":
-        return _run_webauthn_register_command(args)
-    if args.command == "events":
-        return await _run_events_command(args)
-    if args.command == "admin":
-        if args.admin_command == "revoke-key":
-            return _run_admin_revoke_key_command(args)
-        raise RuntimeError(f"Unsupported admin command: {args.admin_command}")
-    raise RuntimeError(f"Unsupported command: {args.command}")
+    return await dispatch_command(
+        args=args,
+        async_handlers=_ASYNC_COMMAND_HANDLERS,
+        sync_handlers=_SYNC_COMMAND_HANDLERS,
+        admin_handlers=_ADMIN_COMMAND_HANDLERS,
+    )
 
 
 def main() -> int:

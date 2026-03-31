@@ -18,6 +18,14 @@ from uuid import UUID, uuid4
 
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter, TimestampVerification
 from src.models import Artifact
+from src.repositories import (
+    ArtifactLifecycleRepository,
+    AuditRepository,
+    KeyRegistryRepository,
+    ProvenanceEventRepository,
+    TimestampRepository,
+    TransparencyLogRepository,
+)
 
 
 class DedupRepository:
@@ -169,7 +177,16 @@ class ArtifactRecord:
 
 
 class SQLiteRepository:
-    """Synchronous SQLite repository for artifact lifecycle CRUD."""
+    """Synchronous SQLite repository compatibility facade.
+
+    The legacy API remains intact while bounded-context facades are exposed on:
+    - ``artifact_lifecycle``
+    - ``transparency``
+    - ``timestamps``
+    - ``keys``
+    - ``audit``
+    - ``events``
+    """
 
     def __init__(self, db_path: Path | None = None) -> None:
         """Initialize repository and ensure schema exists.
@@ -180,6 +197,12 @@ class SQLiteRepository:
 
         self._db_path = db_path or Path("state.db")
         self._initialize_schema()
+        self.artifact_lifecycle = ArtifactLifecycleRepository(self)
+        self.transparency = TransparencyLogRepository(self)
+        self.timestamps = TimestampRepository(self)
+        self.keys = KeyRegistryRepository(self)
+        self.audit = AuditRepository(self)
+        self.events = ProvenanceEventRepository(self)
 
     def _connect(self) -> sqlite3.Connection:
         """Create a configured SQLite connection."""
@@ -623,12 +646,16 @@ class SQLiteRepository:
                 (fingerprint, key_version, status, metadata_json, now, now),
             )
 
-    def update_key_registry_status(self, fingerprint: str, status: str) -> None:
-        """Update lifecycle status for one key fingerprint."""
+    def update_key_registry_status(self, fingerprint: str, status: str) -> int:
+        """Update lifecycle status for one key fingerprint.
+
+        Returns:
+            Number of affected rows.
+        """
 
         now = _utc_now_iso()
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 UPDATE key_registry
                 SET status = ?, updated_at = ?
@@ -636,6 +663,7 @@ class SQLiteRepository:
                 """,
                 (status, now, fingerprint),
             )
+            return int(cursor.rowcount)
 
     def get_key_registry_entry(self, fingerprint: str) -> dict[str, str] | None:
         """Get key registry entry by signer fingerprint."""

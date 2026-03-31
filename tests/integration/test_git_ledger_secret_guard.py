@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pygit2
 
@@ -29,6 +29,7 @@ def _build_story_signed_event(
     body: str = "Safe body text.",
     c2pa_manifest_bytes_b64: str | None = None,
     c2pa_manifest_hash: str | None = None,
+    request_id: UUID | None = None,
 ) -> StorySigned:
     artifact = Artifact(
         title="Safe Artifact",
@@ -58,7 +59,7 @@ def _build_story_signed_event(
         ),
     )
     return StorySigned(
-        request_id=uuid4(),
+        request_id=request_id or uuid4(),
         artifact=artifact,
         body=body,
         c2pa_manifest_hash=c2pa_manifest_hash,
@@ -129,6 +130,71 @@ class GitLedgerSecretGuardTest(unittest.IsolatedAsyncioTestCase):
         sidecar_entry = commit_obj.tree[f"{event.request_id}.c2pa"]
         sidecar_blob = repo[sidecar_entry.id]
         self.assertEqual(bytes(sidecar_blob.data), sidecar_bytes)
+
+    async def test_commits_without_c2pa_in_nested_artifacts_directory(self) -> None:
+        adapter = GitLedgerAdapter(
+            event_bus=InMemoryEventBus(),
+            repository_path=self._repo_path,
+            artifacts_directory="artifacts",
+        )
+        event = _build_story_signed_event("Write a deterministic noir micro-story.")
+
+        await adapter._on_story_signed(event)
+
+        repo = pygit2.Repository(str(self._repo_path))
+        reference = repo.lookup_reference(f"refs/heads/artifact/{event.request_id}")
+        commit_obj = repo[reference.target]
+        self.assertIsInstance(commit_obj, pygit2.Commit)
+        artifacts_entry = commit_obj.tree["artifacts"]
+        artifacts_tree = repo[artifacts_entry.id]
+        self.assertIn(f"{event.request_id}.md", artifacts_tree)
+        self.assertNotIn(f"{event.request_id}.c2pa", artifacts_tree)
+
+    async def test_nested_artifacts_directory_does_not_bleed_parent_entries(self) -> None:
+        request_id = uuid4()
+        repo = pygit2.Repository(str(self._repo_path))
+
+        # Seed artifact branch with parent-level file under a/.
+        parent_file = self._repo_path / "a" / "unrelated.txt"
+        parent_file.parent.mkdir(parents=True, exist_ok=True)
+        parent_file.write_text("do not duplicate me", encoding="utf-8")
+        repo.index.add("a/unrelated.txt")
+        repo.index.write()
+        tree_id = repo.index.write_tree()
+        signature = pygit2.Signature("Unit Test", "unit@test.local")
+        branch_ref = f"refs/heads/artifact/{request_id}"
+        repo.create_commit(
+            branch_ref,
+            signature,
+            signature,
+            "seed parent directory",
+            tree_id,
+            [],
+        )
+        repo.index.clear()
+        repo.index.write()
+
+        adapter = GitLedgerAdapter(
+            event_bus=InMemoryEventBus(),
+            repository_path=self._repo_path,
+            artifacts_directory="a/b",
+        )
+        event = _build_story_signed_event(
+            "Write a deterministic noir micro-story.",
+            request_id=request_id,
+        )
+        await adapter._on_story_signed(event)
+
+        repo = pygit2.Repository(str(self._repo_path))
+        reference = repo.lookup_reference(branch_ref)
+        commit_obj = repo[reference.target]
+        self.assertIsInstance(commit_obj, pygit2.Commit)
+        a_tree = repo[commit_obj.tree["a"].id]
+        self.assertIn("unrelated.txt", a_tree)
+        self.assertIn("b", a_tree)
+        b_tree = repo[a_tree["b"].id]
+        self.assertIn(f"{request_id}.md", b_tree)
+        self.assertNotIn("unrelated.txt", b_tree)
 
 
 if __name__ == "__main__":

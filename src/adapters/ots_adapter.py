@@ -241,7 +241,21 @@ class OTSAdapter:
                 )
                 return False, None
             out = (result.stdout or "") + (result.stderr or "")
-            if "Success" not in out and "timestamp validated" not in out and "valid" not in out:
+            if re.search(r"\binvalid\b", out, flags=re.IGNORECASE) or re.search(
+                r"\bnot\s+valid\b", out, flags=re.IGNORECASE
+            ):
+                _logger.warning(
+                    "ots verify: output indicates invalid proof stdout=%s stderr=%s",
+                    _sanitize_for_log(result.stdout or ""),
+                    _sanitize_for_log(result.stderr or ""),
+                )
+                return False, None
+            has_success_marker = bool(
+                re.search(r"\bSuccess\b", out)
+                or re.search(r"timestamp validated", out, flags=re.IGNORECASE)
+                or re.search(r"\bvalid\b", out, flags=re.IGNORECASE)
+            )
+            if not has_success_marker:
                 _logger.warning(
                     "ots verify: no success marker in output stdout=%s stderr=%s",
                     _sanitize_for_log(result.stdout or ""),

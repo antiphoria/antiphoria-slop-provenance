@@ -8,20 +8,25 @@ from pathlib import Path
 
 from src.env_config import (
     read_env_optional,
-    resolve_artifact_db_path,
     resolve_state_db_path,
 )
 from src.logging_config import get_log_context
 from src.repository import DedupRepository, SQLiteRepository
+from src.runtime.cli_composition import (
+    build_repository as build_cli_repository,
+)
 
-# Resolve .env relative to project root so workers get consistent config regardless of CWD.
+# Resolve .env relative to project root so workers get consistent
+# config regardless of CWD.
 _ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 _PROJECT_ROOT = _ENV_PATH.parent
 
 
 def _sanitize_service_name(name: str) -> str:
     """Remove path components from service name."""
-    return name.replace("..", "").replace("/", "-").replace("\\", "-") or "unknown"
+
+    sanitized = name.replace("..", "").replace("/", "-").replace("\\", "-")
+    return sanitized or "unknown"
 
 
 def configure_logging() -> None:
@@ -39,12 +44,16 @@ def configure_logging() -> None:
             return super().format(record)
 
     formatter = RequestIdFormatter(
-        "%(asctime)s %(levelname)s %(name)s request_id=%(request_id)s message=%(message)s"
+        "%(asctime)s %(levelname)s %(name)s "
+        "request_id=%(request_id)s message=%(message)s"
     )
     handler = logging.StreamHandler()
     handler.setFormatter(formatter)
     root = logging.getLogger()
-    level_name = read_env_optional("LOG_LEVEL", env_path=_ENV_PATH) or "INFO"
+    level_name = read_env_optional(
+        "LOG_LEVEL",
+        env_path=_ENV_PATH,
+    ) or "INFO"
     root.setLevel(getattr(logging, level_name.upper(), logging.INFO))
     root.handlers.clear()
     root.addHandler(handler)
@@ -52,19 +61,14 @@ def configure_logging() -> None:
 
 def build_repository() -> SQLiteRepository:
     """Build SQLite repository for shared artifact lifecycle (cache)."""
-
-    artifact_db_path = resolve_artifact_db_path(
-        env_path=_ENV_PATH,
-        project_root=_PROJECT_ROOT,
-    )
-    if artifact_db_path is None:
-        artifact_db_path = (_PROJECT_ROOT / ".orchestrator-state" / "artifacts.db").resolve()
-    artifact_db_path.parent.mkdir(parents=True, exist_ok=True)
-    return SQLiteRepository(db_path=artifact_db_path)
+    return build_cli_repository(env_path=_ENV_PATH)
 
 
 def build_dedup_repository(service_name: str) -> DedupRepository:
-    """Build per-service dedup repository (STATE_DB_PATH or ORCHESTRATOR_STATE_DIR)."""
+    """Build per-service dedup repository.
+
+    Uses STATE_DB_PATH or ORCHESTRATOR_STATE_DIR.
+    """
 
     state_db_path = resolve_state_db_path(
         env_path=_ENV_PATH,
@@ -81,7 +85,7 @@ def build_dedup_repository(service_name: str) -> DedupRepository:
 
 
 def _resolve_health_file_path(service_name: str) -> Path | None:
-    """Resolve health file path from WORKER_HEALTH_FILE or derive from state dir."""
+    """Resolve health file path from env or state directory."""
 
     health_file = read_env_optional("WORKER_HEALTH_FILE", env_path=_ENV_PATH)
     if health_file:
@@ -90,7 +94,10 @@ def _resolve_health_file_path(service_name: str) -> Path | None:
     if state_db:
         base = Path(state_db).resolve().parent
     else:
-        state_dir = read_env_optional("ORCHESTRATOR_STATE_DIR", env_path=_ENV_PATH)
+        state_dir = read_env_optional(
+            "ORCHESTRATOR_STATE_DIR",
+            env_path=_ENV_PATH,
+        )
         if not state_dir:
             return None
         base = Path(state_dir).resolve()
@@ -98,7 +105,10 @@ def _resolve_health_file_path(service_name: str) -> Path | None:
     return base / "health" / f"{safe_name}.ok"
 
 
-async def _health_writer_loop(health_path: Path, interval_sec: float = 30.0) -> None:
+async def _health_writer_loop(
+    health_path: Path,
+    interval_sec: float = 30.0,
+) -> None:
     """Write current timestamp to health file every interval_sec."""
 
     health_path.parent.mkdir(parents=True, exist_ok=True)
@@ -115,7 +125,8 @@ async def _health_writer_loop(health_path: Path, interval_sec: float = 30.0) -> 
 def start_health_writer(service_name: str) -> asyncio.Task[None] | None:
     """Start background task that writes health timestamp every 30s.
 
-    Returns the task when WORKER_HEALTH_FILE or STATE_DB_PATH is set, else None.
+    Returns the task when WORKER_HEALTH_FILE or STATE_DB_PATH is set,
+    else None.
     """
 
     health_path = _resolve_health_file_path(service_name)
