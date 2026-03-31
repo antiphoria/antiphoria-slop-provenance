@@ -13,7 +13,8 @@ from uuid import UUID, uuid4
 import pygit2
 
 from src.adapters.git_ledger import GitLedgerAdapter
-from src.events import InMemoryEventBus, StorySigned
+from src.domain.events import StorySigned
+from src.infrastructure.event_bus import InMemoryEventBus
 from src.models import (
     Artifact,
     GenerationContext,

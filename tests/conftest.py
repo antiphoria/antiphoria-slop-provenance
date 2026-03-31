@@ -11,7 +11,7 @@ from pathlib import Path
 import pygit2
 import pytest
 
-from src.repository import SQLiteRepository
+from src.repository.sqlite import SQLiteRepository
 
 
 @pytest.fixture

@@ -10,7 +10,8 @@ from uuid import uuid4
 import pytest
 
 from src.adapters.ots_queue import OtsQueueAdapter
-from src.repository import OtsForgeRecord, SQLiteRepository
+from src.repository.sqlite import SQLiteRepository
+from src.repository.types import OtsForgeRecord
 from src.services.ots_upgrade import process_single_ots_record
 
 
@@ -119,7 +120,8 @@ async def test_process_single_ots_record_append_entry_failure_calls_append_faile
     await process_single_ots_record(
         semaphore=asyncio.Semaphore(1),
         record=record,
-        repository=temp_sqlite_repository,
+        artifact_store=temp_sqlite_repository.artifacts,
+        transparency_store=temp_sqlite_repository.transparency,
         ots_queue=ots_queue,
         provenance_service=FakeProvenanceService(),
         ots_adapter=FakeOTSAdapter(),

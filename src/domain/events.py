@@ -1,4 +1,4 @@
-"""Strict event payload contracts for provenance orchestration."""
+"""Domain event contracts for provenance orchestration."""
 
 from __future__ import annotations
 
@@ -226,3 +226,23 @@ class EventBusPort(Protocol):
 
     async def emit(self, event: EventT) -> None:
         """Dispatch one typed event instance to subscribers."""
+
+
+__all__ = [
+    "ErrorHandler",
+    "EventBusPort",
+    "EventHandler",
+    "EventHandlerError",
+    "EventT",
+    "StoryAnchored",
+    "StoryAudited",
+    "StoryCommitted",
+    "StoryCurated",
+    "StoryForged",
+    "StoryGenerated",
+    "StoryHumanRegistered",
+    "StoryOtsPending",
+    "StoryRequested",
+    "StorySigned",
+    "StoryTimestamped",
+]

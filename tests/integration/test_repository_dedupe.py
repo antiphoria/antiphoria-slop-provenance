@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.repository import DedupRepository
+from src.repository.dedup import DedupRepository
 
 
 class RepositoryDedupeTest(unittest.TestCase):

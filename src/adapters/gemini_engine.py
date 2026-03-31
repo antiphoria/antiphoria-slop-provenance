@@ -11,14 +11,13 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from src.domain.events import EventBusPort, StoryGenerated, StoryRequested
 from src.env_config import read_env_bool, read_env_optional, read_env_required
-from src.events import EventBusPort, StoryGenerated, StoryRequested
 from src.logging_config import bind_log_context, should_log_route
-
-_adapter_logger = logging.getLogger("src.adapters.gemini_engine")
 from src.models import EmbeddedWatermark, UsageMetrics
 from src.policies.licensing import get_license_id
 
+_adapter_logger = logging.getLogger("src.adapters.gemini_engine")
 _DEFAULT_MODEL_ID = "gemini-2.5-flash"
 _DEFAULT_SYSTEM_INSTRUCTION = "You are a brutalist AI archivist."
 _DEFAULT_TEMPERATURE = 0.7

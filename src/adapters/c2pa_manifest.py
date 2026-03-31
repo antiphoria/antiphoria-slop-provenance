@@ -395,47 +395,102 @@ def validate_c2pa_sidecar(
             errors=[str(exc)],
         )
     if payload_format == _SDK_CARRIER_FORMAT:
-        try:
-            reader = c2pa.Reader(
-                _SDK_CARRIER_FORMAT,
-                io.BytesIO(_SDK_MINIMAL_JPEG_BYTES),
-                manifest_data=manifest_bytes,
-            )
-            try:
-                validation_state = reader.get_validation_state()
-                validation_results = reader.get_validation_results() or {}
-                manifest_store_json = reader.json()
-            finally:
-                reader.close()
-        except Exception as exc:  # noqa: BLE001
-            return C2PAManifestValidation(
-                valid=False,
-                validation_state=None,
-                errors=[str(exc)],
-            )
-        errors = _extract_validation_errors(validation_results)
-        state_ok = (validation_state or "").lower() == "valid"
-        if not state_ok or errors:
-            return C2PAManifestValidation(
-                valid=False,
-                validation_state=validation_state,
-                errors=errors or [f"C2PA validation failed with state '{validation_state}'."],
-            )
-        markdown_assertion_errors = _validate_sdk_markdown_assertion(
-            manifest_store_json=manifest_store_json,
-            body=body_for_mvp,
+        return _validate_via_sdk_carrier(
+            c2pa=c2pa,
+            manifest_bytes=manifest_bytes,
+            body_for_mvp=body_for_mvp,
         )
-        if markdown_assertion_errors:
-            return C2PAManifestValidation(
-                valid=False,
-                validation_state="invalid",
-                errors=markdown_assertion_errors,
-            )
+    return _validate_via_candidate_formats(
+        c2pa=c2pa,
+        payload_bytes=payload_bytes,
+        manifest_bytes=manifest_bytes,
+        content_type=content_type,
+        payload_format=payload_format,
+        env_path=env_path,
+        body_for_mvp=body_for_mvp,
+    )
+
+
+def _run_sdk_reader(
+    c2pa: Any,
+    *,
+    asset_format: str,
+    payload_bytes: bytes,
+    manifest_bytes: bytes,
+) -> tuple[str | None, dict[str, Any], str]:
+    """Run one SDK reader session and return validation outputs."""
+
+    reader = c2pa.Reader(
+        asset_format,
+        io.BytesIO(payload_bytes),
+        manifest_data=manifest_bytes,
+    )
+    try:
+        validation_state = reader.get_validation_state()
+        validation_results = reader.get_validation_results() or {}
+        manifest_store_json = reader.json()
+    finally:
+        reader.close()
+    return validation_state, validation_results, manifest_store_json
+
+
+def _validate_via_sdk_carrier(
+    c2pa: Any,
+    manifest_bytes: bytes,
+    body_for_mvp: str | None,
+) -> C2PAManifestValidation:
+    """Validate sidecar using the SDK JPEG carrier mode."""
+
+    try:
+        validation_state, validation_results, manifest_store_json = _run_sdk_reader(
+            c2pa=c2pa,
+            asset_format=_SDK_CARRIER_FORMAT,
+            payload_bytes=_SDK_MINIMAL_JPEG_BYTES,
+            manifest_bytes=manifest_bytes,
+        )
+    except Exception as exc:  # noqa: BLE001
         return C2PAManifestValidation(
-            valid=True,
-            validation_state=validation_state,
-            errors=[],
+            valid=False,
+            validation_state=None,
+            errors=[str(exc)],
         )
+
+    errors = _extract_validation_errors(validation_results)
+    state_ok = (validation_state or "").lower() == "valid"
+    if not state_ok or errors:
+        return C2PAManifestValidation(
+            valid=False,
+            validation_state=validation_state,
+            errors=errors or [f"C2PA validation failed with state '{validation_state}'."],
+        )
+    markdown_assertion_errors = _validate_sdk_markdown_assertion(
+        manifest_store_json=manifest_store_json,
+        body=body_for_mvp,
+    )
+    if markdown_assertion_errors:
+        return C2PAManifestValidation(
+            valid=False,
+            validation_state="invalid",
+            errors=markdown_assertion_errors,
+        )
+    return C2PAManifestValidation(
+        valid=True,
+        validation_state=validation_state,
+        errors=[],
+    )
+
+
+def _validate_via_candidate_formats(
+    c2pa: Any,
+    payload_bytes: bytes,
+    manifest_bytes: bytes,
+    content_type: str,
+    payload_format: str | None,
+    env_path: Path | None,
+    body_for_mvp: str | None,
+) -> C2PAManifestValidation:
+    """Validate sidecar by trying candidate asset formats."""
+
     candidate_formats = _candidate_asset_formats(
         content_type=payload_format or content_type,
         format_override=read_env_optional(
@@ -448,26 +503,19 @@ def validate_c2pa_sidecar(
         filtered = [fmt for fmt in candidate_formats if fmt.lower() in supported]
         if filtered:
             candidate_formats = filtered
+
     last_error: Exception | None = None
     for asset_format in candidate_formats:
         try:
-            reader = c2pa.Reader(
-                asset_format,
-                io.BytesIO(payload_bytes),
-                manifest_data=manifest_bytes,
+            validation_state, validation_results, manifest_store_json = _run_sdk_reader(
+                c2pa=c2pa,
+                asset_format=asset_format,
+                payload_bytes=payload_bytes,
+                manifest_bytes=manifest_bytes,
             )
-            try:
-                validation_state = reader.get_validation_state()
-                validation_results = reader.get_validation_results() or {}
-                manifest_store_json = reader.json()
-            finally:
-                reader.close()
             errors = _extract_validation_errors(validation_results)
             state_ok = (validation_state or "").lower() == "valid"
             if state_ok and not errors:
-                # Run custom markdown assertion check when body provided and
-                # manifest contains org.antiphoria.markdown (prevents bypass via
-                # text/markdown format that skips SDK_CARRIER_FORMAT path).
                 if body_for_mvp is not None:
                     try:
                         manifest_store = json.loads(manifest_store_json)
@@ -503,6 +551,7 @@ def validate_c2pa_sidecar(
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             continue
+
     if last_error is None:
         return C2PAManifestValidation(
             valid=False,

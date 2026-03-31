@@ -44,8 +44,7 @@ from src.env_config import (
     read_env_optional,
     resolve_artifact_db_path,
 )
-from src.events import (
-    EventBus,
+from src.domain.events import (
     EventHandlerError,
     StoryAnchored,
     StoryAudited,
@@ -56,10 +55,11 @@ from src.events import (
     StorySigned,
     StoryTimestamped,
 )
+from src.infrastructure.event_bus import EventBus
 from src.models import AttestationQa, AuthorAttestation, RegistrationCeremony, sha256_hex
 from src.parsing import parse_artifact_markdown, produce_redacted_artifact
 from src.ports import ProvenanceServicePort
-from src.repository import SQLiteRepository
+from src.repository.sqlite import SQLiteRepository
 from src.secrets_guard import assert_secret_free
 from src.services.curation_service import (
     build_curation_metadata,
@@ -784,7 +784,10 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
     env_path = get_project_env_path()
     event_bus = EventBus()
     repository = _build_repository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
+    telemetry_adapter = ProvenanceTelemetryAdapter(
+        event_bus=event_bus,
+        store=repository.telemetry,
+    )
     repository_path = _require_repo_path(args)
     _validate_external_repo_path(repository_path)
     provenance_service, _ = _build_provenance_services(repository, repository_path)
@@ -804,7 +807,7 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
         if event.artifact.signature is None:
             raise RuntimeError("Signed artifact is missing signature block.")
         await asyncio.to_thread(
-            repository.create_artifact_record,
+            repository.artifacts.create_artifact_record,
             event.request_id,
             "signed",
             event.artifact,
@@ -826,7 +829,7 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
                 event.commit_oid,
             )
             await asyncio.to_thread(
-                repository.update_artifact_status,
+                repository.artifacts.update_artifact_status,
                 event.request_id,
                 "committed",
                 event.ledger_path,
@@ -896,7 +899,10 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
     env_path = get_project_env_path()
     event_bus = EventBus()
     repository = _build_repository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
+    telemetry_adapter = ProvenanceTelemetryAdapter(
+        event_bus=event_bus,
+        store=repository.telemetry,
+    )
     repository_path = _require_repo_path(args)
     _validate_external_repo_path(repository_path)
     provenance_service, _ = _build_provenance_services(repository, repository_path)
@@ -915,7 +921,10 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
         raise RuntimeError(f"Curated file not found: '{artifact_path}'.")
 
     request_id = extract_request_id_from_artifact_path(artifact_path)
-    record = await asyncio.to_thread(repository.get_artifact_record, request_id)
+    record = await asyncio.to_thread(
+        repository.artifacts.get_artifact_record,
+        request_id,
+    )
     if record is None:
         raise RuntimeError(f"Artifact record not found for request_id={request_id}.")
     if record.model_id == "human":
@@ -934,7 +943,7 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
         if event.artifact.signature is None:
             raise RuntimeError("Signed artifact is missing signature block.")
         await asyncio.to_thread(
-            repository.update_artifact_curation,
+            repository.artifacts.update_artifact_curation,
             event.request_id,
             event.body,
             event.artifact.signature.artifact_hash,
@@ -954,7 +963,7 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
                 event.commit_oid,
             )
             await asyncio.to_thread(
-                repository.update_artifact_status,
+                repository.artifacts.update_artifact_status,
                 event.request_id,
                 "committed",
                 event.ledger_path,
@@ -1067,7 +1076,10 @@ async def _run_register_command(args: argparse.Namespace) -> int:
     env_path = get_project_env_path()
     event_bus = EventBus()
     repository = _build_repository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
+    telemetry_adapter = ProvenanceTelemetryAdapter(
+        event_bus=event_bus,
+        store=repository.telemetry,
+    )
     repository_path = _require_repo_path(args)
     _validate_external_repo_path(repository_path)
     provenance_service, _ = _build_provenance_services(repository, repository_path)
@@ -1181,7 +1193,7 @@ async def _run_register_command(args: argparse.Namespace) -> int:
         if event.artifact.signature is None:
             raise RuntimeError("Signed artifact is missing signature block.")
         await asyncio.to_thread(
-            repository.create_artifact_record,
+            repository.artifacts.create_artifact_record,
             event.request_id,
             "signed",
             event.artifact,
@@ -1203,7 +1215,7 @@ async def _run_register_command(args: argparse.Namespace) -> int:
                 event.commit_oid,
             )
             await asyncio.to_thread(
-                repository.update_artifact_status,
+                repository.artifacts.update_artifact_status,
                 event.request_id,
                 "committed",
                 event.ledger_path,
@@ -1367,7 +1379,10 @@ async def _run_anchor_command(args: argparse.Namespace) -> int:
 
     event_bus = EventBus()
     repository = _build_repository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
+    telemetry_adapter = ProvenanceTelemetryAdapter(
+        event_bus=event_bus,
+        store=repository.telemetry,
+    )
     await telemetry_adapter.start()
     repository_path = _require_repo_path(args)
     provenance_service, _ = _build_provenance_services(repository, repository_path)
@@ -1422,7 +1437,10 @@ async def _run_timestamp_command(args: argparse.Namespace) -> int:
 
     event_bus = EventBus()
     repository = _build_repository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
+    telemetry_adapter = ProvenanceTelemetryAdapter(
+        event_bus=event_bus,
+        store=repository.telemetry,
+    )
     await telemetry_adapter.start()
     repository_path = _require_repo_path(args)
     provenance_service, _ = _build_provenance_services(
@@ -1481,7 +1499,10 @@ async def _run_audit_command(args: argparse.Namespace) -> int:
 
     event_bus = EventBus()
     repository = _build_repository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
+    telemetry_adapter = ProvenanceTelemetryAdapter(
+        event_bus=event_bus,
+        store=repository.telemetry,
+    )
     await telemetry_adapter.start()
     repository_path = _require_repo_path(args)
     _, verification_service = _build_provenance_services(repository, repository_path)
@@ -1569,7 +1590,10 @@ async def _run_attest_command(args: argparse.Namespace) -> int:
 
     event_bus = EventBus()
     repository = _build_repository()
-    telemetry_adapter = ProvenanceTelemetryAdapter(event_bus=event_bus, repository=repository)
+    telemetry_adapter = ProvenanceTelemetryAdapter(
+        event_bus=event_bus,
+        store=repository.telemetry,
+    )
     await telemetry_adapter.start()
     repository_path = _require_repo_path(args)
     _, verification_service = _build_provenance_services(repository, repository_path)
@@ -1704,7 +1728,8 @@ async def _run_upgrade_command(args: argparse.Namespace) -> int:
     await process_single_ots_record(
         semaphore,
         record,
-        repository,
+        repository.artifacts,
+        repository.transparency,
         ots_queue,
         provenance_service,
         ots_adapter,
@@ -1766,7 +1791,8 @@ async def _run_process_pending_command(args: argparse.Namespace) -> int:
             process_single_ots_record(
                 semaphore,
                 r,
-                repository,
+                repository.artifacts,
+                repository.transparency,
                 ots_queue,
                 provenance_service,
                 ots_adapter,
@@ -2254,7 +2280,7 @@ async def _run_events_command(args: argparse.Namespace) -> int:
 
     repository = _build_repository()
     rows = await asyncio.to_thread(
-        repository.list_provenance_event_logs,
+        repository.telemetry.list_provenance_event_logs,
         args.limit,
         args.event_type,
     )
@@ -2295,7 +2321,7 @@ def _run_admin_revoke_key_command(args: argparse.Namespace) -> int:
         raise RuntimeError(f"State database not found at: {db_path}")
 
     repository = SQLiteRepository(db_path=db_path)
-    key_registry = KeyRegistryAdapter(repository=repository)
+    key_registry = KeyRegistryAdapter(store=repository.keys)
     if key_registry.get_status(args.fingerprint) is None:
         raise RuntimeError(f"Key fingerprint not found in registry: {args.fingerprint}")
 

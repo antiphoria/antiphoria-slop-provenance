@@ -9,7 +9,7 @@ from typing import Awaitable, Callable, cast
 
 from pydantic import BaseModel
 
-from src.event_contracts import ErrorHandler, EventHandlerError, EventT
+from src.domain.events import ErrorHandler, EventHandlerError, EventT
 from src.logging_config import (
     bind_log_context,
     redact_event_for_trace,
@@ -198,3 +198,5 @@ class InMemoryEventBus:
 
 
 EventBus = InMemoryEventBus
+
+__all__ = ["EventBus", "InMemoryEventBus"]

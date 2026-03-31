@@ -16,7 +16,8 @@ from src.adapters.git_ledger import GitLedgerAdapter
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.transparency_log import TransparencyLogAdapter
 from src.canonicalization import compute_payload_hash
-from src.events import InMemoryEventBus, StorySigned
+from src.domain.events import StorySigned
+from src.infrastructure.event_bus import InMemoryEventBus
 from src.models import (
     Artifact,
     GenerationContext,
@@ -25,7 +26,7 @@ from src.models import (
     SignatureBlock,
     VerificationAnchor,
 )
-from src.repository import SQLiteRepository
+from src.repository.sqlite import SQLiteRepository
 from src.services.provenance_service import ProvenanceService
 
 
@@ -115,10 +116,11 @@ class SyncTransparencyLogTest(unittest.IsolatedAsyncioTestCase):
         )
         repository = SQLiteRepository(db_path=self._state_db_path)
         provenance_service = ProvenanceService(
-            repository=repository,
+            transparency_store=repository.transparency,
+            timestamp_store=repository.timestamps,
             transparency_log_adapter=log_adapter,
             tsa_adapter=None,
-            key_registry=KeyRegistryAdapter(repository=repository),
+            key_registry=KeyRegistryAdapter(store=repository.keys),
         )
 
         with patch("urllib.request.urlopen") as mock_urlopen:
@@ -174,10 +176,11 @@ class SyncTransparencyLogTest(unittest.IsolatedAsyncioTestCase):
         )
         repository = SQLiteRepository(db_path=self._state_db_path)
         provenance_service = ProvenanceService(
-            repository=repository,
+            transparency_store=repository.transparency,
+            timestamp_store=repository.timestamps,
             transparency_log_adapter=log_adapter,
             tsa_adapter=None,
-            key_registry=KeyRegistryAdapter(repository=repository),
+            key_registry=KeyRegistryAdapter(store=repository.keys),
         )
 
         with patch("urllib.request.urlopen") as mock_urlopen:

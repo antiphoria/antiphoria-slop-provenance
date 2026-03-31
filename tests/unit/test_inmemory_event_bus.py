@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from src.events import InMemoryEventBus, StoryRequested
+from src.domain.events import StoryRequested
+from src.infrastructure.event_bus import InMemoryEventBus
 
 
 class InMemoryEventBusTest(unittest.IsolatedAsyncioTestCase):

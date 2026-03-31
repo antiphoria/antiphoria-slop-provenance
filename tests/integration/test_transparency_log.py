@@ -7,11 +7,14 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+import io
+import urllib.error
 
 from src.adapters.transparency_log import (
     TransparencyLogAdapter,
     _sanitize_for_log,
     build_supabase_publish_config,
+    publish_merkle_anchor,
     update_merkle_anchor_block_height,
 )
 
@@ -115,6 +118,66 @@ class TransparencyLogPublishTest(unittest.TestCase):
         self.assertEqual(body["artifactHash"], "d" * 64)
         self.assertEqual(entry.remote_receipt, "ok")
 
+    def test_entry_hash_matches_payload_hash_helper(self) -> None:
+        adapter = TransparencyLogAdapter(log_path=self._log_path)
+
+        entry, serializable = adapter.build_entry_record(
+            artifact_hash="f" * 64,
+            artifact_id="a" * 36,
+            source_file="artifact.md",
+            previous_entry_hash=None,
+            request_id="b" * 36,
+            metadata={"source": "human"},
+            bitcoin_block_height=123,
+            skip_remote=True,
+        )
+        computed = adapter.compute_expected_entry_hash_from_payload(serializable)
+        self.assertEqual(computed, entry.entry_hash)
+
+    def test_payload_hash_helper_normalizes_non_dict_metadata(self) -> None:
+        payload = {
+            "entryId": "id-1",
+            "artifactHash": "a" * 64,
+            "artifactId": "artifact-1",
+            "requestId": "request-1",
+            "sourceFile": "artifact.md",
+            "previousEntryHash": None,
+            "anchoredAt": "2026-01-01T00:00:00+00:00",
+            "metadata": ["unexpected", "shape"],
+        }
+        normalized = dict(payload)
+        normalized["metadata"] = {}
+
+        hash_from_list = TransparencyLogAdapter.compute_expected_entry_hash_from_payload(
+            payload
+        )
+        hash_from_dict = TransparencyLogAdapter.compute_expected_entry_hash_from_payload(
+            normalized
+        )
+        self.assertEqual(hash_from_list, hash_from_dict)
+
+    def test_publish_soft_fails_when_response_exceeds_size_limit(self) -> None:
+        def fake_urlopen(request: object, timeout: float = 10.0) -> object:
+            _ = (request, timeout)
+            return _make_response(b"x" * (1_048_576 + 1))
+
+        adapter = TransparencyLogAdapter(
+            log_path=self._log_path,
+            publish_url="https://example.org/append",
+            publish_headers={"apikey": "x", "Authorization": "Bearer x"},
+            publish_supabase_format=False,
+        )
+
+        with patch("urllib.request.urlopen", fake_urlopen):
+            entry, _ = adapter.build_entry_record(
+                artifact_hash="f" * 64,
+                artifact_id="a" * 36,
+                source_file="artifact.md",
+                previous_entry_hash=None,
+            )
+
+        self.assertIsNone(entry.remote_receipt)
+
 
 class BuildSupabaseConfigTest(unittest.TestCase):
     """Validate build_supabase_publish_config."""
@@ -142,6 +205,11 @@ class BuildSupabaseConfigTest(unittest.TestCase):
         self.assertEqual(headers["Prefer"], "return=representation")
         self.assertTrue(use_format)
 
+    def test_raises_when_publish_url_scheme_is_not_http(self) -> None:
+        with self.assertRaises(RuntimeError) as ctx:
+            build_supabase_publish_config("file:///tmp/transparency")
+        self.assertIn("http/https", str(ctx.exception))
+
 
 class FetchRemoteEntriesTest(unittest.TestCase):
     """Validate fetch_remote_entries_by_artifact_hash."""
@@ -168,6 +236,15 @@ class FetchRemoteEntriesTest(unittest.TestCase):
             publish_headers={},
         )
         self.assertIsNone(adapter.fetch_remote_entries_by_artifact_hash("a" * 64))
+
+    def test_adapter_init_rejects_non_http_publish_url(self) -> None:
+        with self.assertRaises(RuntimeError) as ctx:
+            TransparencyLogAdapter(
+                log_path=self._log_path,
+                publish_url="file:///tmp/transparency-log",
+                publish_headers={"apikey": "x", "Authorization": "Bearer x"},
+            )
+        self.assertIn("http/https", str(ctx.exception))
 
     def test_get_sends_correct_url_and_headers(self) -> None:
         captured_request: list[object] = []
@@ -296,6 +373,36 @@ class FetchRemoteEntriesTest(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 adapter.fetch_remote_entries_by_artifact_hash("f" * 64)
         self.assertIn("Remote transparency log fetch failed", str(ctx.exception))
+
+    def test_raises_when_response_body_exceeds_size_limit(self) -> None:
+        def fake_urlopen(request: object, timeout: float = 10.0) -> object:
+            _ = (request, timeout)
+            return _make_response(b"x" * (1_048_576 + 1))
+
+        adapter = TransparencyLogAdapter(
+            log_path=self._log_path,
+            publish_url="https://test.supabase.co/rest/v1/transparency_log",
+            publish_headers={"apikey": "x", "Authorization": "Bearer x"},
+        )
+        with patch("urllib.request.urlopen", fake_urlopen):
+            with self.assertRaises(RuntimeError) as ctx:
+                adapter.fetch_remote_entries_by_artifact_hash("f" * 64)
+        self.assertIn("exceeded maximum allowed size", str(ctx.exception))
+
+    def test_fetch_rejects_runtime_invalid_scheme_before_network_call(self) -> None:
+        adapter = TransparencyLogAdapter(
+            log_path=self._log_path,
+            publish_url="https://test.supabase.co/rest/v1/transparency_log",
+            publish_headers={"apikey": "x", "Authorization": "Bearer x"},
+        )
+        adapter._publish_url = "file:///tmp/transparency-log"
+
+        with patch("urllib.request.urlopen") as urlopen_mock:
+            with self.assertRaises(RuntimeError) as ctx:
+                adapter.fetch_remote_entries_by_artifact_hash("f" * 64)
+
+        self.assertIn("http/https", str(ctx.exception))
+        urlopen_mock.assert_not_called()
 
 
 class EntryExistsInRemoteTest(unittest.TestCase):
@@ -506,3 +613,45 @@ class MerkleAnchorPatchUrlEncodingTest(unittest.TestCase):
         patch_url = patch_request.full_url
         self.assertIn("id=eq.1%26payload-%3E%3EentryHash%3Deq.tampered", patch_url)
         self.assertNotIn("&payload->>entryHash=eq.tampered", patch_url)
+
+    def test_publish_soft_fails_when_http_error_body_exceeds_size_limit(self) -> None:
+        oversized_error = urllib.error.HTTPError(
+            url="https://test.supabase.co/rest/v1/merkle_anchors",
+            code=500,
+            msg="Internal Server Error",
+            hdrs=None,
+            fp=io.BytesIO(b"x" * (1_048_576 + 1)),
+        )
+
+        with patch("urllib.request.urlopen", side_effect=oversized_error):
+            ok = publish_merkle_anchor(
+                root_hash="a" * 64,
+                entry_count=1,
+                anchored_at="2026-01-01T00:00:00+00:00",
+                publish_url="https://test.supabase.co/rest/v1/merkle_anchors",
+                publish_headers={"apikey": "k", "Authorization": "Bearer k"},
+            )
+        self.assertFalse(ok)
+
+    def test_publish_rejects_invalid_scheme_without_network_call(self) -> None:
+        with patch("urllib.request.urlopen") as urlopen_mock:
+            ok = publish_merkle_anchor(
+                root_hash="a" * 64,
+                entry_count=1,
+                anchored_at="2026-01-01T00:00:00+00:00",
+                publish_url="file:///tmp/anchors",
+                publish_headers={"apikey": "k", "Authorization": "Bearer k"},
+            )
+        self.assertFalse(ok)
+        urlopen_mock.assert_not_called()
+
+    def test_update_rejects_invalid_scheme_without_network_call(self) -> None:
+        with patch("urllib.request.urlopen") as urlopen_mock:
+            ok = update_merkle_anchor_block_height(
+                root_hash="abc",
+                bitcoin_block_height=123,
+                publish_url="file:///tmp/anchors",
+                publish_headers={"apikey": "k", "Authorization": "Bearer k"},
+            )
+        self.assertFalse(ok)
+        urlopen_mock.assert_not_called()

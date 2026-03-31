@@ -18,8 +18,8 @@ from src.env_config import (
     read_env_optional,
     resolve_artifact_db_path,
 )
-from src.events import EventBus
-from src.repository import SQLiteRepository
+from src.infrastructure.event_bus import EventBus
+from src.repository.sqlite import SQLiteRepository
 from src.services.provenance_service import ProvenanceService
 from src.services.verification_service import VerificationService
 
@@ -94,14 +94,15 @@ def build_provenance_services(
             ),
         )
     )
-    key_registry = KeyRegistryAdapter(repository=repository)
+    key_registry = KeyRegistryAdapter(store=repository.keys)
     ots_adapter: OTSAdapter | None = None
     if read_env_bool("ENABLE_OTS_FORGE", default=False, env_path=resolved_env):
         ots_adapter = OTSAdapter(
             ots_bin=resolve_ots_binary(env_path=resolved_env)
         )
     provenance_service = ProvenanceService(
-        repository=repository,
+        transparency_store=repository.transparency,
+        timestamp_store=repository.timestamps,
         transparency_log_adapter=transparency_log_adapter,
         tsa_adapter=tsa_adapter,
         key_registry=key_registry,
@@ -109,7 +110,7 @@ def build_provenance_services(
         env_path=resolved_env,
     )
     verification_service = VerificationService(
-        repository=repository,
+        audit_store=repository.audit,
         transparency_log_adapter=transparency_log_adapter,
         tsa_adapter=tsa_adapter,
         key_registry=key_registry,

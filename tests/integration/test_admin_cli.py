@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import tempfile
 import unittest
 from pathlib import Path
 
 from src import cli
 from src.adapters.key_registry import KeyRegistryAdapter
-from src.repository import SQLiteRepository
+from src.repository.sqlite import SQLiteRepository
 
 
 class AdminRevokeKeyTest(unittest.TestCase):
@@ -32,7 +31,7 @@ class AdminRevokeKeyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "state.db"
             repository = SQLiteRepository(db_path=db_path)
-            key_registry = KeyRegistryAdapter(repository=repository)
+            key_registry = KeyRegistryAdapter(store=repository.keys)
             key_registry.register_key(fingerprint="known-fp", key_version="v1")
             del repository, key_registry
 
@@ -49,7 +48,7 @@ class AdminRevokeKeyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db_path = Path(tmp) / "state.db"
             repository = SQLiteRepository(db_path=db_path)
-            key_registry = KeyRegistryAdapter(repository=repository)
+            key_registry = KeyRegistryAdapter(store=repository.keys)
             key_registry.register_key(fingerprint="my-fp", key_version="v1")
             self.assertEqual(key_registry.get_status("my-fp"), "active")
             del repository, key_registry
@@ -61,5 +60,5 @@ class AdminRevokeKeyTest(unittest.TestCase):
             self.assertEqual(result, 0)
 
             repository2 = SQLiteRepository(db_path=db_path)
-            key_registry2 = KeyRegistryAdapter(repository=repository2)
+            key_registry2 = KeyRegistryAdapter(store=repository2.keys)
             self.assertEqual(key_registry2.get_status("my-fp"), "revoked")

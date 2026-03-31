@@ -7,14 +7,13 @@ import logging
 from pathlib import Path
 from uuid import UUID
 
-from src.env_config import read_env_optional
-from src.events import (
+from src.domain.events import (
     EventBusPort,
     StoryAnchored,
     StoryCommitted,
-    StoryOtsPending,
     StoryTimestamped,
 )
+from src.env_config import read_env_optional
 from src.logging_config import bind_log_context, should_log_route
 from src.services.provenance_service import ProvenanceService
 

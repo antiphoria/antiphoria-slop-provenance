@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from subprocess import CompletedProcess
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
 
@@ -44,7 +44,9 @@ class RFC3161TSAAdapterTest(unittest.TestCase):
                                 args=[],
                                 returncode=1,
                                 stdout="",
-                                stderr=("unable to get local issuer certificate"),
+                                stderr=(
+                                    "unable to get local issuer certificate"
+                                ),
                             )
                             second = CompletedProcess(
                                 args=[],
@@ -142,6 +144,33 @@ class RFC3161TSAAdapterTest(unittest.TestCase):
                 digest_hex="a" * 32,
                 digest_algorithm="md5",
             )
+
+    def test_request_timestamp_token_rejects_oversized_response(self) -> None:
+        adapter = RFC3161TSAAdapter(tsa_url="https://example.invalid/tsr")
+
+        def fake_build_query(
+            output_path: Path,
+            digest_hex: str,
+            digest_algorithm: str,
+        ) -> None:
+            _ = (digest_hex, digest_algorithm)
+            output_path.write_bytes(b"fake-tsq")
+
+        response = MagicMock()
+        response.read.return_value = b"x" * (1_048_576 + 1)
+        response.__enter__ = MagicMock(return_value=response)
+        response.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(
+            adapter,
+            "_build_query_file",
+            side_effect=fake_build_query,
+        ):
+            with patch("urllib.request.urlopen", return_value=response):
+                with self.assertRaises(RuntimeError) as ctx:
+                    adapter.request_timestamp_token(digest_hex="a" * 64)
+
+        self.assertIn("exceeded maximum allowed size", str(ctx.exception))
 
 
 if __name__ == "__main__":

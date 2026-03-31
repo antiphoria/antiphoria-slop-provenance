@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from src.adapters.crypto_notary import CryptoNotaryAdapter
-from src.events import InMemoryEventBus
+from src.infrastructure.event_bus import InMemoryEventBus
 from src.models import (
     AttestationQa,
     AuthorAttestation,

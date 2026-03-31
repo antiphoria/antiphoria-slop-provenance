@@ -23,7 +23,8 @@ from cryptography.hazmat.primitives.serialization import (
 from src import cli
 from src.adapters.git_ledger import GitLedgerAdapter
 from src.canonicalization import compute_payload_hash
-from src.events import InMemoryEventBus, StoryHumanRegistered, StorySigned
+from src.domain.events import StoryHumanRegistered, StorySigned
+from src.infrastructure.event_bus import InMemoryEventBus
 from src.models import (
     Artifact,
     GenerationContext,

@@ -9,7 +9,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.adapters.gemini_engine import GeminiEngineAdapter
-from src.events import InMemoryEventBus, StoryGenerated, StoryRequested
+from src.domain.events import StoryGenerated, StoryRequested
+from src.infrastructure.event_bus import InMemoryEventBus
 
 
 class GeminiEngineDummyModeTest(unittest.IsolatedAsyncioTestCase):

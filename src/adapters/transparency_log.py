@@ -21,6 +21,8 @@ from src.env_config import read_env_optional
 from src.models import canonical_json_bytes, sha256_hex
 
 _logger = logging.getLogger(__name__)
+_MAX_REMOTE_RESPONSE_BYTES = 1_048_576
+_ALLOWED_OUTBOUND_SCHEMES = frozenset(("http", "https"))
 
 
 def _sanitize_for_log(raw: str, max_len: int = 200) -> str:
@@ -35,6 +37,63 @@ def _sanitize_for_log(raw: str, max_len: int = 200) -> str:
         flags=re.IGNORECASE,
     )
     return out[:max_len] + "..." if len(out) > max_len else out
+
+
+def _read_response_bytes_bounded(
+    response: Any,
+    *,
+    context: str,
+    max_bytes: int = _MAX_REMOTE_RESPONSE_BYTES,
+) -> bytes:
+    """Read response bytes with an explicit hard size cap."""
+
+    raw = response.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise RuntimeError(
+            f"{context} exceeded maximum allowed size ({max_bytes} bytes)."
+        )
+    return raw
+
+
+def _hash_payload_from_parts(
+    *,
+    entry_id: Any,
+    artifact_hash: Any,
+    artifact_id: Any,
+    request_id: Any,
+    source_file: Any,
+    previous_entry_hash: Any,
+    anchored_at: Any,
+    metadata: Any,
+    bitcoin_block_height: Any,
+) -> str:
+    """Compute entry hash from one canonical payload builder."""
+
+    hash_payload: dict[str, Any] = {
+        "entryId": entry_id,
+        "artifactHash": artifact_hash,
+        "artifactId": artifact_id,
+        "requestId": request_id,
+        "sourceFile": source_file,
+        "previousEntryHash": previous_entry_hash,
+        "anchoredAt": anchored_at,
+        "metadata": metadata if isinstance(metadata, dict) else {},
+    }
+    if bitcoin_block_height is not None:
+        hash_payload["bitcoinBlockHeight"] = bitcoin_block_height
+    return sha256_hex(canonical_json_bytes(hash_payload))
+
+
+def _ensure_allowed_outbound_url(url: str, *, context: str) -> None:
+    """Allow only explicit http(s) URLs for outbound remote operations."""
+
+    parsed = urllib.parse.urlparse(url.strip())
+    scheme = parsed.scheme.lower()
+    if scheme not in _ALLOWED_OUTBOUND_SCHEMES or not parsed.netloc:
+        raise RuntimeError(
+            f"{context} must use http/https with an explicit host. "
+            f"Got: {url!r}"
+        )
 
 
 def build_supabase_publish_config(
@@ -54,6 +113,10 @@ def build_supabase_publish_config(
     """
     if not publish_url:
         return {}, False
+    _ensure_allowed_outbound_url(
+        publish_url,
+        context="TRANSPARENCY_LOG_PUBLISH_URL",
+    )
     key = read_env_optional("SUPABASE_SERVICE_KEY", env_path=env_path)
     if key is None:
         key = read_env_optional("SUPABASE_ANON_KEY", env_path=env_path)
@@ -95,6 +158,17 @@ def publish_merkle_anchor(
     """
     if not publish_url or not publish_url.strip() or not publish_headers:
         return False
+    try:
+        _ensure_allowed_outbound_url(
+            publish_url,
+            context="Merkle anchor publish_url",
+        )
+    except RuntimeError as exc:
+        _logger.warning(
+            "Merkle anchor publish soft-fail. Local anchor secure. Error: %s",
+            _sanitize_for_log(str(exc)),
+        )
+        return False
     payload = {
         "rootHash": root_hash,
         "entryCount": entry_count,
@@ -118,11 +192,17 @@ def publish_merkle_anchor(
             request,
             timeout=min(timeout_sec, 5.0),
         ) as response:
-            response.read()
+            _read_response_bytes_bounded(
+                response,
+                context="Merkle anchor publish response",
+            )
             return True
     except urllib.error.HTTPError as exc:
         try:
-            body = exc.read().decode("utf-8", errors="replace")
+            body = _read_response_bytes_bounded(
+                exc,
+                context="Merkle anchor publish error body",
+            ).decode("utf-8", errors="replace")
             _logger.warning(
                 "Merkle anchor publish soft-fail. Local anchor secure. HTTP %s: %s",
                 exc.code,
@@ -159,18 +239,33 @@ def update_merkle_anchor_block_height(
     """
     if not publish_url or not publish_url.strip() or not publish_headers:
         return False
+    try:
+        _ensure_allowed_outbound_url(
+            publish_url,
+            context="Merkle anchor publish_url",
+        )
+    except RuntimeError as exc:
+        _logger.warning(
+            "Merkle anchor block height update failed: %s",
+            _sanitize_for_log(str(exc)),
+        )
+        return False
     query = urllib.parse.urlencode([("payload->>rootHash", f"eq.{root_hash}")])
     get_url = f"{publish_url.rstrip('/')}?{query}"
     headers = {k: v for k, v in publish_headers.items() if k != "Prefer"}
     req = urllib.request.Request(get_url, method="GET", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=min(timeout_sec, 5.0)) as resp:
-            raw = resp.read().decode("utf-8").strip()
+            raw = _read_response_bytes_bounded(
+                resp,
+                context="Merkle anchor fetch response",
+            ).decode("utf-8").strip()
     except (
         urllib.error.URLError,
         urllib.error.HTTPError,
         socket.timeout,
         ConnectionError,
+        RuntimeError,
     ) as exc:
         _logger.warning(
             "Merkle anchor fetch for update failed: %s",
@@ -210,13 +305,17 @@ def update_merkle_anchor_block_height(
     )
     try:
         with urllib.request.urlopen(req, timeout=min(timeout_sec, 5.0)) as resp:
-            resp.read()
+            _read_response_bytes_bounded(
+                resp,
+                context="Merkle anchor patch response",
+            )
         return True
     except (
         urllib.error.URLError,
         urllib.error.HTTPError,
         socket.timeout,
         ConnectionError,
+        RuntimeError,
     ) as exc:
         _logger.warning(
             "Merkle anchor block height update failed: %s",
@@ -254,6 +353,11 @@ class TransparencyLogAdapter:
         publish_supabase_format: bool = False,
     ) -> None:
         self._log_path = log_path
+        if publish_url and publish_url.strip():
+            _ensure_allowed_outbound_url(
+                publish_url,
+                context="Transparency log publish_url",
+            )
         self._publish_url = publish_url
         self._publish_timeout_sec = publish_timeout_sec
         self._publish_headers = publish_headers or {}
@@ -339,7 +443,17 @@ class TransparencyLogAdapter:
         }
         if bitcoin_block_height is not None:
             payload["bitcoinBlockHeight"] = bitcoin_block_height
-        entry_hash = sha256_hex(canonical_json_bytes(payload))
+        entry_hash = _hash_payload_from_parts(
+            entry_id=entry_id,
+            artifact_hash=artifact_hash,
+            artifact_id=artifact_id,
+            request_id=request_id,
+            source_file=source_file_str,
+            previous_entry_hash=previous_entry_hash,
+            anchored_at=anchored_at,
+            metadata=metadata or {},
+            bitcoin_block_height=bitcoin_block_height,
+        )
         full_record = {**payload, "entryHash": entry_hash}
         remote_receipt = None if skip_remote else self._publish_entry(full_record)
         serializable = {**full_record, "remoteReceipt": remote_receipt}
@@ -470,39 +584,32 @@ class TransparencyLogAdapter:
 
     @staticmethod
     def _expected_entry_hash(entry: TransparencyLogEntry) -> str:
-        payload = {
-            "entryId": entry.entry_id,
-            "artifactHash": entry.artifact_hash,
-            "artifactId": entry.artifact_id,
-            "requestId": entry.request_id,
-            "sourceFile": entry.source_file,
-            "previousEntryHash": entry.previous_entry_hash,
-            "anchoredAt": entry.anchored_at,
-            "metadata": entry.metadata,
-        }
-        if entry.bitcoin_block_height is not None:
-            payload["bitcoinBlockHeight"] = entry.bitcoin_block_height
-        return sha256_hex(canonical_json_bytes(payload))
+        return _hash_payload_from_parts(
+            entry_id=entry.entry_id,
+            artifact_hash=entry.artifact_hash,
+            artifact_id=entry.artifact_id,
+            request_id=entry.request_id,
+            source_file=entry.source_file,
+            previous_entry_hash=entry.previous_entry_hash,
+            anchored_at=entry.anchored_at,
+            metadata=entry.metadata,
+            bitcoin_block_height=entry.bitcoin_block_height,
+        )
 
     @staticmethod
     def compute_expected_entry_hash_from_payload(payload: dict[str, Any]) -> str:
         """Compute entryHash from payload dict. Used for remote integrity verification."""
-        hash_payload = {
-            "entryId": payload.get("entryId"),
-            "artifactHash": payload.get("artifactHash"),
-            "artifactId": payload.get("artifactId"),
-            "requestId": payload.get("requestId"),
-            "sourceFile": payload.get("sourceFile"),
-            "previousEntryHash": payload.get("previousEntryHash"),
-            "anchoredAt": payload.get("anchoredAt"),
-            "metadata": (
-                payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-            ),
-        }
-        bbh = payload.get("bitcoinBlockHeight")
-        if bbh is not None:
-            hash_payload["bitcoinBlockHeight"] = bbh
-        return sha256_hex(canonical_json_bytes(hash_payload))
+        return _hash_payload_from_parts(
+            entry_id=payload.get("entryId"),
+            artifact_hash=payload.get("artifactHash"),
+            artifact_id=payload.get("artifactId"),
+            request_id=payload.get("requestId"),
+            source_file=payload.get("sourceFile"),
+            previous_entry_hash=payload.get("previousEntryHash"),
+            anchored_at=payload.get("anchoredAt"),
+            metadata=payload.get("metadata"),
+            bitcoin_block_height=payload.get("bitcoinBlockHeight"),
+        )
 
     def _read_latest_entry_hash(self) -> str | None:
         """Read previous hash from the last local entry."""
@@ -529,6 +636,17 @@ class TransparencyLogAdapter:
 
         if not self._publish_url or not self._publish_url.strip():
             return None
+        try:
+            _ensure_allowed_outbound_url(
+                self._publish_url,
+                context="Transparency log publish_url",
+            )
+        except RuntimeError as exc:
+            _logger.warning(
+                "Supabase broadcast soft-fail. Local anchor secure. Error: %s",
+                _sanitize_for_log(str(exc)),
+            )
+            return None
         headers: dict[str, str] = {"Content-Type": "application/json", **self._publish_headers}
         body = {"payload": payload} if self._publish_supabase_format else payload
         request = urllib.request.Request(
@@ -543,7 +661,10 @@ class TransparencyLogAdapter:
                 request,
                 timeout=aggressive_timeout,
             ) as response:
-                raw = response.read().decode("utf-8").strip()
+                raw = _read_response_bytes_bounded(
+                    response,
+                    context="Transparency publish response",
+                ).decode("utf-8").strip()
                 if not raw:
                     return None
                 return raw
@@ -552,6 +673,7 @@ class TransparencyLogAdapter:
             urllib.error.HTTPError,
             socket.timeout,
             ConnectionError,
+            RuntimeError,
         ) as exc:
             _logger.warning(
                 "Supabase broadcast soft-fail. Local anchor secure. Error: %s",
@@ -605,6 +727,16 @@ class TransparencyLogAdapter:
         """
         if not (self._publish_url and self._publish_url.strip()) or not self._publish_headers:
             return None
+        try:
+            _ensure_allowed_outbound_url(
+                self._publish_url,
+                context="Transparency log publish_url",
+            )
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "Remote transparency log fetch failed for "
+                f"artifact_hash={artifact_hash}: {_sanitize_for_log(str(exc))}"
+            ) from exc
         query = urllib.parse.urlencode([("payload->>artifactHash", f"eq.{artifact_hash}")])
         url = f"{self._publish_url.rstrip('/')}?{query}"
         headers = {k: v for k, v in self._publish_headers.items() if k != "Prefer"}
@@ -614,7 +746,10 @@ class TransparencyLogAdapter:
                 request,
                 timeout=self._publish_timeout_sec,
             ) as response:
-                raw = response.read().decode("utf-8").strip()
+                raw = _read_response_bytes_bounded(
+                    response,
+                    context="Remote transparency log fetch response",
+                ).decode("utf-8").strip()
                 if not raw:
                     return []
                 data = json.loads(raw)
@@ -629,6 +764,11 @@ class TransparencyLogAdapter:
                 f"artifact_hash={artifact_hash} with HTTP {exc.code}"
             ) from exc
         except (urllib.error.URLError, socket.timeout, OSError) as exc:
+            raise RuntimeError(
+                "Remote transparency log fetch failed for "
+                f"artifact_hash={artifact_hash}: {_sanitize_for_log(str(exc))}"
+            ) from exc
+        except RuntimeError as exc:
             raise RuntimeError(
                 "Remote transparency log fetch failed for "
                 f"artifact_hash={artifact_hash}: {_sanitize_for_log(str(exc))}"

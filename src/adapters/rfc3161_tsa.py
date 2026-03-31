@@ -9,8 +9,26 @@ import tempfile
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 _ALLOWED_DIGEST_ALGORITHMS = frozenset(("sha256", "sha384", "sha512"))
+_MAX_TSA_RESPONSE_BYTES = 1_048_576
+
+
+def _read_bounded_response_bytes(
+    response: Any,
+    *,
+    max_bytes: int,
+    context: str,
+) -> bytes:
+    """Read response bytes with a strict upper bound."""
+
+    raw = response.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise RuntimeError(
+            f"{context} exceeded maximum allowed size ({max_bytes} bytes)."
+        )
+    return raw
 
 
 @dataclass(frozen=True)
@@ -52,7 +70,9 @@ class RFC3161TSAAdapter:
         """Request RFC3161 token for a digest hex string."""
 
         if self._tsa_url is None:
-            raise RuntimeError("RFC3161 TSA URL is missing. Configure RFC3161_TSA_URL.")
+            raise RuntimeError(
+                "RFC3161 TSA URL is missing. Configure RFC3161_TSA_URL."
+            )
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             query_path = temp_path / "request.tsq"
@@ -71,7 +91,11 @@ class RFC3161TSAAdapter:
                 request,
                 timeout=self._request_timeout_sec,
             ) as response:
-                token = response.read()
+                token = _read_bounded_response_bytes(
+                    response,
+                    max_bytes=_MAX_TSA_RESPONSE_BYTES,
+                    context="RFC3161 TSA response",
+                )
         if not token:
             raise RuntimeError(
                 "TSA returned empty RFC3161 token payload. "
@@ -99,8 +123,10 @@ class RFC3161TSAAdapter:
             return TimestampVerification(
                 ok=False,
                 message=(
-                    "No usable CA certificate bundle found for RFC3161 verification. "
-                    f"{details}".strip()
+                    (
+                        "No usable CA certificate bundle found for RFC3161 "
+                        f"verification. {details}"
+                    ).strip()
                 ),
             )
 
@@ -126,7 +152,10 @@ class RFC3161TSAAdapter:
                 if process.returncode == 0:
                     return TimestampVerification(
                         ok=True,
-                        message=(f"RFC3161 verification succeeded using '{ca_path}'."),
+                        message=(
+                            "RFC3161 verification succeeded "
+                            f"using '{ca_path}'."
+                        ),
                     )
                 failures.append(
                     self._format_verify_failure(
@@ -149,8 +178,8 @@ class RFC3161TSAAdapter:
                     return TimestampVerification(
                         ok=True,
                         message=(
-                            "RFC3161 verification succeeded using embedded TSA chain "
-                            f"and CA '{ca_path}'."
+                            "RFC3161 verification succeeded using embedded "
+                            f"TSA chain and CA '{ca_path}'."
                         ),
                     )
                 failures.append(
@@ -202,8 +231,11 @@ class RFC3161TSAAdapter:
         if process.returncode != 0:
             stderr = process.stderr.strip() or process.stdout.strip()
             raise RuntimeError(
-                "OpenSSL ts query generation failed. Ensure OpenSSL is available. "
-                f"Details: {stderr or '<no error output>'}"
+                (
+                    "OpenSSL ts query generation failed. "
+                    "Ensure OpenSSL is available. "
+                    f"Details: {stderr or '<no error output>'}"
+                )
             )
 
     def _run_ts_verify(
@@ -300,7 +332,9 @@ class RFC3161TSAAdapter:
             if tsa_ca_cert_path.exists():
                 candidates.append(tsa_ca_cert_path)
             else:
-                notes.append(f"Configured CA file missing: '{tsa_ca_cert_path}'.")
+                notes.append(
+                    f"Configured CA file missing: '{tsa_ca_cert_path}'."
+                )
 
         certifi_path = self._resolve_certifi_ca_bundle()
         if certifi_path is not None and certifi_path not in candidates:
@@ -359,7 +393,11 @@ class RFC3161TSAAdapter:
         tsa_ca_cert_path: Path,
         untrusted_cert_path: Path | None,
     ) -> str:
-        details = process.stderr.strip() or process.stdout.strip() or "unknown error"
+        details = (
+            process.stderr.strip()
+            or process.stdout.strip()
+            or "unknown error"
+        )
         if untrusted_cert_path is None:
             return f"verify failed with CA '{tsa_ca_cert_path}': {details}"
         return (

@@ -10,24 +10,51 @@ import asyncio
 import base64
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from src.adapters.ots_adapter import OTSAdapter
 from src.adapters.ots_queue import OtsQueueAdapter
 from src.adapters.transparency_log import TransparencyLogAdapter
-from src.events import StoryForged
+from src.domain.events import StoryForged
 from src.logging_config import bind_log_context, get_log_extra, should_log_route
-from src.repository import OtsForgeRecord, SQLiteRepository
+from src.repository.types import ArtifactRecord, OtsForgeRecord
 from src.services.provenance_service import ProvenanceService
 
 _logger = logging.getLogger(__name__)
 
 
+class ArtifactStorePort(Protocol):
+    """Narrow persistence contract for artifact lifecycle lookup."""
+
+    def get_artifact_record(self, request_id: UUID) -> ArtifactRecord | None: ...
+
+
+class TransparencyStorePort(Protocol):
+    """Narrow persistence contract for transparency records."""
+
+    def has_transparency_log_record(self, artifact_hash: str) -> bool: ...
+
+    def create_transparency_log_record(
+        self,
+        entry_id: str,
+        artifact_hash: str,
+        artifact_id: str,
+        request_id: str | None,
+        source_file: str,
+        log_path: str,
+        previous_entry_hash: str | None,
+        entry_hash: str,
+        published_at: str,
+        remote_receipt: str | None,
+    ) -> None: ...
+
+
 async def process_single_ots_record(
     semaphore: asyncio.Semaphore,
     record: OtsForgeRecord,
-    repository: SQLiteRepository,
+    artifact_store: ArtifactStorePort,
+    transparency_store: TransparencyStorePort,
     ots_queue: OtsQueueAdapter,
     provenance_service: ProvenanceService,
     ots_adapter: OTSAdapter,
@@ -61,7 +88,10 @@ async def process_single_ots_record(
             )
             return
         try:
-            artifact_record = await asyncio.to_thread(repository.get_artifact_record, request_id)
+            artifact_record = await asyncio.to_thread(
+                artifact_store.get_artifact_record,
+                request_id,
+            )
             ledger_path = (
                 artifact_record.ledger_path
                 if artifact_record and artifact_record.ledger_path
@@ -139,7 +169,7 @@ async def process_single_ots_record(
             ots_full_path.write_bytes(final_ots_bytes)
 
             # 2. Append-Only Merkle Chain + mirror to SQLite (skip if already done)
-            if not repository.has_transparency_log_record(record.artifact_hash):
+            if not transparency_store.has_transparency_log_record(record.artifact_hash):
                 entry = await asyncio.to_thread(
                     transparency_log_adapter.append_entry,
                     record.artifact_hash,
@@ -150,7 +180,7 @@ async def process_single_ots_record(
                     bitcoin_block_height=block_height,
                 )
                 await asyncio.to_thread(
-                    repository.create_transparency_log_record,
+                    transparency_store.create_transparency_log_record,
                     entry.entry_id,
                     entry.artifact_hash,
                     entry.artifact_id,

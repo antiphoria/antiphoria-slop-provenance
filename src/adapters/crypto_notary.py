@@ -9,6 +9,7 @@ import binascii
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
+from uuid import UUID
 
 import oqs
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -24,14 +25,14 @@ from src.adapters.c2pa_manifest import (
     C2PAManifestArtifact,
     build_c2pa_sidecar_manifest,
 )
-from src.env_config import read_env_bool, read_env_optional, read_env_required
-from src.events import (
+from src.domain.events import (
     EventBusPort,
     StoryCurated,
     StoryGenerated,
     StoryHumanRegistered,
     StorySigned,
 )
+from src.env_config import read_env_bool, read_env_optional, read_env_required
 from src.policies.licensing import get_license_id
 from src.canonicalization import CANONICALIZATION_VERSION, compute_payload_hash
 from src.models import (
@@ -300,24 +301,11 @@ class CryptoNotaryAdapter:
             curation=None,
             author_attestation=None,
         )
-        if should_log_route("coarse"):
-            _adapter_logger.info(
-                "CryptoNotaryAdapter emitting StorySigned request_id=%s",
-                event.request_id,
-                extra={"request_id": str(event.request_id)},
-            )
-        await self._event_bus.emit(
-            StorySigned(
-                request_id=event.request_id,
-                artifact=artifact,
-                body=event.body,
-                c2pa_manifest_hash=(None if c2pa_manifest is None else c2pa_manifest.manifest_hash),
-                c2pa_manifest_bytes_b64=(
-                    None
-                    if c2pa_manifest is None
-                    else base64.b64encode(c2pa_manifest.manifest_bytes).decode("ascii")
-                ),
-            )
+        await self._emit_signed(
+            request_id=event.request_id,
+            artifact=artifact,
+            body=event.body,
+            c2pa_manifest=c2pa_manifest,
         )
 
     async def _on_story_curated(self, event: StoryCurated) -> None:
@@ -343,24 +331,11 @@ class CryptoNotaryAdapter:
             curation=event.curation_metadata,
             author_attestation=None,
         )
-        if should_log_route("coarse"):
-            _adapter_logger.info(
-                "CryptoNotaryAdapter emitting StorySigned request_id=%s",
-                event.request_id,
-                extra={"request_id": str(event.request_id)},
-            )
-        await self._event_bus.emit(
-            StorySigned(
-                request_id=event.request_id,
-                artifact=artifact,
-                body=event.curated_body,
-                c2pa_manifest_hash=(None if c2pa_manifest is None else c2pa_manifest.manifest_hash),
-                c2pa_manifest_bytes_b64=(
-                    None
-                    if c2pa_manifest is None
-                    else base64.b64encode(c2pa_manifest.manifest_bytes).decode("ascii")
-                ),
-            )
+        await self._emit_signed(
+            request_id=event.request_id,
+            artifact=artifact,
+            body=event.curated_body,
+            c2pa_manifest=c2pa_manifest,
         )
 
     async def _on_story_human_registered(self, event: StoryHumanRegistered) -> None:
@@ -386,18 +361,36 @@ class CryptoNotaryAdapter:
             webauthn_attestation=event.webauthn_attestation,
             registration_ceremony=event.registration_ceremony,
         )
+        await self._emit_signed(
+            request_id=event.request_id,
+            artifact=artifact,
+            body=event.body,
+            c2pa_manifest=c2pa_manifest,
+        )
+
+    async def _emit_signed(
+        self,
+        request_id: UUID,
+        artifact: Artifact,
+        body: str,
+        c2pa_manifest: C2PAManifestArtifact | None,
+    ) -> None:
+        """Emit one StorySigned event from a signed artifact result."""
+
         if should_log_route("coarse"):
             _adapter_logger.info(
                 "CryptoNotaryAdapter emitting StorySigned request_id=%s",
-                event.request_id,
-                extra={"request_id": str(event.request_id)},
+                request_id,
+                extra={"request_id": str(request_id)},
             )
         await self._event_bus.emit(
             StorySigned(
-                request_id=event.request_id,
+                request_id=request_id,
                 artifact=artifact,
-                body=event.body,
-                c2pa_manifest_hash=(None if c2pa_manifest is None else c2pa_manifest.manifest_hash),
+                body=body,
+                c2pa_manifest_hash=(
+                    None if c2pa_manifest is None else c2pa_manifest.manifest_hash
+                ),
                 c2pa_manifest_bytes_b64=(
                     None
                     if c2pa_manifest is None

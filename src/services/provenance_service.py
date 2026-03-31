@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import logging
 import re
-import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 from uuid import UUID
 
 import pygit2
@@ -24,12 +23,12 @@ from src.adapters.rfc3161_tsa import RFC3161TSAAdapter, TimestampVerification
 from src.adapters.ots_queue import OtsQueueAdapter
 from src.adapters.transparency_log import TransparencyLogAdapter, TransparencyLogEntry
 from src.canonicalization import canonicalize_body_for_hash, compute_payload_hash
+from src.domain.events import StoryOtsPending
 from src.models import Artifact, sha256_hex
-from src.events import StoryOtsPending
 from src.artifact_serialization import render_artifact_markdown
 from src.parsing import parse_artifact_markdown, parse_artifact_markdown_text
-from src.repository import SQLiteRepository
 from src.git_tree_utils import tree_get_blob
+from src.lock_paths import build_repo_ref_lock_path
 
 _logger = logging.getLogger(__name__)
 _BRANCH_LOG_PATH = ".provenance/transparency-log.jsonl"
@@ -50,6 +49,42 @@ def _sanitize_for_log(raw: str, max_len: int = 200) -> str:
 
 _DEFAULT_LEDGER_AUTHOR_NAME = "Antiphoria Slop Provenance"
 _DEFAULT_LEDGER_AUTHOR_EMAIL = "bot@antiphoria.local"
+
+
+class TransparencyStorePort(Protocol):
+    """Narrow persistence contract for transparency records."""
+
+    def has_transparency_log_record(self, artifact_hash: str) -> bool: ...
+
+    def create_transparency_log_record(
+        self,
+        entry_id: str,
+        artifact_hash: str,
+        artifact_id: str,
+        request_id: str | None,
+        source_file: str,
+        log_path: str,
+        previous_entry_hash: str | None,
+        entry_hash: str,
+        published_at: str,
+        remote_receipt: str | None,
+    ) -> None: ...
+
+
+class TimestampStorePort(Protocol):
+    """Narrow persistence contract for timestamp records."""
+
+    def create_timestamp_record(
+        self,
+        artifact_hash: str,
+        artifact_id: str,
+        request_id: str | None,
+        tsa_url: str,
+        token_base64: str,
+        digest_algorithm: str,
+        verification_status: str,
+        verification_message: str,
+    ) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -81,14 +116,16 @@ class ProvenanceService:
 
     def __init__(
         self,
-        repository: SQLiteRepository,
+        transparency_store: TransparencyStorePort,
+        timestamp_store: TimestampStorePort,
         transparency_log_adapter: TransparencyLogAdapter,
         tsa_adapter: RFC3161TSAAdapter | None,
         key_registry: KeyRegistryAdapter,
         ots_adapter: OTSAdapter | None = None,
         env_path: Path | None = None,
     ) -> None:
-        self._repository = repository
+        self._transparency_store = transparency_store
+        self._timestamp_store = timestamp_store
         self._transparency_log_adapter = transparency_log_adapter
         self._tsa_adapter = tsa_adapter
         self._key_registry = key_registry
@@ -146,7 +183,7 @@ class ProvenanceService:
             source_file=source_file or str(artifact_path),
             request_id=request_id,
         )
-        self._repository.create_transparency_log_record(
+        self._transparency_store.create_transparency_log_record(
             entry_id=entry.entry_id,
             artifact_hash=entry.artifact_hash,
             artifact_id=entry.artifact_id,
@@ -221,7 +258,7 @@ class ProvenanceService:
             commit_message=f"provenance: append transparency anchor ({request_id})",
         )
         remote_receipt = self._transparency_log_adapter.publish_entry(serializable)
-        self._repository.create_transparency_log_record(
+        self._transparency_store.create_transparency_log_record(
             entry_id=entry.entry_id,
             artifact_hash=entry.artifact_hash,
             artifact_id=entry.artifact_id,
@@ -321,7 +358,7 @@ class ProvenanceService:
             commit_message=f"provenance: append transparency anchor ({request_id})",
         )
         remote_receipt = self._transparency_log_adapter.publish_entry(serializable)
-        self._repository.create_transparency_log_record(
+        self._transparency_store.create_transparency_log_record(
             entry_id=entry.entry_id,
             artifact_hash=entry.artifact_hash,
             artifact_id=entry.artifact_id,
@@ -508,7 +545,7 @@ class ProvenanceService:
             digest_algorithm=digest_algorithm,
         )
         encoded_token = base64.b64encode(token_bytes).decode("ascii")
-        created_at = self._repository.create_timestamp_record(
+        created_at = self._timestamp_store.create_timestamp_record(
             artifact_hash=artifact_hash,
             artifact_id=str(envelope.id),
             request_id=None if request_id is None else str(request_id),
@@ -785,10 +822,7 @@ class ProvenanceService:
         payload_text: str,
         commit_message: str,
     ) -> None:
-        repo_hash = hashlib.sha256(str(repository_path.resolve()).encode()).hexdigest()[:16]
-        lock_dir = Path(tempfile.gettempdir()) / "antiphoria-slop-provenance" / "locks"
-        lock_dir.mkdir(parents=True, exist_ok=True)
-        lock_path = lock_dir / f"{repo_hash}_{ref_name.replace('/', '_')}.lock"
+        lock_path = build_repo_ref_lock_path(repository_path, ref_name)
         with FileLock(lock_path):
             self._commit_branch_file_impl(
                 repository_path=repository_path,
@@ -808,10 +842,7 @@ class ProvenanceService:
     ) -> None:
         """Commit binary blob to branch (e.g. .ots files)."""
 
-        repo_hash = hashlib.sha256(str(repository_path.resolve()).encode()).hexdigest()[:16]
-        lock_dir = Path(tempfile.gettempdir()) / "antiphoria-slop-provenance" / "locks"
-        lock_dir.mkdir(parents=True, exist_ok=True)
-        lock_path = lock_dir / f"{repo_hash}_{ref_name.replace('/', '_')}.lock"
+        lock_path = build_repo_ref_lock_path(repository_path, ref_name)
         with FileLock(lock_path):
             self._commit_branch_file_bytes_impl(
                 repository_path=repository_path,

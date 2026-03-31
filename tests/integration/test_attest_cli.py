@@ -21,7 +21,8 @@ from src.adapters.git_ledger import GitLedgerAdapter
 from src.canonicalization import compute_payload_hash
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.transparency_log import TransparencyLogAdapter
-from src.events import InMemoryEventBus, StorySigned
+from src.domain.events import StorySigned
+from src.infrastructure.event_bus import InMemoryEventBus
 from src.models import (
     Artifact,
     GenerationContext,
@@ -30,7 +31,7 @@ from src.models import (
     SignatureBlock,
     VerificationAnchor,
 )
-from src.repository import SQLiteRepository
+from src.repository.sqlite import SQLiteRepository
 from src.services.provenance_service import ProvenanceService
 from src.services.verification_service import AuditReport, VerificationService
 
@@ -136,10 +137,11 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
             log_path=self._repo_path / ".provenance" / "transparency-log.jsonl"
         )
         provenance_service = ProvenanceService(
-            repository=repository,
+            transparency_store=repository.transparency,
+            timestamp_store=repository.timestamps,
             transparency_log_adapter=log_adapter,
             tsa_adapter=None,
-            key_registry=KeyRegistryAdapter(repository=repository),
+            key_registry=KeyRegistryAdapter(store=repository.keys),
         )
         provenance_service.anchor_committed_artifact(
             repository_path=self._repo_path,
@@ -149,10 +151,10 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
         )
 
         verification_service = VerificationService(
-            repository=repository,
+            audit_store=repository.audit,
             transparency_log_adapter=log_adapter,
             tsa_adapter=None,
-            key_registry=KeyRegistryAdapter(repository=repository),
+            key_registry=KeyRegistryAdapter(store=repository.keys),
             artifact_verifier=_AllowAllVerifier(),
         )
         report = verification_service.audit_committed_artifact(
@@ -206,10 +208,11 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
 
         with patch("urllib.request.urlopen", fake_urlopen):
             provenance_service = ProvenanceService(
-                repository=repository,
+                transparency_store=repository.transparency,
+                timestamp_store=repository.timestamps,
                 transparency_log_adapter=log_adapter,
                 tsa_adapter=None,
-                key_registry=KeyRegistryAdapter(repository=repository),
+                key_registry=KeyRegistryAdapter(store=repository.keys),
             )
             provenance_service.anchor_committed_artifact(
                 repository_path=self._repo_path,
@@ -224,10 +227,10 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
             return_value=[],
         ):
             verification_service = VerificationService(
-                repository=repository,
+                audit_store=repository.audit,
                 transparency_log_adapter=log_adapter,
                 tsa_adapter=None,
-                key_registry=KeyRegistryAdapter(repository=repository),
+                key_registry=KeyRegistryAdapter(store=repository.keys),
                 artifact_verifier=_AllowAllVerifier(),
             )
             report = verification_service.audit_committed_artifact(
@@ -275,10 +278,11 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
         )
         with patch("urllib.request.urlopen", side_effect=make_post_response):
             provenance_service = ProvenanceService(
-                repository=repository,
+                transparency_store=repository.transparency,
+                timestamp_store=repository.timestamps,
                 transparency_log_adapter=log_adapter,
                 tsa_adapter=None,
-                key_registry=KeyRegistryAdapter(repository=repository),
+                key_registry=KeyRegistryAdapter(store=repository.keys),
             )
             provenance_service.anchor_committed_artifact(
                 repository_path=self._repo_path,
@@ -296,10 +300,10 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
             side_effect=network_error,
         ):
             verification_service = VerificationService(
-                repository=repository,
+                audit_store=repository.audit,
                 transparency_log_adapter=log_adapter,
                 tsa_adapter=None,
-                key_registry=KeyRegistryAdapter(repository=repository),
+                key_registry=KeyRegistryAdapter(store=repository.keys),
                 artifact_verifier=_AllowAllVerifier(),
             )
             report = verification_service.audit_committed_artifact(
@@ -349,10 +353,11 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
         )
         with patch("urllib.request.urlopen", side_effect=make_post_response):
             provenance_service = ProvenanceService(
-                repository=repository,
+                transparency_store=repository.transparency,
+                timestamp_store=repository.timestamps,
                 transparency_log_adapter=log_adapter,
                 tsa_adapter=None,
-                key_registry=KeyRegistryAdapter(repository=repository),
+                key_registry=KeyRegistryAdapter(store=repository.keys),
             )
             provenance_service.anchor_committed_artifact(
                 repository_path=self._repo_path,
@@ -381,10 +386,10 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
             side_effect=fetch_tampered,
         ):
             verification_service = VerificationService(
-                repository=repository,
+                audit_store=repository.audit,
                 transparency_log_adapter=log_adapter,
                 tsa_adapter=None,
-                key_registry=KeyRegistryAdapter(repository=repository),
+                key_registry=KeyRegistryAdapter(store=repository.keys),
                 artifact_verifier=_AllowAllVerifier(),
             )
             report = verification_service.audit_committed_artifact(

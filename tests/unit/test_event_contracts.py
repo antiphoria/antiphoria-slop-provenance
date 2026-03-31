@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from uuid import uuid4
 
-from src.events import StoryRequested, StoryHumanRegistered
+from src.domain.events import StoryHumanRegistered, StoryRequested
 from src.models import AttestationQa, AuthorAttestation
 
 

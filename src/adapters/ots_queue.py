@@ -23,7 +23,7 @@ import pygit2
 from filelock import FileLock
 
 from src.env_config import read_env_optional
-from src.repository import OtsForgeRecord, OtsForgeStatus
+from src.repository.types import OtsForgeRecord, OtsForgeStatus
 
 _logger = logging.getLogger(__name__)
 
@@ -162,6 +162,17 @@ class OtsQueueAdapter:
             [parent.id],
         )
 
+    def _append_event(self, new_line: str, commit_message: str) -> None:
+        """Append one JSONL event line under lock and commit it."""
+
+        lock_path = Path(str(self._queue_path) + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with FileLock(lock_path):
+            repo = pygit2.Repository(str(self._repository_path))
+            content = self._read_current_content(repo)
+            new_content = (content.rstrip() + "\n" + new_line).lstrip()
+            self._commit_content(new_content, commit_message)
+
     def append_pending(
         self,
         request_id: UUID | str,
@@ -182,16 +193,10 @@ class OtsQueueAdapter:
             },
             sort_keys=True,
         )
-        lock_path = Path(str(self._queue_path) + ".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with FileLock(lock_path):
-            repo = pygit2.Repository(str(self._repository_path))
-            content = self._read_current_content(repo)
-            new_content = (content.rstrip() + "\n" + new_line).lstrip()
-            self._commit_content(
-                new_content,
-                f"provenance: OTS pending ({rid})",
-            )
+        self._append_event(
+            new_line=new_line,
+            commit_message=f"provenance: OTS pending ({rid})",
+        )
 
     def append_forged(
         self,
@@ -211,16 +216,10 @@ class OtsQueueAdapter:
         if artifact_hash:
             event_obj["artifact_hash"] = artifact_hash
         new_line = json.dumps(event_obj, sort_keys=True)
-        lock_path = Path(str(self._queue_path) + ".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with FileLock(lock_path):
-            repo = pygit2.Repository(str(self._repository_path))
-            content = self._read_current_content(repo)
-            new_content = (content.rstrip() + "\n" + new_line).lstrip()
-            self._commit_content(
-                new_content,
-                f"provenance: OTS forged ({rid})",
-            )
+        self._append_event(
+            new_line=new_line,
+            commit_message=f"provenance: OTS forged ({rid})",
+        )
 
     def append_failed(
         self,
@@ -240,16 +239,10 @@ class OtsQueueAdapter:
         if artifact_hash:
             event_obj["artifact_hash"] = artifact_hash
         new_line = json.dumps(event_obj, sort_keys=True)
-        lock_path = Path(str(self._queue_path) + ".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with FileLock(lock_path):
-            repo = pygit2.Repository(str(self._repository_path))
-            content = self._read_current_content(repo)
-            new_content = (content.rstrip() + "\n" + new_line).lstrip()
-            self._commit_content(
-                new_content,
-                f"provenance: OTS failed ({rid})",
-            )
+        self._append_event(
+            new_line=new_line,
+            commit_message=f"provenance: OTS failed ({rid})",
+        )
 
     def _parse_events(self, content: str) -> dict[str, dict]:
         """Parse JSONL and return merged state per request_id (latest event wins)."""

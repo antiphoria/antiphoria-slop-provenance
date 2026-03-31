@@ -30,7 +30,6 @@ from src.parsing import (
     parse_artifact_markdown_text,
 )
 from src.logging_config import bind_log_context, get_log_extra, should_log_route
-from src.repository import SQLiteRepository
 from src.services.curation_service import extract_request_id_from_artifact_path
 from src.git_tree_utils import tree_get_blob
 
@@ -82,12 +81,23 @@ class ArtifactVerifierPort(Protocol):
         """Verify one parsed envelope+payload pair."""
 
 
+class AuditStorePort(Protocol):
+    """Narrow persistence contract for machine-readable audit reports."""
+
+    def create_audit_report(
+        self,
+        artifact_id: str,
+        request_id: str | None,
+        report_json: str,
+    ) -> str: ...
+
+
 class VerificationService:
     """Orchestrates envelope, signature, anchor, timestamp, and key checks."""
 
     def __init__(
         self,
-        repository: SQLiteRepository,
+        audit_store: AuditStorePort,
         transparency_log_adapter: TransparencyLogAdapter,
         tsa_adapter: RFC3161TSAAdapter | None,
         key_registry: KeyRegistryAdapter,
@@ -95,7 +105,7 @@ class VerificationService:
         ots_adapter: OTSAdapter | None = None,
         env_path: Path | None = None,
     ) -> None:
-        self._repository = repository
+        self._audit_store = audit_store
         self._transparency_log_adapter = transparency_log_adapter
         self._tsa_adapter = tsa_adapter
         self._key_registry = key_registry
@@ -667,7 +677,7 @@ class VerificationService:
         )
 
     def _persist_report(self, report: AuditReport) -> None:
-        self._repository.create_audit_report(
+        self._audit_store.create_audit_report(
             artifact_id=report.artifact_id or "<unknown>",
             request_id=report.request_id,
             report_json=json.dumps(report.to_dict(), sort_keys=True),

@@ -10,22 +10,20 @@ import asyncio
 import base64
 import logging
 import binascii
-import hashlib
-import tempfile
 from pathlib import Path
 
 import pygit2
 from filelock import FileLock
 
 from src.artifact_serialization import render_artifact_markdown
+from src.domain.events import EventBusPort, StoryCommitted, StorySigned
 from src.env_config import read_env_bool, read_env_optional
-from src.events import EventBusPort, StoryCommitted, StorySigned
 from src.logging_config import bind_log_context, should_log_route
-
-_adapter_logger = logging.getLogger("src.adapters.git_ledger")
+from src.lock_paths import build_repo_ref_lock_path
 from src.models import sha256_hex
 from src.secrets_guard import assert_secret_free
 
+_adapter_logger = logging.getLogger("src.adapters.git_ledger")
 _DEFAULT_LEDGER_AUTHOR_NAME = "Antiphoria Slop Provenance"
 _DEFAULT_LEDGER_AUTHOR_EMAIL = "bot@antiphoria.local"
 
@@ -221,10 +219,7 @@ class GitLedgerAdapter:
         """
         branch_name = f"artifact/{request_id}"
         ref_name = f"refs/heads/{branch_name}"
-        repo_hash = hashlib.sha256(str(self._repository_path.resolve()).encode()).hexdigest()[:16]
-        lock_dir = Path(tempfile.gettempdir()) / "antiphoria-slop-provenance" / "locks"
-        lock_dir.mkdir(parents=True, exist_ok=True)
-        lock_path = lock_dir / f"{repo_hash}_{ref_name.replace('/', '_')}.lock"
+        lock_path = build_repo_ref_lock_path(self._repository_path, ref_name)
         with FileLock(lock_path):
             return self._commit_markdown_impl(
                 request_id=request_id,
@@ -313,82 +308,172 @@ class GitLedgerAdapter:
 
         blob_oid = repo.create_blob(markdown_payload.encode("utf-8"))
         if not self._artifacts_directory:
-            root_tb = (
-                repo.TreeBuilder(parent_tree_oid)
-                if parent_tree_oid is not None
-                else repo.TreeBuilder()
+            return self._build_flat_tree(
+                repo=repo,
+                path_obj=path_obj,
+                blob_oid=blob_oid,
+                c2pa_sidecar_payload=c2pa_sidecar_payload,
+                parent_tree_oid=parent_tree_oid,
             )
-            root_tb.insert(path_obj.name, blob_oid, pygit2.GIT_FILEMODE_BLOB)
-            if c2pa_sidecar_payload is not None:
-                sidecar_blob_oid = repo.create_blob(c2pa_sidecar_payload)
-                sidecar_name = f"{path_obj.stem}.c2pa"
-                root_tb.insert(sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB)
-            return root_tb.write()
 
-        parent_tree = repo[parent_tree_oid] if parent_tree_oid else None
-        artifacts_parent_oid: pygit2.Oid | None = None
-        if parent_tree is not None and self._artifacts_directory:
-            parts = self._artifacts_directory.split("/")
-            current: pygit2.Tree | None = parent_tree
-            for part in parts:
-                if current is None or part not in current:
-                    current = None
-                    break
-                entry = current[part]
-                obj = repo[entry.id]
-                if isinstance(obj, pygit2.Tree):
-                    current = obj
-                else:
-                    current = None
-                    break
-            if current is not None:
-                artifacts_parent_oid = current.id
-        artifacts_tb = (
-            repo.TreeBuilder(artifacts_parent_oid)
-            if artifacts_parent_oid is not None
+        path_parts = self._artifacts_directory.split("/")
+        if len(path_parts) == 1:
+            return self._build_single_dir_tree(
+                repo=repo,
+                path_obj=path_obj,
+                blob_oid=blob_oid,
+                c2pa_sidecar_payload=c2pa_sidecar_payload,
+                parent_tree_oid=parent_tree_oid,
+            )
+        return self._build_nested_dir_tree(
+            repo=repo,
+            path_obj=path_obj,
+            blob_oid=blob_oid,
+            c2pa_sidecar_payload=c2pa_sidecar_payload,
+            parent_tree_oid=parent_tree_oid,
+            path_parts=path_parts,
+        )
+
+    def _build_flat_tree(
+        self,
+        repo: pygit2.Repository,
+        path_obj: Path,
+        blob_oid: pygit2.Oid,
+        c2pa_sidecar_payload: bytes | None,
+        parent_tree_oid: pygit2.Oid | None,
+    ) -> pygit2.Oid:
+        """Build root tree when artifacts are written at repository root."""
+
+        root_tb = (
+            repo.TreeBuilder(parent_tree_oid)
+            if parent_tree_oid is not None
             else repo.TreeBuilder()
         )
-        artifacts_tb.insert(path_obj.name, blob_oid, pygit2.GIT_FILEMODE_BLOB)
+        root_tb.insert(path_obj.name, blob_oid, pygit2.GIT_FILEMODE_BLOB)
         if c2pa_sidecar_payload is not None:
             sidecar_blob_oid = repo.create_blob(c2pa_sidecar_payload)
             sidecar_name = f"{path_obj.stem}.c2pa"
-            artifacts_tb.insert(sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB)
-        artifacts_oid = artifacts_tb.write()
+            root_tb.insert(sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB)
+        return root_tb.write()
 
-        # Git trees are single-level; insert expects one path component.
-        # For nested artifacts_directory (e.g. docs/artifacts), build bottom-up.
-        path_parts = self._artifacts_directory.split("/")
-        if len(path_parts) == 1:
-            root_tb = (
-                repo.TreeBuilder(parent_tree_oid)
-                if parent_tree_oid is not None
-                else repo.TreeBuilder()
-            )
-            root_tb.insert(self._artifacts_directory, artifacts_oid, pygit2.GIT_FILEMODE_TREE)
-            return root_tb.write()
+    def _build_single_dir_tree(
+        self,
+        repo: pygit2.Repository,
+        path_obj: Path,
+        blob_oid: pygit2.Oid,
+        c2pa_sidecar_payload: bytes | None,
+        parent_tree_oid: pygit2.Oid | None,
+    ) -> pygit2.Oid:
+        """Build tree when artifacts_directory is a single path segment."""
 
-        # Nested path: traverse down to build tree_stack, then build up.
+        artifacts_oid = self._build_artifacts_subtree_oid(
+            repo=repo,
+            path_obj=path_obj,
+            blob_oid=blob_oid,
+            c2pa_sidecar_payload=c2pa_sidecar_payload,
+            parent_tree_oid=parent_tree_oid,
+        )
+        root_tb = (
+            repo.TreeBuilder(parent_tree_oid)
+            if parent_tree_oid is not None
+            else repo.TreeBuilder()
+        )
+        root_tb.insert(self._artifacts_directory, artifacts_oid, pygit2.GIT_FILEMODE_TREE)
+        return root_tb.write()
+
+    def _build_nested_dir_tree(
+        self,
+        repo: pygit2.Repository,
+        path_obj: Path,
+        blob_oid: pygit2.Oid,
+        c2pa_sidecar_payload: bytes | None,
+        parent_tree_oid: pygit2.Oid | None,
+        path_parts: list[str],
+    ) -> pygit2.Oid:
+        """Build tree when artifacts_directory spans multiple segments."""
+
+        artifacts_oid = self._build_artifacts_subtree_oid(
+            repo=repo,
+            path_obj=path_obj,
+            blob_oid=blob_oid,
+            c2pa_sidecar_payload=c2pa_sidecar_payload,
+            parent_tree_oid=parent_tree_oid,
+        )
+        parent_tree = repo[parent_tree_oid] if parent_tree_oid else None
         current_tree: pygit2.Tree | None = parent_tree
         tree_stack: list[pygit2.Tree | None] = [current_tree]
         for part in path_parts[:-1]:
             if current_tree is not None and part in current_tree:
                 entry = current_tree[part]
                 obj = repo[entry.id]
-                if isinstance(obj, pygit2.Tree):
-                    current_tree = obj
-                else:
-                    current_tree = None
+                current_tree = obj if isinstance(obj, pygit2.Tree) else None
             else:
                 current_tree = None
             tree_stack.append(current_tree)
 
         current_oid = artifacts_oid
         current_mode = pygit2.GIT_FILEMODE_TREE
-        for i, part in reversed(list(enumerate(path_parts))):
-            tb = (
-                repo.TreeBuilder(tree_stack[i]) if tree_stack[i] is not None else repo.TreeBuilder()
+        for index, part in reversed(list(enumerate(path_parts))):
+            tree_builder = (
+                repo.TreeBuilder(tree_stack[index])
+                if tree_stack[index] is not None
+                else repo.TreeBuilder()
             )
-            tb.insert(part, current_oid, current_mode)
-            current_oid = tb.write()
+            tree_builder.insert(part, current_oid, current_mode)
+            current_oid = tree_builder.write()
             current_mode = pygit2.GIT_FILEMODE_TREE
         return current_oid
+
+    def _build_artifacts_subtree_oid(
+        self,
+        repo: pygit2.Repository,
+        path_obj: Path,
+        blob_oid: pygit2.Oid,
+        c2pa_sidecar_payload: bytes | None,
+        parent_tree_oid: pygit2.Oid | None,
+    ) -> pygit2.Oid:
+        """Build or update artifacts subtree and return its tree oid."""
+
+        existing_subtree_oid = self._resolve_existing_subtree_oid(
+            repo=repo,
+            parent_tree_oid=parent_tree_oid,
+            directory_path=self._artifacts_directory,
+        )
+        artifacts_tree_builder = (
+            repo.TreeBuilder(existing_subtree_oid)
+            if existing_subtree_oid is not None
+            else repo.TreeBuilder()
+        )
+        artifacts_tree_builder.insert(path_obj.name, blob_oid, pygit2.GIT_FILEMODE_BLOB)
+        if c2pa_sidecar_payload is not None:
+            sidecar_blob_oid = repo.create_blob(c2pa_sidecar_payload)
+            sidecar_name = f"{path_obj.stem}.c2pa"
+            artifacts_tree_builder.insert(
+                sidecar_name,
+                sidecar_blob_oid,
+                pygit2.GIT_FILEMODE_BLOB,
+            )
+        return artifacts_tree_builder.write()
+
+    @staticmethod
+    def _resolve_existing_subtree_oid(
+        repo: pygit2.Repository,
+        parent_tree_oid: pygit2.Oid | None,
+        directory_path: str,
+    ) -> pygit2.Oid | None:
+        """Resolve existing tree oid for directory path under parent tree."""
+
+        if parent_tree_oid is None or not directory_path:
+            return None
+        parent_tree = repo[parent_tree_oid]
+        if not isinstance(parent_tree, pygit2.Tree):
+            return None
+        current_tree: pygit2.Tree | None = parent_tree
+        for part in directory_path.split("/"):
+            if current_tree is None or part not in current_tree:
+                return None
+            obj = repo[current_tree[part].id]
+            if not isinstance(obj, pygit2.Tree):
+                return None
+            current_tree = obj
+        return current_tree.id

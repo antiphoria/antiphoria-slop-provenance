@@ -11,7 +11,8 @@ from src.env_config import (
     resolve_state_db_path,
 )
 from src.logging_config import get_log_context
-from src.repository import DedupRepository, SQLiteRepository
+from src.repository.dedup import DedupRepository
+from src.repository.sqlite import SQLiteRepository
 from src.runtime.cli_composition import (
     build_repository as build_cli_repository,
 )
