@@ -4,27 +4,28 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import logging
 import binascii
-from datetime import datetime, timezone
+import contextlib
+import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
 import oqs
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
+    PublicFormat,
     load_pem_private_key,
     load_pem_public_key,
-    PublicFormat,
 )
 
 from src.adapters.c2pa_manifest import (
     C2PAManifestArtifact,
     build_c2pa_sidecar_manifest,
 )
+from src.canonicalization import CANONICALIZATION_VERSION, compute_payload_hash
 from src.domain.events import (
     EventBusPort,
     StoryCurated,
@@ -33,13 +34,12 @@ from src.domain.events import (
     StorySigned,
 )
 from src.env_config import read_env_bool, read_env_optional, read_env_required
-from src.policies.licensing import get_license_id
-from src.canonicalization import CANONICALIZATION_VERSION, compute_payload_hash
+from src.logging_config import bind_log_context, should_log_route
 from src.models import (
-    Artifact,
-    AuthorAttestation,
     CRYPTO_ALGORITHM_ED25519,
     CRYPTO_ALGORITHM_ML_DSA_44,
+    Artifact,
+    AuthorAttestation,
     Curation,
     EmbeddedWatermark,
     GenerationContext,
@@ -54,8 +54,8 @@ from src.models import (
     canonical_json_bytes,
     sha256_hex,
 )
-from src.logging_config import bind_log_context, should_log_route
 from src.parsing import parse_artifact_markdown
+from src.policies.licensing import get_license_id
 
 _adapter_logger = logging.getLogger("src.adapters.crypto_notary")
 _ML_DSA_ALGORITHM = "ML-DSA-44"
@@ -200,10 +200,8 @@ class CryptoNotaryAdapter:
     def __del__(self) -> None:
         """Best-effort cleanup hook for adapter teardown."""
 
-        try:
+        with contextlib.suppress(Exception):
             self.clear_key_material()
-        except Exception:
-            pass
 
     def _resolve_private_key(self) -> bytes:
         """Resolve and load private key bytes from configured path."""
@@ -334,7 +332,7 @@ class CryptoNotaryAdapter:
             usage_metrics=event.usage_metrics,
             embedded_watermark=event.embedded_watermark,
             content_type=event.content_type,
-            license=event.license,
+            license_id=event.license,
             curation=None,
             author_attestation=None,
         )
@@ -364,7 +362,7 @@ class CryptoNotaryAdapter:
             usage_metrics=None,
             embedded_watermark=None,
             content_type=_DEFAULT_CONTENT_TYPE,
-            license=get_license_id("hybrid"),
+            license_id=get_license_id("hybrid"),
             curation=event.curation_metadata,
             author_attestation=None,
         )
@@ -392,7 +390,7 @@ class CryptoNotaryAdapter:
             usage_metrics=None,
             embedded_watermark=None,
             content_type=_DEFAULT_CONTENT_TYPE,
-            license=event.license,
+            license_id=event.license,
             curation=None,
             author_attestation=event.attestation,
             webauthn_attestation=event.webauthn_attestation,
@@ -450,7 +448,7 @@ class CryptoNotaryAdapter:
         usage_metrics: UsageMetrics | None,
         embedded_watermark: EmbeddedWatermark | None,
         content_type: str,
-        license: str,
+        license_id: str,
         curation: Curation | None,
         author_attestation: AuthorAttestation | None = None,
         webauthn_attestation: WebAuthnAttestation | None = None,
@@ -465,9 +463,9 @@ class CryptoNotaryAdapter:
         payload_hash = compute_payload_hash(body)
         unsigned_envelope = Artifact(
             title=title,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             contentType=content_type,
-            license=license,
+            license=license_id,
             provenance=Provenance(
                 source=source,
                 engineVersion=_DEFAULT_ENGINE_VERSION,

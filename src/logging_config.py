@@ -27,9 +27,9 @@ class LogContextData:
     artifact_id: str | None = None
 
 
-_log_context_var: contextvars.ContextVar[LogContextData] = contextvars.ContextVar(
+_log_context_var: contextvars.ContextVar[LogContextData | None] = contextvars.ContextVar(
     "log_context",
-    default=LogContextData(),
+    default=None,
 )
 
 
@@ -73,7 +73,11 @@ def should_log_route(level: str, env_path: Path | None = None) -> bool:
 
 def get_log_context() -> LogContextData:
     """Return the current log context (request_id, command, artifact_id)."""
-    return _log_context_var.get()
+    ctx = _log_context_var.get()
+    if ctx is None:
+        ctx = LogContextData()
+        _log_context_var.set(ctx)
+    return ctx
 
 
 def bind_log_context(
@@ -86,7 +90,7 @@ def bind_log_context(
 
     Only updates fields that are explicitly passed (not None).
     """
-    ctx = _log_context_var.get()
+    ctx = get_log_context()
     new_ctx = LogContextData(
         request_id=str(request_id) if request_id is not None else ctx.request_id,
         command=command if command is not None else ctx.command,

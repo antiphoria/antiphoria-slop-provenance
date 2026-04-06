@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import os
 import sys
 from pathlib import Path
 
+import src.runtime.cli_command_runtime as command_runtime
+from src.commands import verification as verification_commands
 from src.commands.admin import _run_admin_revoke_key_command
 from src.commands.maintenance import (
     _run_anchor_merkle_root_command,
@@ -29,7 +32,6 @@ from src.commands.pipeline import (
     _run_generate_command,
     _run_register_command,
 )
-from src.commands import verification as verification_commands
 from src.commands.verification import (
     _run_anchor_command,
     _run_audit_command,
@@ -47,7 +49,6 @@ from src.research_use_ack import (
     prompt_and_confirm_research_use,
     write_research_use_acknowledgment,
 )
-import src.runtime.cli_command_runtime as command_runtime
 from src.runtime.cli_command_runtime import (
     _build_provenance_services,
     _build_repository,
@@ -71,7 +72,7 @@ class OrchestratorLock:
         self._lock_path = lock_path
         self._fd: int | None = None
 
-    def __enter__(self) -> "OrchestratorLock":
+    def __enter__(self) -> OrchestratorLock:
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             self._fd = os.open(
@@ -92,10 +93,8 @@ class OrchestratorLock:
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         if self._fd is not None:
             os.close(self._fd)
-        try:
+        with contextlib.suppress(FileNotFoundError):
             self._lock_path.unlink()
-        except FileNotFoundError:
-            pass
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -184,14 +183,13 @@ async def _dispatch_impl(args: argparse.Namespace) -> int:
 def main() -> int:
     """Parse arguments and run the asynchronous CLI dispatcher."""
     argv = sys.argv[1:]
-    if not argv_requests_help_only(argv):
-        if not is_research_use_acknowledged():
-            if not sys.stdin.isatty():
-                print_non_interactive_research_ack_hint()
-                return 2
-            if not prompt_and_confirm_research_use():
-                return 2
-            write_research_use_acknowledgment()
+    if not argv_requests_help_only(argv) and not is_research_use_acknowledged():
+        if not sys.stdin.isatty():
+            print_non_interactive_research_ack_hint()
+            return 2
+        if not prompt_and_confirm_research_use():
+            return 2
+        write_research_use_acknowledgment()
 
     configure_logging()
     parser = build_parser()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,17 +16,17 @@ from cryptography.hazmat.primitives.serialization import (
     PrivateFormat,
 )
 
-from src.canonicalization import compute_payload_hash
 from src.adapters.c2pa_manifest import (
-    _normalize_private_key_to_pkcs8,
     _SDK_CARRIER_FORMAT,
     _SDK_MARKDOWN_ASSERTION_LABEL,
-    build_c2pa_validation_payload,
+    _normalize_private_key_to_pkcs8,
     build_c2pa_sidecar_manifest,
+    build_c2pa_validation_payload,
     build_sdk_bridge_payload,
     resolve_c2pa_mode,
     validate_c2pa_sidecar,
 )
+from src.canonicalization import compute_payload_hash
 from src.models import (
     Artifact,
     GenerationContext,
@@ -56,7 +56,7 @@ class _FakeC2paModule:
 
     class Signer:
         @classmethod
-        def from_info(cls, signer_info: object) -> "_FakeC2paModule.Signer":
+        def from_info(cls, signer_info: object) -> _FakeC2paModule.Signer:
             _ = signer_info
             return cls()
 
@@ -73,7 +73,7 @@ class _FakeC2paModule:
             return ["image/jpeg", "text/xml", "application/xml"]
 
         @classmethod
-        def from_json(cls, manifest_json: object) -> "_FakeC2paModule.Builder":
+        def from_json(cls, manifest_json: object) -> _FakeC2paModule.Builder:
             if not isinstance(manifest_json, str):
                 raise TypeError("from_json expects JSON string")
             return cls(manifest_json)
@@ -84,13 +84,13 @@ class _FakeC2paModule:
         def sign(
             self,
             signer: object,
-            format: str,
+            asset_format: str,
             source: object,
             dest: object | None = None,
         ) -> bytes:
             _ = signer
             _FakeC2paModule.last_payload = source.read()
-            _FakeC2paModule.last_format = format
+            _FakeC2paModule.last_format = asset_format
             _FakeC2paModule.last_manifest_json = self._manifest_json
             if dest is not None:
                 dest.write(b"FAKE-C2PA-SIDECAR")
@@ -131,7 +131,7 @@ class C2PAManifestTest(unittest.TestCase):
     def _build_artifact(self) -> Artifact:
         return Artifact(
             title="INCIDENT_TEST",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             contentType="text/markdown",
             license="CC0-1.0",
             provenance=Provenance(

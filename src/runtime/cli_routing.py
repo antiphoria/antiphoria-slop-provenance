@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 AsyncCommandHandler = Callable[[argparse.Namespace], Awaitable[int]]
 SyncCommandHandler = Callable[[argparse.Namespace], int]

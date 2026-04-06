@@ -21,6 +21,7 @@ from src.runtime.cli_composition import (
 # config regardless of CWD.
 _ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 _PROJECT_ROOT = _ENV_PATH.parent
+_runtime_logger = logging.getLogger(__name__)
 
 
 def _sanitize_service_name(name: str) -> str:
@@ -118,8 +119,8 @@ async def _health_writer_loop(
             import time
 
             health_path.write_text(str(int(time.time())), encoding="utf-8")
-        except Exception:
-            pass
+        except OSError:
+            _runtime_logger.debug("Health file write failed", exc_info=True)
         await asyncio.sleep(interval_sec)
 
 

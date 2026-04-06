@@ -138,7 +138,7 @@ def test_author_attestation_valid(classification: str) -> None:
             {"nested": {"b": 1, "a": 2}},
             b'{"nested":{"a":2,"b":1}}',
         ),
-        ({"emoji": "🚀"}, '{"emoji":"🚀"}'.encode("utf-8")),
+        ({"emoji": "🚀"}, '{"emoji":"🚀"}'.encode()),
         ({"a": 1, "b": 2}, b'{"a":1,"b":2}'),
     ],
 )

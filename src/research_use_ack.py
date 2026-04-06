@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 _ACK_ENV = "ANTIPHORIA_SLOP_PROVENANCE_RESEARCH_ACK"
@@ -52,7 +52,7 @@ def write_research_use_acknowledgment() -> None:
 
     path = _ack_file_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).isoformat()
+    stamp = datetime.now(UTC).isoformat()
     path.write_text(f"{_ACK_SENTINEL}\n{stamp}\n", encoding="utf-8")
 
 

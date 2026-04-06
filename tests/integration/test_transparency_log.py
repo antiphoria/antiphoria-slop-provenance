@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-import io
-import urllib.error
 
 from src.adapters.transparency_log import (
     TransparencyLogAdapter,

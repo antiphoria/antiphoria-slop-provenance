@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from src.commands.parser.admin import register_admin_parsers
 from src.commands.parser.maintenance import register_maintenance_parsers

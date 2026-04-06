@@ -9,7 +9,7 @@ import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
@@ -18,9 +18,9 @@ import pygit2
 
 from src import cli
 from src.adapters.git_ledger import GitLedgerAdapter
-from src.canonicalization import compute_payload_hash
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.transparency_log import TransparencyLogAdapter
+from src.canonicalization import compute_payload_hash
 from src.domain.events import StorySigned
 from src.infrastructure.event_bus import InMemoryEventBus
 from src.models import (
@@ -64,7 +64,7 @@ class _FakeVerificationService:
 def _build_story_signed_event(request_id: UUID, body: str) -> StorySigned:
     artifact = Artifact(
         title="Attestation Test Artifact",
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         contentType="text/markdown",
         license="CC0-1.0",
         provenance=Provenance(

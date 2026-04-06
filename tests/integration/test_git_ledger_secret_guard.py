@@ -6,7 +6,7 @@ import base64
 import hashlib
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -34,7 +34,7 @@ def _build_story_signed_event(
 ) -> StorySigned:
     artifact = Artifact(
         title="Safe Artifact",
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         contentType="text/markdown",
         license="CC-BY-4.0",
         provenance=Provenance(
@@ -85,10 +85,10 @@ class GitLedgerSecretGuardTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_rejects_prompt_containing_secret_pattern(self) -> None:
         event = _build_story_signed_event(
-            (
+            
                 "Prompt with leaked key "
                 "AIzaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"  # pragma: allowlist secret
-            )
+            
         )
 
         with self.assertRaises(RuntimeError):

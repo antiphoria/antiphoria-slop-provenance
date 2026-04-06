@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import unittest
-from uuid import uuid4
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 from src.adapters.provenance_telemetry import ProvenanceTelemetryAdapter
 from src.domain.events import StoryAnchored, StoryAudited
@@ -77,12 +77,11 @@ class ProvenanceTelemetryAdapterTest(unittest.IsolatedAsyncioTestCase):
         with patch(
             "src.adapters.provenance_telemetry.asyncio.to_thread",
             side_effect=_run_in_fake_thread,
-        ):
-            with self.assertLogs(
-                "src.adapters.provenance_telemetry",
-                level="ERROR",
-            ) as logs:
-                await adapter._on_story_audited(event)
+        ), self.assertLogs(
+            "src.adapters.provenance_telemetry",
+            level="ERROR",
+        ) as logs:
+            await adapter._on_story_audited(event)
 
         self.assertIn(
             "Failed to persist provenance telemetry",

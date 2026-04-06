@@ -24,14 +24,14 @@ from src.adapters.transparency_log import (
     TransparencyLogEntry,
 )
 from src.canonicalization import compute_payload_hash
+from src.git_tree_utils import tree_get_blob
+from src.logging_config import bind_log_context, get_log_extra, should_log_route
 from src.models import Artifact, sha256_hex
 from src.parsing import (
     parse_artifact_markdown,
     parse_artifact_markdown_text,
 )
-from src.logging_config import bind_log_context, get_log_extra, should_log_route
 from src.services.curation_service import extract_request_id_from_artifact_path
-from src.git_tree_utils import tree_get_blob
 
 _logger = logging.getLogger(__name__)
 

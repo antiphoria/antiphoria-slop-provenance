@@ -25,12 +25,6 @@ from src.infrastructure.event_bus import EventBus
 from src.logging_config import bind_log_context, should_log_route
 from src.models import AttestationQa, AuthorAttestation
 from src.ports import ProvenanceServicePort
-from src.secrets_guard import assert_secret_free
-from src.services.curation_service import (
-    build_curation_metadata,
-    extract_markdown_body,
-    extract_request_id_from_artifact_path,
-)
 from src.runtime.cli_command_runtime import (
     _capture_registration_ceremony,
     _default_repo_path,
@@ -42,6 +36,12 @@ from src.runtime.cli_command_runtime import (
     build_dispatch_error_handler,
     build_provenance_command_runtime,
     create_story_committed_future,
+)
+from src.secrets_guard import assert_secret_free
+from src.services.curation_service import (
+    build_curation_metadata,
+    extract_markdown_body,
+    extract_request_id_from_artifact_path,
 )
 
 _cli_logger = logging.getLogger("src.cli")

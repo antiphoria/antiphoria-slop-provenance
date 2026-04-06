@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Literal
 
 ArtifactLifecycleStatus = Literal[
@@ -53,4 +53,4 @@ class ArtifactRecord:
 def utc_now_iso() -> str:
     """Return current UTC timestamp as ISO-8601 string."""
 
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()

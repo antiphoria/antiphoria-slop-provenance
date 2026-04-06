@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import json
-
-import rfc8785
 from datetime import datetime
 from typing import Annotated, Any, Literal, TypeAlias
 from uuid import UUID, uuid4
 
+import rfc8785
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 CRYPTO_ALGORITHM_ML_DSA_44 = "CRYSTALS-Dilithium (NIST ML-DSA-44)"

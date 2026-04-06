@@ -5,12 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import re
-import socket
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -148,7 +147,7 @@ def build_supabase_publish_config(
 def _utc_now_iso() -> str:
     """Return current UTC timestamp as ISO-8601 string."""
 
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def publish_merkle_anchor(
@@ -225,11 +224,7 @@ def publish_merkle_anchor(
                 _sanitize_for_log(str(exc)),
             )
         return False
-    except (
-        urllib.error.URLError,
-        socket.timeout,
-        ConnectionError,
-    ) as exc:
+    except (TimeoutError, urllib.error.URLError, ConnectionError) as exc:
         _logger.warning(
             "Merkle anchor publish soft-fail. Local anchor secure. Error: %s",
             _sanitize_for_log(str(exc)),
@@ -273,13 +268,7 @@ def update_merkle_anchor_block_height(
                 resp,
                 context="Merkle anchor fetch response",
             ).decode("utf-8").strip()
-    except (
-        urllib.error.URLError,
-        urllib.error.HTTPError,
-        socket.timeout,
-        ConnectionError,
-        RuntimeError,
-    ) as exc:
+    except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, ConnectionError, RuntimeError) as exc:
         _logger.warning(
             "Merkle anchor fetch for update failed: %s",
             _sanitize_for_log(str(exc)),
@@ -323,13 +312,7 @@ def update_merkle_anchor_block_height(
                 context="Merkle anchor patch response",
             )
         return True
-    except (
-        urllib.error.URLError,
-        urllib.error.HTTPError,
-        socket.timeout,
-        ConnectionError,
-        RuntimeError,
-    ) as exc:
+    except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, ConnectionError, RuntimeError) as exc:
         _logger.warning(
             "Merkle anchor block height update failed: %s",
             _sanitize_for_log(str(exc)),
@@ -746,13 +729,7 @@ class TransparencyLogAdapter:
                 if not raw:
                     return None
                 return raw
-        except (
-            urllib.error.URLError,
-            urllib.error.HTTPError,
-            socket.timeout,
-            ConnectionError,
-            RuntimeError,
-        ) as exc:
+        except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, ConnectionError, RuntimeError) as exc:
             _logger.warning(
                 "Supabase broadcast soft-fail. Local anchor secure. Error: %s",
                 _sanitize_for_log(str(exc)),
@@ -842,7 +819,7 @@ class TransparencyLogAdapter:
                 "Remote transparency log fetch failed for "
                 f"artifact_hash={artifact_hash} with HTTP {exc.code}"
             ) from exc
-        except (urllib.error.URLError, socket.timeout, OSError) as exc:
+        except (TimeoutError, urllib.error.URLError, OSError) as exc:
             raise RuntimeError(
                 "Remote transparency log fetch failed for "
                 f"artifact_hash={artifact_hash}: {_sanitize_for_log(str(exc))}"

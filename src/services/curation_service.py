@@ -21,7 +21,7 @@ def extract_request_id_from_artifact_path(file_path: Path) -> UUID:
             raise RuntimeError(
                 "Invalid curated artifact filename format. Expected "
                 "'<request_id>.md' (preferred) or 'YYYYMMDDTHHMMSSZ_<request_id>.md'."
-            )
+            ) from None
         return UUID(match.group(1))
 
 

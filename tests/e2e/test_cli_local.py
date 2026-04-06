@@ -11,6 +11,7 @@ import pytest
 
 from src.adapters.transparency_log import TransparencyLogAdapter
 from src.merkle import build_merkle_root
+
 from .conftest import run_cli
 
 

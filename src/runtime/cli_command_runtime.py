@@ -5,12 +5,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import logging
+import shutil
 import subprocess
 import time
 import uuid as uuid_module
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 from uuid import UUID
 
 import pygit2
@@ -27,12 +29,17 @@ from src.models import RegistrationCeremony
 from src.repository.sqlite import SQLiteRepository
 from src.runtime.cli_composition import (
     build_provenance_services as _compose_provenance_services,
+)
+from src.runtime.cli_composition import (
     build_repository as _compose_repository,
+)
+from src.runtime.cli_composition import (
     resolve_tsa_ca_cert_path as _compose_tsa_ca_cert_path,
 )
 from src.services.provenance_service import ProvenanceService
 from src.services.verification_service import VerificationService
 
+_logger = logging.getLogger(__name__)
 _read_env_optional = read_env_optional
 _read_env_bool = read_env_bool
 
@@ -49,19 +56,23 @@ def _capture_registration_ceremony(env_path: Path) -> RegistrationCeremony:
     """Capture proof-of-environment metadata for human registration."""
     registration_utc_ms = int(time.time() * 1000)
     project_root = env_path.parent
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=5,
-        )
-        git_commit = (
-            result.stdout.strip() if result.returncode == 0 else "unknown"
-        )
-    except Exception:  # noqa: BLE001
+    git_exe = shutil.which("git")
+    if git_exe:
+        try:
+            result = subprocess.run(
+                [git_exe, "rev-parse", "HEAD"],
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=5,
+            )
+            git_commit = (
+                result.stdout.strip() if result.returncode == 0 else "unknown"
+            )
+        except (OSError, subprocess.SubprocessError):
+            git_commit = "unknown"
+    else:
         git_commit = "unknown"
     machine_id_hash: str | None = None
     if read_env_bool("CAPTURE_MACHINE_ID", default=False, env_path=env_path):
@@ -70,8 +81,8 @@ def _capture_registration_ceremony(env_path: Path) -> RegistrationCeremony:
             machine_id_hash = hashlib.sha256(
                 str(node).encode("utf-8")
             ).hexdigest()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:
+            _logger.debug("Machine id capture failed", exc_info=True)
     return RegistrationCeremony(
         registrationUtcMs=registration_utc_ms,
         orchestratorGitCommit=git_commit,
@@ -95,10 +106,10 @@ def _verify_git_commit(repository_path: Path, commit_oid: str) -> str:
         repo = pygit2.Repository(str(repository_path.resolve()))
     except (KeyError, pygit2.GitError) as exc:
         raise RuntimeError(
-            (
+            
                 "Unable to open git repository for verification: "
                 f"'{repository_path}'."
-            )
+            
         ) from exc
     try:
         commit = repo.revparse_single(commit_oid)

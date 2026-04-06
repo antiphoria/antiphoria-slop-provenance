@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Awaitable, Callable, Protocol, TypeVar
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from typing import Protocol, TypeVar
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,7 +27,7 @@ ErrorHandler = Callable[["EventHandlerError"], Awaitable[None]]
 def _utc_now() -> datetime:
     """Return timezone-aware UTC timestamp."""
 
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class StoryRequested(BaseModel):

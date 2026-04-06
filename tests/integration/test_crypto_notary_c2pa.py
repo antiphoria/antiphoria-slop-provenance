@@ -8,9 +8,9 @@ from unittest.mock import patch
 from src.adapters.crypto_notary import CryptoNotaryAdapter
 from src.infrastructure.event_bus import InMemoryEventBus
 from src.models import (
+    CRYPTO_ALGORITHM_ED25519,
     AttestationQa,
     AuthorAttestation,
-    CRYPTO_ALGORITHM_ED25519,
 )
 
 
@@ -30,24 +30,23 @@ class CryptoNotaryC2PATest(unittest.IsolatedAsyncioTestCase):
         with patch(
             "src.adapters.crypto_notary.build_c2pa_sidecar_manifest",
             side_effect=RuntimeError("sdk-sidecar-failed"),
-        ):
-            with self.assertRaises(RuntimeError) as error_ctx:
-                await adapter._build_signed_artifact(
-                    title="INCIDENT_TEST",
-                    source="synthetic",
-                    model_id="gemini-2.5-flash",
-                    body="payload body",
-                    prompt="prompt",
-                    system_instruction="system",
-                    temperature=0.1,
-                    top_p=0.9,
-                    top_k=5,
-                    usage_metrics=None,
-                    embedded_watermark=None,
-                    content_type="text/markdown",
-                    license="CC0-1.0",
-                    curation=None,
-                )
+        ), self.assertRaises(RuntimeError) as error_ctx:
+            await adapter._build_signed_artifact(
+                title="INCIDENT_TEST",
+                source="synthetic",
+                model_id="gemini-2.5-flash",
+                body="payload body",
+                prompt="prompt",
+                system_instruction="system",
+                temperature=0.1,
+                top_p=0.9,
+                top_k=5,
+                usage_metrics=None,
+                embedded_watermark=None,
+                content_type="text/markdown",
+                license="CC0-1.0",
+                curation=None,
+            )
         self.assertIn("fail-closed", str(error_ctx.exception))
 
     async def test_human_registration_with_attestation_produces_author_attestation_in_envelope(
@@ -108,7 +107,7 @@ class CryptoNotaryC2PATest(unittest.IsolatedAsyncioTestCase):
             len(artifact.provenance.author_attestation.attestations),
             4,
         )
-        dumped = artifact.provenance.author_attestation.model_dump(by_alias=True)
+        artifact.provenance.author_attestation.model_dump(by_alias=True)
         self.assertIn("authorAttestation", str(artifact.model_dump(by_alias=True)))
 
     async def test_signing_requires_ed25519_private_key(self) -> None:

@@ -7,7 +7,7 @@ import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 from uuid import UUID, uuid4
@@ -44,7 +44,7 @@ def _build_human_story_signed_event(
     artifact_hash = compute_payload_hash(body)
     artifact = Artifact(
         title=title,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         contentType="text/markdown",
         license="ARR",
         provenance=Provenance(
@@ -178,7 +178,7 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
                     body=event.body,
                     title=event.title,
                 )
-                await getattr(self, "_event_bus").emit(signed)
+                await self._event_bus.emit(signed)
 
             with patch(
                 "src.adapters.crypto_notary.CryptoNotaryAdapter._on_story_human_registered",
@@ -283,7 +283,7 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
                         body=event.body,
                         title=event.title,
                     )
-                    await getattr(self, "_event_bus").emit(signed)
+                    await self._event_bus.emit(signed)
 
                 with patch(
                     "src.adapters.crypto_notary.CryptoNotaryAdapter._on_story_human_registered",

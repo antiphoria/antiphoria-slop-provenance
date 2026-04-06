@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import logging
 import binascii
+import logging
 from pathlib import Path
 
 import pygit2
@@ -18,8 +18,8 @@ from filelock import FileLock
 from src.artifact_serialization import render_artifact_markdown
 from src.domain.events import EventBusPort, StoryCommitted, StorySigned
 from src.env_config import read_env_bool, read_env_optional
-from src.logging_config import bind_log_context, should_log_route
 from src.lock_paths import build_repo_ref_lock_path
+from src.logging_config import bind_log_context, should_log_route
 from src.models import sha256_hex
 from src.secrets_guard import assert_secret_free
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import logging
 import re
@@ -15,20 +16,20 @@ from uuid import UUID
 import pygit2
 from filelock import FileLock
 
-from src.env_config import read_env_bool, read_env_optional
-from src.logging_config import bind_log_context, get_log_extra, should_log_route
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.ots_adapter import OTSAdapter
-from src.adapters.rfc3161_tsa import RFC3161TSAAdapter, TimestampVerification
 from src.adapters.ots_queue import OtsQueueAdapter
+from src.adapters.rfc3161_tsa import RFC3161TSAAdapter, TimestampVerification
 from src.adapters.transparency_log import TransparencyLogAdapter, TransparencyLogEntry
+from src.artifact_serialization import render_artifact_markdown
 from src.canonicalization import canonicalize_body_for_hash, compute_payload_hash
 from src.domain.events import StoryOtsPending
-from src.models import Artifact, sha256_hex
-from src.artifact_serialization import render_artifact_markdown
-from src.parsing import parse_artifact_markdown, parse_artifact_markdown_text
+from src.env_config import read_env_bool, read_env_optional
 from src.git_tree_utils import tree_get_blob
 from src.lock_paths import build_repo_ref_lock_path
+from src.logging_config import bind_log_context, get_log_extra, should_log_route
+from src.models import Artifact, sha256_hex
+from src.parsing import parse_artifact_markdown, parse_artifact_markdown_text
 
 _logger = logging.getLogger(__name__)
 _BRANCH_LOG_PATH = ".provenance/transparency-log.jsonl"
@@ -802,14 +803,12 @@ class ProvenanceService:
             or "refs/heads/main"
         )
         global_log = ""
-        try:
+        with contextlib.suppress(RuntimeError):
             global_log = self._read_branch_file(
                 repository_path=repository_path,
                 ref_name=global_ref,
                 relative_path=_BRANCH_LOG_PATH,
             )
-        except RuntimeError:
-            pass
         return self._read_latest_entry_hash(global_log) or self._read_latest_entry_hash(
             branch_log_content
         )

@@ -130,9 +130,8 @@ class RFC3161TSAAdapterTest(unittest.TestCase):
             with patch(
                 "src.adapters.rfc3161_tsa.shutil.which",
                 return_value=str(openssl_bin),
-            ):
-                with patch.dict("os.environ", {}, clear=True):
-                    env = adapter._openssl_env()
+            ), patch.dict("os.environ", {}, clear=True):
+                env = adapter._openssl_env()
 
             self.assertEqual(env.get("OPENSSL_CONF"), str(openssl_conf))
 
@@ -164,10 +163,9 @@ class RFC3161TSAAdapterTest(unittest.TestCase):
             adapter,
             "_build_query_file",
             side_effect=fake_build_query,
-        ):
-            with patch("urllib.request.urlopen", return_value=response):
-                with self.assertRaises(RuntimeError) as ctx:
-                    adapter.request_timestamp_token(digest_hex="a" * 64)
+        ), patch("urllib.request.urlopen", return_value=response):
+            with self.assertRaises(RuntimeError) as ctx:
+                adapter.request_timestamp_token(digest_hex="a" * 64)
 
         self.assertIn("exceeded maximum allowed size", str(ctx.exception))
 

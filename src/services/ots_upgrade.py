@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import logging
 from pathlib import Path
 from typing import Any, Protocol
@@ -121,15 +122,13 @@ async def process_single_ots_record(
                 payload_bytes=payload_bytes,
             )
             if not upgraded or final_ots_bytes is None:
-                try:
+                with contextlib.suppress(ValueError, TypeError):
                     await asyncio.to_thread(
                         ots_queue.append_failed,
                         request_id,
                         "OTS upgrade failed or proof did not verify",
                         artifact_hash=record.artifact_hash,
                     )
-                except (ValueError, TypeError):
-                    pass
                 return
             if block_height is None:
                 _logger.info(

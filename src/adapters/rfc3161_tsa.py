@@ -314,11 +314,11 @@ class RFC3161TSAAdapter:
         if process.returncode != 0:
             stderr = process.stderr.strip() or process.stdout.strip()
             raise RuntimeError(
-                (
+                
                     "OpenSSL ts query generation failed. "
                     "Ensure OpenSSL is available. "
                     f"Details: {stderr or '<no error output>'}"
-                )
+                
             )
 
     def _run_ts_verify(

@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import base64
 import json
+from datetime import UTC
 from pathlib import Path
 from uuid import UUID
 
@@ -306,9 +307,9 @@ def _run_anchor_merkle_root_command(args: argparse.Namespace) -> int:
         print(f"OTS stamp failed: {exc}")
         return 1
 
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     ots_rel = f".provenance/merkle-{ts}.ots"
     ots_full = repository_path / ots_rel
     ots_full.parent.mkdir(parents=True, exist_ok=True)
@@ -318,7 +319,7 @@ def _run_anchor_merkle_root_command(args: argparse.Namespace) -> int:
     snapshot = {
         "merkle_root": merkle_root,
         "entry_count": len(entries),
-        "anchored_at": datetime.now(timezone.utc).isoformat(),
+        "anchored_at": datetime.now(UTC).isoformat(),
         "ots_path": ots_rel,
         "bitcoin_block_height": None,
     }

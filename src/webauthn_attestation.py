@@ -70,8 +70,8 @@ def get_webauthn_assertion(
     try:
         from fido2.hid import CtapHidDevice
         from fido2.webauthn import (
-            PublicKeyCredentialRequestOptions,
             PublicKeyCredentialDescriptor,
+            PublicKeyCredentialRequestOptions,
         )
     except ImportError:
         return None
@@ -96,7 +96,6 @@ def get_webauthn_assertion(
         return None
 
     from fido2.client import Fido2Client
-    from fido2.ctap2 import Ctap2
 
     client = Fido2Client(devs[0], f"https://{rp_id}")
     options = PublicKeyCredentialRequestOptions(
@@ -231,9 +230,9 @@ def verify_webauthn_assertion(
             pub_key_b64 += "=" * padding
         pub_key_bytes = base64.urlsafe_b64decode(pub_key_b64)
         cose_key = CoseKey.from_cbor(cbor.loads(pub_key_bytes))
+        from cryptography.hazmat.backends import default_backend
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.backends import default_backend
 
         if cose_key.alg == -7:
             curve = ec.SECP256R1()

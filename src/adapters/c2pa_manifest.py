@@ -6,7 +6,7 @@ import io
 import json
 import logging
 from dataclasses import dataclass
-from datetime import timezone
+from datetime import UTC
 from pathlib import Path
 from typing import Any, Literal, Protocol
 from xml.sax.saxutils import escape as _xml_escape
@@ -19,15 +19,15 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
 )
 
-from src.env_config import (
-    read_env_choice,
-    read_env_optional,
-    read_env_required,
-)
 from src.canonicalization import (
     canonicalize_body,
     canonicalize_body_for_hash,
     compute_payload_hash,
+)
+from src.env_config import (
+    read_env_choice,
+    read_env_optional,
+    read_env_required,
 )
 from src.models import Artifact, canonical_json_bytes, sha256_hex
 
@@ -127,7 +127,7 @@ class MvpC2PAManifestProvider:
                         "digitalSourceType": (
                             "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"
                         ),
-                        "when": envelope.timestamp.astimezone(timezone.utc).isoformat(),
+                        "when": envelope.timestamp.astimezone(UTC).isoformat(),
                     }
                 ],
                 "c2pa.asset": {
@@ -215,7 +215,7 @@ class SdkC2PAManifestProvider:
                                     "digitalsourcetype/"
                                     "trainedAlgorithmicMedia"
                                 ),
-                                "when": (envelope.timestamp.astimezone(timezone.utc).isoformat()),
+                                "when": (envelope.timestamp.astimezone(UTC).isoformat()),
                             }
                         ]
                     },

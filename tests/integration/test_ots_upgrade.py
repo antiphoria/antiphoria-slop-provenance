@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC
 from pathlib import Path
 from uuid import uuid4
 
@@ -58,9 +59,9 @@ class FakeProvenanceService:
 
 def _insert_artifact_record(repo: SQLiteRepository, request_id: str) -> None:
     """Insert minimal artifact record for process_single_ots_record."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     with repo._connect() as conn:
         conn.execute(
             """

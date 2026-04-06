@@ -40,11 +40,9 @@ def tree_get_blob(
     if not parts:
         return None
     current: pygit2.Tree | None = tree
-    depth = 0
-    for part in parts[:-1]:
+    for depth, part in enumerate(parts[:-1]):
         if depth >= MAX_TREE_DEPTH:
             return None
-        depth += 1
         if current is None or part not in current:
             return None
         entry = current[part]
@@ -73,11 +71,9 @@ def tree_get_entry(
     if not parts:
         return None
     current: pygit2.Tree | None = tree
-    depth = 0
-    for part in parts[:-1]:
+    for depth, part in enumerate(parts[:-1]):
         if depth >= MAX_TREE_DEPTH:
             return None
-        depth += 1
         if current is None or part not in current:
             return None
         entry = current[part]

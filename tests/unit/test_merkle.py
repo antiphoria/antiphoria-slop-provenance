@@ -141,8 +141,8 @@ def test_verify_merkle_proof_odd_sized_trees() -> None:
 
 
 try:
-    from hypothesis import given
     import hypothesis.strategies as st
+    from hypothesis import given
 
     @given(
         st.lists(

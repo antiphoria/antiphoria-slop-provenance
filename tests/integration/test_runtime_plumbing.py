@@ -15,7 +15,7 @@ from src.runtime.artifact_resolve import _resolve_artifact_branch_target
 def _create_branch_artifact_commit(repo_path: Path, request_id: str) -> str:
     repo = pygit2.Repository(str(repo_path))
     tree_builder = repo.TreeBuilder()
-    blob_oid = repo.create_blob(f"payload for {request_id}\n".encode("utf-8"))
+    blob_oid = repo.create_blob(f"payload for {request_id}\n".encode())
     tree_builder.insert(f"{request_id}.md", blob_oid, pygit2.GIT_FILEMODE_BLOB)
     tree_oid = tree_builder.write()
 
