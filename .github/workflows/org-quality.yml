@@ -1,47 +1,24 @@
-name: Org Quality
+# Python-focused org quality gate template.
+name: Org Quality (Python)
 
 on:
   pull_request:
   push:
     branches:
-      - master
-      - main
+      - $default-branch
+  workflow_dispatch:
 
 permissions:
   contents: read
-  # Required by antiphoria/.github quality-gate (trivy-sarif uploads SARIF).
-  security-events: write
 
 jobs:
   quality-gate:
     uses: antiphoria/.github/.github/workflows/quality-gate.yml@main
     with:
       policy-ref: main
-      python-version: "3.12"
-
-  python-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install system dependencies and build liboqs
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgit2-dev pkg-config cmake ninja-build libssl-dev build-essential
-          # Manually build and install the C library
-          git clone --branch main https://github.com/open-quantum-safe/liboqs.git
-          cd liboqs
-          mkdir build && cd build
-          cmake -GNinja -DOQS_USE_OPENSSL=ON -DCMAKE_INSTALL_PREFIX=/usr/local ..
-          ninja
-          sudo ninja install
-          sudo ldconfig
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install -e ".[dev]"
-      - name: Run tests
-        run: pytest -v
+      run-trivy: true
+      run-python-ruff: true
+      run-python-test: true
+      run-python-codeaudit: true
+      run-node-quality: false
+      run-ci-handoff: true
