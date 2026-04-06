@@ -7,6 +7,7 @@ bit-rotted dependencies. All operations run via subprocess with 60s timeout.
 from __future__ import annotations
 
 import base64
+import binascii
 import logging
 import os
 import re
@@ -133,6 +134,11 @@ class OTSAdapter:
                 _logger.warning("ots stamp timed out after %s seconds", e.timeout)
                 raise
             proof_path = temp_path.with_suffix(".md.ots")
+            if not proof_path.exists():
+                raise RuntimeError(
+                    "ots stamp completed without creating proof file "
+                    f"at '{proof_path}'."
+                )
             return proof_path.read_bytes()
 
     def upgrade_ots_proof(
@@ -148,7 +154,12 @@ class OTSAdapter:
         upgrade to extract bitcoin_block_height. Returns (upgraded, final_ots_bytes, block_height).
         """
         bin_ = ots_bin or self._ots_bin
-        pending_bytes = base64.b64decode(pending_ots_b64, validate=True)
+        try:
+            pending_bytes = base64.b64decode(pending_ots_b64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise RuntimeError(
+                "Invalid pending_ots_b64 payload: expected base64-encoded OTS proof bytes."
+            ) from exc
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             proof_path = temp_path / "proof.ots"
@@ -175,6 +186,12 @@ class OTSAdapter:
                 _logger.warning("ots upgrade timed out after %s seconds", e.timeout)
                 return False, None, None
 
+            if not proof_path.exists():
+                _logger.warning(
+                    "ots upgrade completed without output proof file at %s",
+                    proof_path,
+                )
+                return False, None, None
             final_bytes = proof_path.read_bytes()
 
             block_height: int | None = None
@@ -214,7 +231,7 @@ class OTSAdapter:
         ots_bin: str,
         timeout: int,
     ) -> tuple[bool, int | None]:
-        """Run ots verify (Go dialect: proof then payload, no -f flag)."""
+        """Run ots verify using Go CLI dialect (proof then payload, no -f)."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             payload_path = temp_path / "payload.md"
@@ -234,7 +251,8 @@ class OTSAdapter:
                 return False, None
             if result.returncode != 0:
                 _logger.warning(
-                    "ots verify failed: returncode=%s stdout=%s stderr=%s",
+                    "ots verify failed: returncode=%s stdout=%s stderr=%s "
+                    "(expected Go ots dialect args: verify <proof> <payload>)",
                     result.returncode,
                     _sanitize_for_log(result.stdout or ""),
                     _sanitize_for_log(result.stderr or ""),
@@ -262,6 +280,10 @@ class OTSAdapter:
                     _sanitize_for_log(result.stderr or ""),
                 )
                 return False, None
-            match = re.search(r"block\s*\[?(\d+)\]?", out, re.IGNORECASE)
+            match = re.search(
+                r"\bblock\b\s*\[?#?(\d{4,})\]?",
+                out,
+                re.IGNORECASE,
+            )
             block_height = int(match.group(1)) if match else None
             return True, block_height

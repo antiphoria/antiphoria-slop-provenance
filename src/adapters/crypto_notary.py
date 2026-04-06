@@ -114,6 +114,12 @@ def _sign_ed25519(private_key_bytes: bytes, message: bytes) -> bytes:
     return key.sign(message)
 
 
+def _sign_ed25519_with_key(private_key: Ed25519PrivateKey, message: bytes) -> bytes:
+    """Sign a message with a preloaded Ed25519 private key."""
+
+    return private_key.sign(message)
+
+
 def _load_ed25519_private_key(private_key_bytes: bytes) -> Ed25519PrivateKey:
     """Load Ed25519 private key from PEM or raw bytes."""
 
@@ -148,10 +154,15 @@ class CryptoNotaryAdapter:
         self._env_path = env_path or Path(".env")
         self._private_key: bytes | None = None
         self._ed25519_private_key: bytes | None = None
+        self._ed25519_private_key_obj: Ed25519PrivateKey | None = None
         self._ed25519_signer_fingerprint: str | None = None
         if require_private_key:
             self._private_key = self._resolve_private_key()
-            self._ed25519_private_key, self._ed25519_signer_fingerprint = (
+            (
+                self._ed25519_private_key,
+                self._ed25519_signer_fingerprint,
+                self._ed25519_private_key_obj,
+            ) = (
                 self._resolve_ed25519_key()
             )
         self._signer_fingerprint = self._resolve_signer_fingerprint()
@@ -164,9 +175,35 @@ class CryptoNotaryAdapter:
     async def start(self) -> None:
         """Subscribe to generation and curation events."""
 
+        if self._private_key is None or self._ed25519_private_key is None:
+            _adapter_logger.debug(
+                "CryptoNotaryAdapter running without private keys; "
+                "skipping signing event subscriptions."
+            )
+            return
         await self._event_bus.subscribe(StoryGenerated, self._on_story_generated)
         await self._event_bus.subscribe(StoryCurated, self._on_story_curated)
         await self._event_bus.subscribe(StoryHumanRegistered, self._on_story_human_registered)
+
+    def clear_key_material(self) -> None:
+        """Best-effort cleanup of in-memory private key references."""
+
+        self._private_key = None
+        self._ed25519_private_key = None
+        self._ed25519_private_key_obj = None
+
+    def close(self) -> None:
+        """Release sensitive in-memory key references."""
+
+        self.clear_key_material()
+
+    def __del__(self) -> None:
+        """Best-effort cleanup hook for adapter teardown."""
+
+        try:
+            self.clear_key_material()
+        except Exception:
+            pass
 
     def _resolve_private_key(self) -> bytes:
         """Resolve and load private key bytes from configured path."""
@@ -204,8 +241,8 @@ class CryptoNotaryAdapter:
                 return "unknown"
             return sha256_hex(self._private_key)[:32]
 
-    def _resolve_ed25519_key(self) -> tuple[bytes, str]:
-        """Resolve Ed25519 private key and fingerprint. Required for signing."""
+    def _resolve_ed25519_key(self) -> tuple[bytes, str, Ed25519PrivateKey]:
+        """Resolve Ed25519 private key bytes, fingerprint, and parsed key object."""
 
         path_value = read_env_required(
             _ED25519_PRIVATE_KEY_ENV,
@@ -232,7 +269,7 @@ class CryptoNotaryAdapter:
             key = _load_ed25519_private_key(key_bytes)
             pub_bytes = _ed25519_public_key_bytes(key)
             fingerprint = sha256_hex(pub_bytes)[:32]
-            return key_bytes, fingerprint
+            return key_bytes, fingerprint, key
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(
                 f"Failed to load Ed25519 private key from '{key_path}': {exc}"
@@ -475,6 +512,8 @@ class CryptoNotaryAdapter:
             envelope=unsigned_envelope,
             payload_sha256_hex=payload_hash,
             manifest_sha256_hex=(None if c2pa_manifest is None else c2pa_manifest.manifest_hash),
+            # NOTE: Non-chain mode intentionally signs with prev_hash=None.
+            # TODO: Thread ledger hash-linking into notary signatures when available.
             prev_hash=None,
             canonicalization_version=CANONICALIZATION_VERSION,
         )
@@ -493,11 +532,18 @@ class CryptoNotaryAdapter:
             ),
             payloadCanonicalization=CANONICALIZATION_VERSION,
         )
-        hybrid_sig_bytes = await asyncio.to_thread(
-            _sign_ed25519,
-            self._ed25519_private_key,
-            signing_hash.encode("utf-8"),
-        )
+        if self._ed25519_private_key_obj is not None:
+            hybrid_sig_bytes = await asyncio.to_thread(
+                _sign_ed25519_with_key,
+                self._ed25519_private_key_obj,
+                signing_hash.encode("utf-8"),
+            )
+        else:
+            hybrid_sig_bytes = await asyncio.to_thread(
+                _sign_ed25519,
+                self._ed25519_private_key,
+                signing_hash.encode("utf-8"),
+            )
         hybrid_signature = SignatureBlock(
             cryptoAlgorithm=CRYPTO_ALGORITHM_ED25519,
             artifactHash=payload_hash,
@@ -560,6 +606,7 @@ class CryptoNotaryAdapter:
             envelope=envelope,
             payload_sha256_hex=payload_hash,
             manifest_sha256_hex=manifest_hash,
+            # Verification mirrors signing's current non-chain prev_hash behavior.
             prev_hash=None,
             canonicalization_version=envelope.signature.payload_canonicalization,
         )

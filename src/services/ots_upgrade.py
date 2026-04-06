@@ -200,6 +200,7 @@ async def process_single_ots_record(
                 request_id,
                 block_height,
                 artifact_hash=record.artifact_hash,
+                final_ots_b64=final_b64,
             )
 
             # 4. Emit (skip when bus is None, e.g. CLI path)

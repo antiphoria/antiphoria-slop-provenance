@@ -7,15 +7,15 @@ import logging
 import re
 import socket
 import urllib.error
-from dataclasses import replace
-from filelock import FileLock
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+from filelock import FileLock
 
 from src.env_config import read_env_optional
 from src.models import canonical_json_bytes, sha256_hex
@@ -23,6 +23,7 @@ from src.models import canonical_json_bytes, sha256_hex
 _logger = logging.getLogger(__name__)
 _MAX_REMOTE_RESPONSE_BYTES = 1_048_576
 _ALLOWED_OUTBOUND_SCHEMES = frozenset(("http", "https"))
+_MAX_REMOTE_TIMEOUT_SEC = 5.0
 
 
 def _sanitize_for_log(raw: str, max_len: int = 200) -> str:
@@ -53,6 +54,14 @@ def _read_response_bytes_bounded(
             f"{context} exceeded maximum allowed size ({max_bytes} bytes)."
         )
     return raw
+
+
+def _normalize_remote_timeout(timeout_sec: float) -> float:
+    """Return bounded timeout for all outbound transparency log calls."""
+
+    if timeout_sec <= 0:
+        return _MAX_REMOTE_TIMEOUT_SEC
+    return min(timeout_sec, _MAX_REMOTE_TIMEOUT_SEC)
 
 
 def _hash_payload_from_parts(
@@ -155,6 +164,7 @@ def publish_merkle_anchor(
     """Publish Merkle anchor to Supabase merkle_anchors table.
 
     Returns True on success, False on soft-fail (e.g. network error).
+    Outbound timeout is capped by `_MAX_REMOTE_TIMEOUT_SEC`.
     """
     if not publish_url or not publish_url.strip() or not publish_headers:
         return False
@@ -176,7 +186,7 @@ def publish_merkle_anchor(
         "otsPath": ots_path,
         "bitcoinBlockHeight": bitcoin_block_height,
     }
-    body = {"payload": payload}
+    request_body = {"payload": payload}
     headers = {
         "Content-Type": "application/json",
         **publish_headers,
@@ -185,12 +195,13 @@ def publish_merkle_anchor(
         publish_url,
         method="POST",
         headers=headers,
-        data=json.dumps(body).encode("utf-8"),
+        data=json.dumps(request_body).encode("utf-8"),
     )
+    timeout = _normalize_remote_timeout(timeout_sec)
     try:
         with urllib.request.urlopen(  # noqa: S310
             request,
-            timeout=min(timeout_sec, 5.0),
+            timeout=timeout,
         ) as response:
             _read_response_bytes_bounded(
                 response,
@@ -199,16 +210,16 @@ def publish_merkle_anchor(
             return True
     except urllib.error.HTTPError as exc:
         try:
-            body = _read_response_bytes_bounded(
+            error_body = _read_response_bytes_bounded(
                 exc,
                 context="Merkle anchor publish error body",
             ).decode("utf-8", errors="replace")
             _logger.warning(
                 "Merkle anchor publish soft-fail. Local anchor secure. HTTP %s: %s",
                 exc.code,
-                _sanitize_for_log(body or str(exc)),
+                _sanitize_for_log(error_body or str(exc)),
             )
-        except Exception:
+        except RuntimeError:
             _logger.warning(
                 "Merkle anchor publish soft-fail. Local anchor secure. Error: %s",
                 _sanitize_for_log(str(exc)),
@@ -236,6 +247,7 @@ def update_merkle_anchor_block_height(
     """PATCH merkle_anchors row by rootHash to set bitcoinBlockHeight.
 
     Returns True on success, False on soft-fail.
+    Outbound timeout is capped by `_MAX_REMOTE_TIMEOUT_SEC`.
     """
     if not publish_url or not publish_url.strip() or not publish_headers:
         return False
@@ -254,8 +266,9 @@ def update_merkle_anchor_block_height(
     get_url = f"{publish_url.rstrip('/')}?{query}"
     headers = {k: v for k, v in publish_headers.items() if k != "Prefer"}
     req = urllib.request.Request(get_url, method="GET", headers=headers)
+    timeout = _normalize_remote_timeout(timeout_sec)
     try:
-        with urllib.request.urlopen(req, timeout=min(timeout_sec, 5.0)) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = _read_response_bytes_bounded(
                 resp,
                 context="Merkle anchor fetch response",
@@ -304,7 +317,7 @@ def update_merkle_anchor_block_height(
         data=json.dumps(body).encode("utf-8"),
     )
     try:
-        with urllib.request.urlopen(req, timeout=min(timeout_sec, 5.0)) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             _read_response_bytes_bounded(
                 resp,
                 context="Merkle anchor patch response",
@@ -387,6 +400,10 @@ class TransparencyLogAdapter:
 
         Writes to local log before publishing to avoid remote-only desync.
         Uses file locking to prevent interleaved writes from concurrent workers.
+        Remote publication and receipt persistence happen outside the append lock,
+        so concurrent writers may publish out of local append order. The local
+        hash chain remains canonical because `previousEntryHash` is computed from
+        locked local state before any remote call.
         """
         lock_path = Path(str(self._log_path) + ".lock")
         with FileLock(lock_path):
@@ -406,12 +423,16 @@ class TransparencyLogAdapter:
                 log_file.write(json.dumps(serializable, sort_keys=True))
                 log_file.write("\n")
         receipt = self.publish_entry(serializable)
-        return replace(entry, remote_receipt=receipt) if receipt else entry
+        if not receipt:
+            return entry
+        self._persist_remote_receipt(entry_id=entry.entry_id, remote_receipt=receipt)
+        return replace(entry, remote_receipt=receipt)
 
     def publish_entry(self, record: dict[str, Any]) -> str | None:
         """Publish a transparency record to remote when configured.
 
         Call after local persistence to avoid remote-only desync.
+        This operation does not acquire the append lock.
         """
         return self._publish_entry(record)
 
@@ -616,20 +637,77 @@ class TransparencyLogAdapter:
 
         if not self._log_path.exists():
             return None
-        lines = self._log_path.read_text(encoding="utf-8").splitlines()
-        for raw in reversed(lines):
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                loaded = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-            latest = loaded.get("entryHash")
-            if latest is None:
-                continue
-            return str(latest)
+        file_size = self._log_path.stat().st_size
+        if file_size <= 0:
+            return None
+        window_size = min(4096, file_size)
+        while True:
+            start = file_size - window_size
+            with self._log_path.open("rb") as handle:
+                handle.seek(start)
+                chunk = handle.read(window_size)
+            lines = chunk.splitlines()
+            if start > 0 and lines:
+                lines = lines[1:]
+            for raw in reversed(lines):
+                stripped = raw.strip()
+                if not stripped:
+                    continue
+                try:
+                    loaded = json.loads(stripped.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                latest = loaded.get("entryHash")
+                if latest is None:
+                    continue
+                return str(latest)
+            if window_size >= file_size:
+                break
+            window_size = min(file_size, window_size * 2)
         return None
+
+    def _persist_remote_receipt(
+        self,
+        *,
+        entry_id: str,
+        remote_receipt: str,
+    ) -> None:
+        """Persist remote receipt for an existing local entry id."""
+
+        lock_path = Path(str(self._log_path) + ".lock")
+        with FileLock(lock_path):
+            if not self._log_path.exists():
+                _logger.warning(
+                    "Cannot persist remote receipt; log file is missing entry_id=%s",
+                    entry_id,
+                )
+                return
+            lines = self._log_path.read_text(encoding="utf-8").splitlines()
+            updated = False
+            for index in range(len(lines) - 1, -1, -1):
+                raw = lines[index].strip()
+                if not raw:
+                    continue
+                try:
+                    loaded = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if str(loaded.get("entryId")) != entry_id:
+                    continue
+                loaded["remoteReceipt"] = remote_receipt
+                lines[index] = json.dumps(loaded, sort_keys=True)
+                updated = True
+                break
+            if not updated:
+                _logger.warning(
+                    "Cannot persist remote receipt; entry_id=%s was not found in local log",
+                    entry_id,
+                )
+                return
+            rewritten = "\n".join(lines)
+            if rewritten and not rewritten.endswith("\n"):
+                rewritten += "\n"
+            self._log_path.write_text(rewritten, encoding="utf-8")
 
     def _publish_entry(self, payload: dict[str, Any]) -> str | None:
         """Publish anchor payload to remote endpoint when configured."""
@@ -655,11 +733,11 @@ class TransparencyLogAdapter:
             headers=headers,
             data=json.dumps(body).encode("utf-8"),
         )
-        aggressive_timeout = min(self._publish_timeout_sec, 3.0)
+        timeout = _normalize_remote_timeout(self._publish_timeout_sec)
         try:
             with urllib.request.urlopen(  # noqa: S310
                 request,
-                timeout=aggressive_timeout,
+                timeout=timeout,
             ) as response:
                 raw = _read_response_bytes_bounded(
                     response,
@@ -741,10 +819,11 @@ class TransparencyLogAdapter:
         url = f"{self._publish_url.rstrip('/')}?{query}"
         headers = {k: v for k, v in self._publish_headers.items() if k != "Prefer"}
         request = urllib.request.Request(url, method="GET", headers=headers)
+        timeout = _normalize_remote_timeout(self._publish_timeout_sec)
         try:
             with urllib.request.urlopen(  # noqa: S310
                 request,
-                timeout=self._publish_timeout_sec,
+                timeout=timeout,
             ) as response:
                 raw = _read_response_bytes_bounded(
                     response,

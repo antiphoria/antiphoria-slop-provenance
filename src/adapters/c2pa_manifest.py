@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 from dataclasses import dataclass
 from datetime import timezone
 from pathlib import Path
 from typing import Any, Literal, Protocol
 from xml.sax.saxutils import escape as _xml_escape
 
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
     NoEncryption,
@@ -22,7 +24,11 @@ from src.env_config import (
     read_env_optional,
     read_env_required,
 )
-from src.canonicalization import canonicalize_body, compute_payload_hash
+from src.canonicalization import (
+    canonicalize_body,
+    canonicalize_body_for_hash,
+    compute_payload_hash,
+)
 from src.models import Artifact, canonical_json_bytes, sha256_hex
 
 _C2PA_MODE_VALUES: tuple[str, ...] = ("mvp", "sdk")
@@ -50,6 +56,14 @@ _DEFAULT_FORMAT_CANDIDATES: tuple[str, ...] = (
     "text/plain",
     "application/octet-stream",
 )
+_SDK_OPERATION_ERRORS: tuple[type[Exception], ...] = (
+    RuntimeError,
+    OSError,
+    ValueError,
+    TypeError,
+    AttributeError,
+)
+_logger = logging.getLogger(__name__)
 
 C2PAMode = Literal["mvp", "sdk"]
 
@@ -166,7 +180,7 @@ class SdkC2PAManifestProvider:
                     signer.close()
             finally:
                 builder.close()
-        except Exception as exc:  # noqa: BLE001
+        except _SDK_OPERATION_ERRORS as exc:
             raise RuntimeError(
                 f"C2PA SDK sidecar build failed while signing JPEG carrier: {exc!r}"
             ) from exc
@@ -311,7 +325,6 @@ def build_c2pa_validation_payload(
     if resolved_mode == "sdk":
         _ = (envelope, body)
         return _SDK_MINIMAL_JPEG_BYTES, _SDK_CARRIER_FORMAT
-    from src.canonicalization import canonicalize_body_for_hash
 
     payload_bytes = (
         canonicalize_body_for_hash(body)
@@ -371,12 +384,8 @@ def validate_c2pa_sidecar(
     validating MVP sidecars; otherwise validation fails with a clear error.
     """
 
-    mvp_result = _validate_mvp_manifest(manifest_bytes, body_for_mvp)
-    if mvp_result is not None:
-        return mvp_result
-
-    mvp_requires_body = _manifest_looks_like_mvp(manifest_bytes)
-    if mvp_requires_body and body_for_mvp is None:
+    mvp_manifest = _parse_mvp_manifest(manifest_bytes)
+    if mvp_manifest is not None and body_for_mvp is None:
         return C2PAManifestValidation(
             valid=False,
             validation_state="invalid",
@@ -385,6 +394,8 @@ def validate_c2pa_sidecar(
                 "validation. Pass body_for_mvp when validating MVP sidecars."
             ],
         )
+    if mvp_manifest is not None and body_for_mvp is not None:
+        return _validate_mvp_manifest(mvp_manifest, body_for_mvp)
 
     try:
         c2pa = _load_c2pa_module()
@@ -448,7 +459,7 @@ def _validate_via_sdk_carrier(
             payload_bytes=_SDK_MINIMAL_JPEG_BYTES,
             manifest_bytes=manifest_bytes,
         )
-    except Exception as exc:  # noqa: BLE001
+    except _SDK_OPERATION_ERRORS as exc:
         return C2PAManifestValidation(
             valid=False,
             validation_state=None,
@@ -503,6 +514,13 @@ def _validate_via_candidate_formats(
         filtered = [fmt for fmt in candidate_formats if fmt.lower() in supported]
         if filtered:
             candidate_formats = filtered
+        else:
+            _logger.debug(
+                "C2PA SDK did not match any preferred candidate formats; "
+                "using original candidate order=%s supported=%s",
+                candidate_formats,
+                sorted(supported),
+            )
 
     last_error: Exception | None = None
     for asset_format in candidate_formats:
@@ -548,7 +566,12 @@ def _validate_via_candidate_formats(
                 validation_state=validation_state,
                 errors=errors or [f"C2PA validation failed with state '{validation_state}'."],
             )
-        except Exception as exc:  # noqa: BLE001
+        except _SDK_OPERATION_ERRORS as exc:
+            _logger.debug(
+                "C2PA validation failed for candidate asset_format=%s error=%s",
+                asset_format,
+                exc,
+            )
             last_error = exc
             continue
 
@@ -568,28 +591,9 @@ def _validate_via_candidate_formats(
     )
 
 
-def _manifest_looks_like_mvp(manifest_bytes: bytes) -> bool:
-    """Return True if manifest has MVP JSON structure (assertions.c2pa.asset)."""
-    try:
-        manifest = json.loads(manifest_bytes.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return False
-    if not isinstance(manifest, dict):
-        return False
-    assertions = manifest.get("assertions")
-    if not isinstance(assertions, dict):
-        return False
-    return "c2pa.asset" in assertions
+def _parse_mvp_manifest(manifest_bytes: bytes) -> dict[str, Any] | None:
+    """Parse MVP JSON manifest structure when present."""
 
-
-def _validate_mvp_manifest(
-    manifest_bytes: bytes,
-    body: str | None,
-) -> C2PAManifestValidation | None:
-    """Validate MVP JSON manifest if applicable. Returns None if not MVP format."""
-
-    if body is None:
-        return None
     try:
         manifest = json.loads(manifest_bytes.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -605,6 +609,24 @@ def _validate_mvp_manifest(
     expected_hash = asset.get("payloadHash")
     if not isinstance(expected_hash, str):
         return None
+    return manifest
+
+
+def _manifest_looks_like_mvp(manifest_bytes: bytes) -> bool:
+    """Return True if manifest has MVP JSON structure (assertions.c2pa.asset)."""
+
+    return _parse_mvp_manifest(manifest_bytes) is not None
+
+
+def _validate_mvp_manifest(
+    manifest: dict[str, Any],
+    body: str,
+) -> C2PAManifestValidation:
+    """Validate parsed MVP JSON manifest using supplied markdown body."""
+
+    assertions = manifest["assertions"]
+    asset = assertions["c2pa.asset"]
+    expected_hash = asset["payloadHash"]
     actual_hash = compute_payload_hash(body)
     if actual_hash != expected_hash:
         return C2PAManifestValidation(
@@ -644,7 +666,7 @@ def _validate_sdk_markdown_assertion(
     stored_content = assertion_data.get("content") or ""
     if canonicalize_body(stored_content) != canonicalize_body(body):
         errors.append("SDK markdown assertion content mismatch against artifact payload.")
-    if assertion_data.get("payloadHash") != expected_hash:
+    if stored_hash != expected_hash:
         errors.append("SDK markdown assertion payloadHash mismatch against artifact payload hash.")
     return errors
 
@@ -694,7 +716,7 @@ def _normalize_private_key_to_pkcs8(pem: str) -> str:
     """
     try:
         key = load_pem_private_key(pem.encode("utf-8"), password=None)
-    except Exception as exc:
+    except (ValueError, TypeError, UnsupportedAlgorithm) as exc:
         raise RuntimeError(f"C2PA private key could not be loaded: {exc}") from exc
     pkcs8_bytes = key.private_bytes(
         encoding=Encoding.PEM,
@@ -800,7 +822,8 @@ def _read_supported_formats(c2pa_module: Any) -> set[str]:
 
     try:
         supported = c2pa_module.Builder.get_supported_mime_types()
-    except Exception:  # noqa: BLE001
+    except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+        _logger.debug("Unable to read C2PA SDK supported MIME types: %s", exc)
         return set()
     return {str(value).lower() for value in supported}
 
@@ -837,3 +860,20 @@ def _load_c2pa_module() -> Any:
             "C2PA SDK mode requires dependency 'c2pa-python'. Install it and retry."
         ) from exc
     return c2pa
+
+
+__all__ = [
+    "C2PAManifestArtifact",
+    "C2PAManifestValidation",
+    "C2PAMode",
+    "C2PASdkBridgePayload",
+    "C2PASdkSettings",
+    "MvpC2PAManifestProvider",
+    "SdkC2PAManifestProvider",
+    "build_c2pa_manifest_provider",
+    "build_c2pa_sidecar_manifest",
+    "build_c2pa_validation_payload",
+    "build_sdk_bridge_payload",
+    "resolve_c2pa_mode",
+    "validate_c2pa_sidecar",
+]

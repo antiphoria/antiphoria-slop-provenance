@@ -113,6 +113,24 @@ def initialize_artifact_schema(connections: SQLiteConnectionFactory) -> None:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS key_status_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fingerprint TEXT NOT NULL,
+                previous_status TEXT,
+                new_status TEXT NOT NULL,
+                transition_source TEXT NOT NULL,
+                changed_at TEXT NOT NULL
+            );
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_key_status_audit_fingerprint_changed_at
+            ON key_status_audit_log(fingerprint, changed_at DESC);
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS audit_reports (
                 audit_id TEXT PRIMARY KEY,
                 artifact_id TEXT NOT NULL,

@@ -52,6 +52,36 @@ class KeyRegistryStore:
             )
             return int(cursor.rowcount)
 
+    def append_key_status_transition(
+        self,
+        fingerprint: str,
+        previous_status: str | None,
+        new_status: str,
+        transition_source: str,
+    ) -> None:
+        """Append one key status transition audit row."""
+
+        changed_at = utc_now_iso()
+        with self._connections.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO key_status_audit_log (
+                    fingerprint,
+                    previous_status,
+                    new_status,
+                    transition_source,
+                    changed_at
+                ) VALUES (?, ?, ?, ?, ?);
+                """,
+                (
+                    fingerprint,
+                    previous_status,
+                    new_status,
+                    transition_source,
+                    changed_at,
+                ),
+            )
+
     def get_key_registry_entry(self, fingerprint: str) -> dict[str, str] | None:
         """Get key registry entry by signer fingerprint."""
 

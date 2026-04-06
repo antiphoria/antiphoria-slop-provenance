@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
@@ -31,6 +30,7 @@ _QUEUE_RELATIVE_PATH = ".provenance/ots-queue.jsonl"
 _DEFAULT_QUEUE_REF = "refs/heads/main"
 _DEFAULT_LEDGER_AUTHOR_NAME = "Antiphoria Slop Provenance"
 _DEFAULT_LEDGER_AUTHOR_EMAIL = "bot@antiphoria.local"
+_QUEUE_GROWTH_WARN_EVERY_LINES = 10_000
 
 
 def _utc_now_iso() -> str:
@@ -64,6 +64,11 @@ class OtsQueueAdapter:
         name = name or _DEFAULT_LEDGER_AUTHOR_NAME
         email = email or _DEFAULT_LEDGER_AUTHOR_EMAIL
         return pygit2.Signature(name, email)
+
+    def _open_repository(self) -> pygit2.Repository:
+        """Open Archive repository backing this queue adapter."""
+
+        return pygit2.Repository(str(self._repository_path))
 
     def _read_current_content(self, repo: pygit2.Repository) -> str:
         """Read current queue content from the branch, or empty if branch/file missing."""
@@ -119,10 +124,14 @@ class OtsQueueAdapter:
             except json.JSONDecodeError as exc:
                 raise ValueError(f"Invalid JSONL: line {i + 1} is not valid JSON: {exc}") from exc
 
-    def _commit_content(self, content: str, message: str) -> None:
+    def _commit_content(
+        self,
+        repo: pygit2.Repository,
+        content: str,
+        message: str,
+    ) -> None:
         """Commit queue content to the branch."""
         self._validate_jsonl(content)
-        repo = pygit2.Repository(str(self._repository_path))
         self._ensure_branch_exists(repo)
         ref = repo.lookup_reference(self._queue_ref)
         parent = repo[ref.target]
@@ -168,10 +177,23 @@ class OtsQueueAdapter:
         lock_path = Path(str(self._queue_path) + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with FileLock(lock_path):
-            repo = pygit2.Repository(str(self._repository_path))
+            repo = self._open_repository()
             content = self._read_current_content(repo)
             new_content = (content.rstrip() + "\n" + new_line).lstrip()
-            self._commit_content(new_content, commit_message)
+            self._commit_content(
+                repo=repo,
+                content=new_content,
+                message=commit_message,
+            )
+            line_count = sum(1 for line in new_content.splitlines() if line.strip())
+            if (
+                line_count > 0
+                and line_count % _QUEUE_GROWTH_WARN_EVERY_LINES == 0
+            ):
+                _logger.warning(
+                    "OTS queue has grown to %d events. Consider archival/compaction.",
+                    line_count,
+                )
 
     def append_pending(
         self,
@@ -203,8 +225,13 @@ class OtsQueueAdapter:
         request_id: UUID | str,
         bitcoin_block_height: int,
         artifact_hash: str | None = None,
+        final_ots_b64: str | None = None,
     ) -> None:
-        """Append a FORGED event and commit to Git."""
+        """Append a FORGED event and commit to Git.
+
+        final_ots_b64 is optional; when provided, it is persisted as the final
+        upgraded proof associated with this forge event.
+        """
         rid = str(request_id)
         updated = _utc_now_iso()
         event_obj = {
@@ -215,6 +242,8 @@ class OtsQueueAdapter:
         }
         if artifact_hash:
             event_obj["artifact_hash"] = artifact_hash
+        if final_ots_b64:
+            event_obj["final_ots_b64"] = final_ots_b64
         new_line = json.dumps(event_obj, sort_keys=True)
         self._append_event(
             new_line=new_line,
@@ -247,90 +276,87 @@ class OtsQueueAdapter:
     def _parse_events(self, content: str) -> dict[str, dict]:
         """Parse JSONL and return merged state per request_id (latest event wins)."""
         latest: dict[str, dict] = {}
-        for line in content.strip().splitlines():
-            if not line.strip():
+        for line_index, line in enumerate(content.splitlines(), start=1):
+            stripped_line = line.strip()
+            if not stripped_line:
                 continue
             try:
-                obj = json.loads(line)
+                obj = json.loads(stripped_line)
                 rid = obj.get("request_id")
                 if not rid:
+                    _logger.warning(
+                        "Skipping OTS queue line %d without request_id",
+                        line_index,
+                    )
                     continue
                 existing = latest.get(rid, {})
                 merged = {**existing, **obj}
                 merged["event"] = obj.get("event", existing.get("event"))
                 latest[rid] = merged
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
+                _logger.warning(
+                    "Skipping malformed OTS queue JSON line %d: %s",
+                    line_index,
+                    exc,
+                )
                 continue
         return latest
 
+    @staticmethod
+    def _status_from_event(event: str | None) -> OtsForgeStatus | None:
+        if event == "pending":
+            return "PENDING"
+        if event == "forged":
+            return "FORGED"
+        if event == "failed":
+            return "FAILED"
+        return None
+
+    @staticmethod
+    def _record_from_state(request_id: str, obj: dict) -> OtsForgeRecord | None:
+        status = OtsQueueAdapter._status_from_event(obj.get("event"))
+        if status is None:
+            return None
+        final_ots_b64 = obj.get("final_ots_b64") if status == "FORGED" else None
+        block_height = obj.get("bitcoin_block_height") if status == "FORGED" else None
+        return OtsForgeRecord(
+            request_id=request_id,
+            artifact_hash=obj.get("artifact_hash", ""),
+            status=status,
+            pending_ots_b64=obj.get("pending_ots_b64", ""),
+            final_ots_b64=final_ots_b64,
+            bitcoin_block_height=block_height,
+            created_at=obj.get("created_at", ""),
+            updated_at=obj.get("updated_at", ""),
+        )
+
+    def _load_latest_state(self) -> dict[str, dict]:
+        """Load latest merged queue state from git-backed JSONL log."""
+
+        repo = self._open_repository()
+        content = self._read_current_content(repo)
+        return self._parse_events(content)
+
     def get_pending_records(self, limit: int = 100) -> list[OtsForgeRecord]:
         """Return PENDING records (latest event is pending), as OtsForgeRecord."""
-        repo = pygit2.Repository(str(self._repository_path))
-        content = self._read_current_content(repo)
-        latest = self._parse_events(content)
+        latest = self._load_latest_state()
         pending: list[OtsForgeRecord] = []
         for rid, obj in latest.items():
-            if obj.get("event") != "pending":
+            record = self._record_from_state(rid, obj)
+            if record is None or record.status != "PENDING":
                 continue
             if len(pending) >= limit:
                 break
-            pending.append(
-                OtsForgeRecord(
-                    request_id=rid,
-                    artifact_hash=obj.get("artifact_hash", ""),
-                    status="PENDING",
-                    pending_ots_b64=obj.get("pending_ots_b64", ""),
-                    final_ots_b64=None,
-                    bitcoin_block_height=None,
-                    created_at=obj.get("created_at", ""),
-                    updated_at=obj.get("updated_at", ""),
-                )
-            )
+            pending.append(record)
         return pending
 
     def get_ots_forge_record(self, request_id: UUID) -> OtsForgeRecord | None:
         """Fetch one record by request_id. Returns None if not found."""
-        repo = pygit2.Repository(str(self._repository_path))
-        content = self._read_current_content(repo)
-        latest = self._parse_events(content)
+        latest = self._load_latest_state()
         obj = latest.get(str(request_id))
         if obj is None:
             return None
-        event = obj.get("event")
-        if event == "pending":
-            return OtsForgeRecord(
-                request_id=str(request_id),
-                artifact_hash=obj.get("artifact_hash", ""),
-                status="PENDING",
-                pending_ots_b64=obj.get("pending_ots_b64", ""),
-                final_ots_b64=None,
-                bitcoin_block_height=None,
-                created_at=obj.get("created_at", ""),
-                updated_at=obj.get("updated_at", ""),
-            )
-        if event == "forged":
-            return OtsForgeRecord(
-                request_id=str(request_id),
-                artifact_hash=obj.get("artifact_hash", ""),
-                status="FORGED",
-                pending_ots_b64=obj.get("pending_ots_b64", ""),
-                final_ots_b64=None,
-                bitcoin_block_height=obj.get("bitcoin_block_height"),
-                created_at=obj.get("created_at", ""),
-                updated_at=obj.get("updated_at", ""),
-            )
-        if event == "failed":
-            return OtsForgeRecord(
-                request_id=str(request_id),
-                artifact_hash=obj.get("artifact_hash", ""),
-                status="FAILED",
-                pending_ots_b64=obj.get("pending_ots_b64", ""),
-                final_ots_b64=None,
-                bitcoin_block_height=None,
-                created_at=obj.get("created_at", ""),
-                updated_at=obj.get("updated_at", ""),
-            )
-        return None
+        return self._record_from_state(str(request_id), obj)
 
     def list_ots_forge_records(
         self,
@@ -338,33 +364,59 @@ class OtsQueueAdapter:
         limit: int = 100,
     ) -> list[OtsForgeRecord]:
         """List records, optionally filtered by status, sorted by updated_at desc."""
-        repo = pygit2.Repository(str(self._repository_path))
-        content = self._read_current_content(repo)
-        latest = self._parse_events(content)
+        latest = self._load_latest_state()
         records: list[OtsForgeRecord] = []
         for rid, obj in latest.items():
-            ev = obj.get("event")
-            if ev == "pending":
-                st = "PENDING"
-            elif ev == "forged":
-                st = "FORGED"
-            elif ev == "failed":
-                st = "FAILED"
-            else:
+            record = self._record_from_state(rid, obj)
+            if record is None:
                 continue
-            if status is not None and st != status:
+            if status is not None and record.status != status:
                 continue
-            records.append(
-                OtsForgeRecord(
-                    request_id=rid,
-                    artifact_hash=obj.get("artifact_hash", ""),
-                    status=st,
-                    pending_ots_b64=obj.get("pending_ots_b64", ""),
-                    final_ots_b64=None,
-                    bitcoin_block_height=obj.get("bitcoin_block_height"),
-                    created_at=obj.get("created_at", ""),
-                    updated_at=obj.get("updated_at", ""),
-                )
-            )
+            records.append(record)
         records.sort(key=lambda r: r.updated_at or "", reverse=True)
         return records[:limit]
+
+    def compact_queue(self, *, archive_path: Path) -> int:
+        """Compact queue to latest-state events only, with explicit archive backup.
+
+        This method is intentionally opt-in and requires an explicit archive path.
+        It preserves archival safety by writing the full pre-compaction JSONL to
+        archive_path before rewriting the queue.
+        """
+
+        lock_path = Path(str(self._queue_path) + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with FileLock(lock_path):
+            repo = self._open_repository()
+            current_content = self._read_current_content(repo)
+            if not current_content.strip():
+                return 0
+
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            archive_path.write_text(current_content, encoding="utf-8")
+
+            latest = self._parse_events(current_content)
+            compacted_lines = [
+                json.dumps(obj, sort_keys=True)
+                for _, obj in sorted(
+                    latest.items(),
+                    key=lambda item: (
+                        str(item[1].get("updated_at", "")),
+                        item[0],
+                    ),
+                )
+            ]
+            compacted_content = "\n".join(compacted_lines)
+            if compacted_content:
+                compacted_content = compacted_content + "\n"
+            self._commit_content(
+                repo=repo,
+                content=compacted_content,
+                message="provenance: compact ots-queue latest-state",
+            )
+            _logger.info(
+                "Compacted OTS queue events=%d archive=%s",
+                len(compacted_lines),
+                archive_path,
+            )
+            return len(compacted_lines)

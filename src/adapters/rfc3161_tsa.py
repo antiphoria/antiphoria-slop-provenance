@@ -2,17 +2,27 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 _ALLOWED_DIGEST_ALGORITHMS = frozenset(("sha256", "sha384", "sha512"))
+_DIGEST_HEX_LENGTHS = {
+    "sha256": 64,
+    "sha384": 96,
+    "sha512": 128,
+}
 _MAX_TSA_RESPONSE_BYTES = 1_048_576
+_TSA_REPLY_CONTENT_TYPE = "application/timestamp-reply"
+_logger = logging.getLogger(__name__)
 
 
 def _read_bounded_response_bytes(
@@ -29,6 +39,24 @@ def _read_bounded_response_bytes(
             f"{context} exceeded maximum allowed size ({max_bytes} bytes)."
         )
     return raw
+
+
+def _validate_digest_hex(digest_hex: str, digest_algorithm: str) -> str:
+    """Validate digest algorithm and digest hex format at API boundaries."""
+    if digest_algorithm not in _ALLOWED_DIGEST_ALGORITHMS:
+        raise ValueError(f"Invalid digest_algorithm: {digest_algorithm!r}")
+    normalized = digest_hex.strip()
+    if not normalized:
+        raise ValueError("digest_hex must not be empty.")
+    if re.fullmatch(r"[0-9a-fA-F]+", normalized) is None:
+        raise ValueError(f"digest_hex contains non-hex characters: {digest_hex!r}")
+    expected_length = _DIGEST_HEX_LENGTHS[digest_algorithm]
+    if len(normalized) != expected_length:
+        raise ValueError(
+            f"digest_hex length {len(normalized)} does not match "
+            f"{digest_algorithm} (expected {expected_length})."
+        )
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -73,10 +101,23 @@ class RFC3161TSAAdapter:
             raise RuntimeError(
                 "RFC3161 TSA URL is missing. Configure RFC3161_TSA_URL."
             )
+        normalized_digest_hex = _validate_digest_hex(
+            digest_hex=digest_hex,
+            digest_algorithm=digest_algorithm,
+        )
+        _logger.info(
+            "Requesting RFC3161 token tsa_url=%s digest_algorithm=%s",
+            self._tsa_url,
+            digest_algorithm,
+        )
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             query_path = temp_path / "request.tsq"
-            self._build_query_file(query_path, digest_hex, digest_algorithm)
+            self._build_query_file(
+                query_path,
+                normalized_digest_hex,
+                digest_algorithm,
+            )
             query_bytes = query_path.read_bytes()
             request = urllib.request.Request(
                 self._tsa_url,
@@ -87,15 +128,37 @@ class RFC3161TSAAdapter:
                 },
                 data=query_bytes,
             )
-            with urllib.request.urlopen(  # noqa: S310
-                request,
-                timeout=self._request_timeout_sec,
-            ) as response:
-                token = _read_bounded_response_bytes(
-                    response,
-                    max_bytes=_MAX_TSA_RESPONSE_BYTES,
-                    context="RFC3161 TSA response",
-                )
+            try:
+                with urllib.request.urlopen(  # noqa: S310
+                    request,
+                    timeout=self._request_timeout_sec,
+                ) as response:
+                    token = _read_bounded_response_bytes(
+                        response,
+                        max_bytes=_MAX_TSA_RESPONSE_BYTES,
+                        context="RFC3161 TSA response",
+                    )
+                    content_type = response.headers.get("Content-Type", "").lower()
+                    if _TSA_REPLY_CONTENT_TYPE not in content_type:
+                        raise RuntimeError(
+                            "TSA returned unexpected Content-Type: "
+                            f"{content_type or '<missing>'!r}."
+                        )
+                    _logger.debug(
+                        "Received RFC3161 token bytes=%d content_type=%s",
+                        len(token),
+                        content_type or "<missing>",
+                    )
+            except urllib.error.HTTPError as exc:
+                reason = getattr(exc, "reason", None) or "unknown error"
+                raise RuntimeError(
+                    f"TSA returned HTTP {exc.code} from '{self._tsa_url}': {reason}"
+                ) from exc
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                reason = getattr(exc, "reason", None) or str(exc)
+                raise RuntimeError(
+                    f"Failed to reach TSA at '{self._tsa_url}': {reason}"
+                ) from exc
         if not token:
             raise RuntimeError(
                 "TSA returned empty RFC3161 token payload. "
@@ -117,6 +180,15 @@ class RFC3161TSAAdapter:
                 ok=False,
                 message="Timestamp token is empty.",
             )
+        normalized_digest_hex = _validate_digest_hex(
+            digest_hex=digest_hex,
+            digest_algorithm=digest_algorithm,
+        )
+        _logger.info(
+            "Verifying RFC3161 token digest_algorithm=%s token_bytes=%d",
+            digest_algorithm,
+            len(token_bytes),
+        )
         ca_candidates, notes = self._resolve_ca_candidates(tsa_ca_cert_path)
         if not ca_candidates:
             details = " ".join(notes).strip()
@@ -141,15 +213,25 @@ class RFC3161TSAAdapter:
             )
 
             failures: list[str] = []
+            _logger.debug(
+                "RFC3161 verify candidates=%d embedded_chain=%s configured_untrusted=%s",
+                len(ca_candidates),
+                embedded_untrusted is not None,
+                configured_untrusted is not None,
+            )
             for ca_path in ca_candidates:
                 process = self._run_ts_verify(
                     response_path=response_path,
-                    digest_hex=digest_hex,
+                    digest_hex=normalized_digest_hex,
                     digest_algorithm=digest_algorithm,
                     tsa_ca_cert_path=ca_path,
                     untrusted_cert_path=configured_untrusted,
                 )
                 if process.returncode == 0:
+                    _logger.info(
+                        "RFC3161 verification succeeded with CA=%s",
+                        ca_path,
+                    )
                     return TimestampVerification(
                         ok=True,
                         message=(
@@ -169,12 +251,16 @@ class RFC3161TSAAdapter:
                     continue
                 process_embedded = self._run_ts_verify(
                     response_path=response_path,
-                    digest_hex=digest_hex,
+                    digest_hex=normalized_digest_hex,
                     digest_algorithm=digest_algorithm,
                     tsa_ca_cert_path=ca_path,
                     untrusted_cert_path=embedded_untrusted,
                 )
                 if process_embedded.returncode == 0:
+                    _logger.info(
+                        "RFC3161 verification succeeded with embedded chain CA=%s",
+                        ca_path,
+                    )
                     return TimestampVerification(
                         ok=True,
                         message=(
@@ -206,9 +292,6 @@ class RFC3161TSAAdapter:
         digest_algorithm: str,
     ) -> None:
         """Build OpenSSL RFC3161 query file from digest hex."""
-        if digest_algorithm not in _ALLOWED_DIGEST_ALGORITHMS:
-            raise ValueError(f"Invalid digest_algorithm: {digest_algorithm!r}")
-
         command = [
             self._openssl_bin,
             "ts",
@@ -246,8 +329,6 @@ class RFC3161TSAAdapter:
         tsa_ca_cert_path: Path,
         untrusted_cert_path: Path | None,
     ) -> subprocess.CompletedProcess[str]:
-        if digest_algorithm not in _ALLOWED_DIGEST_ALGORITHMS:
-            raise ValueError(f"Invalid digest_algorithm: {digest_algorithm!r}")
         command = [
             self._openssl_bin,
             "ts",
@@ -355,7 +436,7 @@ class RFC3161TSAAdapter:
     def _resolve_certifi_ca_bundle() -> Path | None:
         try:
             import certifi
-        except Exception:  # noqa: BLE001
+        except (ImportError, ModuleNotFoundError):
             return None
         candidate = Path(certifi.where())
         if not candidate.exists():
@@ -378,12 +459,16 @@ class RFC3161TSAAdapter:
                 [
                     openssl_bin_path.parent.parent / "openssl.cnf",
                     openssl_bin_path.parent.parent / "ssl" / "openssl.cnf",
+                    Path("/etc/ssl/openssl.cnf"),
+                    Path("/etc/pki/tls/openssl.cnf"),
+                    Path("/usr/lib/ssl/openssl.cnf"),
                 ]
             )
 
         for candidate in candidates:
             if candidate.exists():
                 env["OPENSSL_CONF"] = str(candidate)
+                _logger.debug("Using OPENSSL_CONF=%s", candidate)
                 break
         return env
 
