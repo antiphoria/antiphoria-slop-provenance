@@ -57,11 +57,7 @@ async def _run_upgrade_command(args: argparse.Namespace) -> int:
         print(f"No OTS forge record for request_id={args.request_id}")
         return 1
     if record.status == "FORGED" and not getattr(args, "force", False):
-        block_str = (
-            f" block={record.bitcoin_block_height}"
-            if record.bitcoin_block_height
-            else ""
-        )
+        block_str = f" block={record.bitcoin_block_height}" if record.bitcoin_block_height else ""
         print(f"Already {record.status}{block_str}")
         return 0
     if record.status == "FAILED" and not getattr(args, "retry", False):
@@ -174,10 +170,7 @@ async def _run_process_pending_command(args: argparse.Namespace) -> int:
                 still_pending += 1
             elif updated.status == "FAILED":
                 failed_count += 1
-    print(
-        f"Upgraded {upgraded}, still pending {still_pending}, "
-        f"failed {failed_count}"
-    )
+    print(f"Upgraded {upgraded}, still pending {still_pending}, failed {failed_count}")
     return 0
 
 
@@ -200,10 +193,7 @@ def _run_recover_failed_command(args: argparse.Namespace) -> int:
         return 1
 
     if record.status != "FAILED":
-        print(
-            f"Record is not FAILED (current status: {record.status}). "
-            "No action taken."
-        )
+        print(f"Record is not FAILED (current status: {record.status}). No action taken.")
         return 0
 
     if not record.pending_ots_b64:
@@ -265,11 +255,7 @@ def _run_forge_status_command(args: argparse.Namespace) -> int:
         return 0
 
     for r in records:
-        block_str = (
-            f" block={r.bitcoin_block_height}"
-            if r.bitcoin_block_height
-            else ""
-        )
+        block_str = f" block={r.bitcoin_block_height}" if r.bitcoin_block_height else ""
         print(f"{r.request_id} {r.status}{block_str} {r.artifact_hash[:16]}...")
     return 0
 
@@ -290,9 +276,7 @@ def _run_anchor_merkle_root_command(args: argparse.Namespace) -> int:
         return 1
 
     transparency_log = TransparencyLogAdapter(log_path=log_path)
-    entries = transparency_log.parse_entries_from_jsonl(
-        log_path.read_text(encoding="utf-8")
-    )
+    entries = transparency_log.parse_entries_from_jsonl(log_path.read_text(encoding="utf-8"))
     if not entries:
         print("Transparency log is empty.")
         return 0
@@ -399,9 +383,7 @@ def _run_anchor_merkle_root_command(args: argparse.Namespace) -> int:
             [],
         )
 
-    print(
-        f"Merkle root anchored: {merkle_root[:16]}... ({len(entries)} entries)"
-    )
+    print(f"Merkle root anchored: {merkle_root[:16]}... ({len(entries)} entries)")
     return 0
 
 
@@ -423,18 +405,11 @@ def _run_upgrade_merkle_ots_command(args: argparse.Namespace) -> int:
         if not ots_full.exists():
             print(f"OTS file not found: {ots_full}")
             return 1
-        snapshots_path = (
-            repository_path / ".provenance" / "merkle-snapshots.jsonl"
-        )
+        snapshots_path = repository_path / ".provenance" / "merkle-snapshots.jsonl"
         if not snapshots_path.exists():
-            print(
-                "Cannot determine merkle_root without "
-                "merkle-snapshots.jsonl."
-            )
+            print("Cannot determine merkle_root without merkle-snapshots.jsonl.")
             return 1
-        for line in reversed(
-            snapshots_path.read_text(encoding="utf-8").splitlines()
-        ):
+        for line in reversed(snapshots_path.read_text(encoding="utf-8").splitlines()):
             line = line.strip()
             if not line:
                 continue
@@ -446,19 +421,12 @@ def _run_upgrade_merkle_ots_command(args: argparse.Namespace) -> int:
             except json.JSONDecodeError:
                 continue
         else:
-            print(
-                f"No snapshot found for {ots_path}. Set --ots-path to match."
-            )
+            print(f"No snapshot found for {ots_path}. Set --ots-path to match.")
             return 1
     else:
-        snapshots_path = (
-            repository_path / ".provenance" / "merkle-snapshots.jsonl"
-        )
+        snapshots_path = repository_path / ".provenance" / "merkle-snapshots.jsonl"
         if not snapshots_path.exists():
-            print(
-                "No merkle-snapshots.jsonl found. "
-                "Run anchor-merkle-root first."
-            )
+            print("No merkle-snapshots.jsonl found. Run anchor-merkle-root first.")
             return 1
         lines = [
             item.strip()
@@ -544,9 +512,7 @@ def _run_sync_transparency_log_command(args: argparse.Namespace) -> int:
         repository,
         repository_path,
     )
-    published, skipped = provenance_service.sync_transparency_log_to_remote(
-        repository_path
-    )
+    published, skipped = provenance_service.sync_transparency_log_to_remote(repository_path)
     print(f"Published: {published}, skipped (already present): {skipped}")
     return 0
 
@@ -560,9 +526,7 @@ def _run_verify_transparency_log_command(args: argparse.Namespace) -> int:
         return 1
 
     transparency_log = TransparencyLogAdapter(log_path=log_path)
-    entries = transparency_log.parse_entries_from_jsonl(
-        log_path.read_text(encoding="utf-8")
-    )
+    entries = transparency_log.parse_entries_from_jsonl(log_path.read_text(encoding="utf-8"))
     if not entries:
         print("Transparency log is empty.")
         return 1
@@ -574,10 +538,7 @@ def _run_verify_transparency_log_command(args: argparse.Namespace) -> int:
     if computed_root.lower() == expected:
         print(f"OK: Merkle root matches ({len(entries)} entries)")
         return 0
-    print(
-        "MISMATCH: "
-        f"computed={computed_root}, expected={expected} ({len(entries)} entries)"
-    )
+    print(f"MISMATCH: computed={computed_root}, expected={expected} ({len(entries)} entries)")
     return 1
 
 
@@ -639,9 +600,7 @@ def _run_build_inclusion_proof_command(args: argparse.Namespace) -> int:
         print("No transparency log found.")
         return 1
     transparency_log = TransparencyLogAdapter(log_path=log_path)
-    entries = transparency_log.parse_entries_from_jsonl(
-        log_path.read_text(encoding="utf-8")
-    )
+    entries = transparency_log.parse_entries_from_jsonl(log_path.read_text(encoding="utf-8"))
     if not entries:
         print("Transparency log is empty.")
         return 1

@@ -34,9 +34,7 @@ def build_repository(env_path: Path | None = None) -> SQLiteRepository:
         project_root=project_root,
     )
     if artifact_db_path is None:
-        artifact_db_path = (
-            project_root / ".orchestrator-state" / "artifacts.db"
-        ).resolve()
+        artifact_db_path = (project_root / ".orchestrator-state" / "artifacts.db").resolve()
     artifact_db_path.parent.mkdir(parents=True, exist_ok=True)
     return SQLiteRepository(db_path=artifact_db_path)
 
@@ -50,9 +48,7 @@ def build_provenance_services(
     """Build provenance + verification service graph for a repo path."""
 
     resolved_env = env_path or get_project_env_path()
-    transparency_log_path = (
-        repository_path / ".provenance" / "transparency-log.jsonl"
-    )
+    transparency_log_path = repository_path / ".provenance" / "transparency-log.jsonl"
     publish_url = read_env_optional(
         "TRANSPARENCY_LOG_PUBLISH_URL",
         env_path=resolved_env,
@@ -85,21 +81,15 @@ def build_provenance_services(
             tsa_url=tsa_url,
             openssl_bin=openssl_bin,
             untrusted_cert_path=(
-                None
-                if tsa_untrusted_path is None
-                else Path(tsa_untrusted_path).resolve()
+                None if tsa_untrusted_path is None else Path(tsa_untrusted_path).resolve()
             ),
-            openssl_conf_path=(
-                None if openssl_conf is None else Path(openssl_conf).resolve()
-            ),
+            openssl_conf_path=(None if openssl_conf is None else Path(openssl_conf).resolve()),
         )
     )
     key_registry = KeyRegistryAdapter(store=repository.keys)
     ots_adapter: OTSAdapter | None = None
     if read_env_bool("ENABLE_OTS_FORGE", default=False, env_path=resolved_env):
-        ots_adapter = OTSAdapter(
-            ots_bin=resolve_ots_binary(env_path=resolved_env)
-        )
+        ots_adapter = OTSAdapter(ots_bin=resolve_ots_binary(env_path=resolved_env))
     provenance_service = ProvenanceService(
         transparency_store=repository.transparency,
         timestamp_store=repository.timestamps,

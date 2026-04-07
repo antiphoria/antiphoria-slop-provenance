@@ -18,9 +18,7 @@ async def _run_in_fake_thread(
 ) -> object:
     callable_func = func
     if not callable(callable_func):
-        raise RuntimeError(
-            "Expected callable for asyncio.to_thread test shim."
-        )
+        raise RuntimeError("Expected callable for asyncio.to_thread test shim.")
     return callable_func(*args, **kwargs)
 
 
@@ -60,9 +58,7 @@ class ProvenanceTelemetryAdapterTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_audited_event_logs_failure_without_raising(self) -> None:
         store = MagicMock()
-        store.create_provenance_event_log.side_effect = RuntimeError(
-            "db write failed"
-        )
+        store.create_provenance_event_log.side_effect = RuntimeError("db write failed")
         adapter = ProvenanceTelemetryAdapter(
             event_bus=InMemoryEventBus(),
             store=store,
@@ -74,13 +70,16 @@ class ProvenanceTelemetryAdapterTest(unittest.IsolatedAsyncioTestCase):
             report_path="audit.json",
         )
 
-        with patch(
-            "src.adapters.provenance_telemetry.asyncio.to_thread",
-            side_effect=_run_in_fake_thread,
-        ), self.assertLogs(
-            "src.adapters.provenance_telemetry",
-            level="ERROR",
-        ) as logs:
+        with (
+            patch(
+                "src.adapters.provenance_telemetry.asyncio.to_thread",
+                side_effect=_run_in_fake_thread,
+            ),
+            self.assertLogs(
+                "src.adapters.provenance_telemetry",
+                level="ERROR",
+            ) as logs,
+        ):
             await adapter._on_story_audited(event)
 
         self.assertIn(

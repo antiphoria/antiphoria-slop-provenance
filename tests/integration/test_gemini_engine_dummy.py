@@ -72,9 +72,12 @@ class GeminiEngineDummyModeTest(unittest.IsolatedAsyncioTestCase):
                 "GENERATOR_DUMMY_MODE=false\n",
                 encoding="utf-8",
             )
-            with patch.dict(os.environ, {}, clear=True), self.assertRaisesRegex(
-                RuntimeError,
-                "Missing required environment variable 'GOOGLE_API_KEY'",
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    "Missing required environment variable 'GOOGLE_API_KEY'",
+                ),
             ):
                 _ = GeminiEngineAdapter(
                     event_bus=InMemoryEventBus(),

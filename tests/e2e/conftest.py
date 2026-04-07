@@ -97,9 +97,7 @@ def isolated_env(tmp_path: Path):
             "ENABLE_C2PA": "false",
             "TRANSPARENCY_LOG_PUBLISH_URL": "",
             "RFC3161_TSA_URL": "",
-            "PQC_PRIVATE_KEY_PATH": (
-                str(priv_path) if priv_path.exists() else ""
-            ),
+            "PQC_PRIVATE_KEY_PATH": (str(priv_path) if priv_path.exists() else ""),
             "OQS_PUBLIC_KEY_PATH": str(pub_path) if pub_path.exists() else "",
             "C2PA_PRIVATE_KEY_PATH": "",
             "ED25519_PRIVATE_KEY_PATH": str(ed_priv_path),

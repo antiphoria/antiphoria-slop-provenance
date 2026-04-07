@@ -46,16 +46,18 @@ def configure_logging() -> None:
             return super().format(record)
 
     formatter = RequestIdFormatter(
-        "%(asctime)s %(levelname)s %(name)s "
-        "request_id=%(request_id)s message=%(message)s"
+        "%(asctime)s %(levelname)s %(name)s request_id=%(request_id)s message=%(message)s"
     )
     handler = logging.StreamHandler()
     handler.setFormatter(formatter)
     root = logging.getLogger()
-    level_name = read_env_optional(
-        "LOG_LEVEL",
-        env_path=_ENV_PATH,
-    ) or "INFO"
+    level_name = (
+        read_env_optional(
+            "LOG_LEVEL",
+            env_path=_ENV_PATH,
+        )
+        or "INFO"
+    )
     root.setLevel(getattr(logging, level_name.upper(), logging.INFO))
     root.handlers.clear()
     root.addHandler(handler)

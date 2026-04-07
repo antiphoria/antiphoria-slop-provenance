@@ -15,10 +15,7 @@ def ensure_allowed_http_url(url: str, *, context: str) -> None:
     parsed = urllib.parse.urlparse(url.strip())
     scheme = parsed.scheme.lower()
     if scheme not in _ALLOWED_HTTP_SCHEMES or not parsed.netloc:
-        raise RuntimeError(
-            f"{context} must use http/https with an explicit host. "
-            f"Got: {url!r}"
-        )
+        raise RuntimeError(f"{context} must use http/https with an explicit host. Got: {url!r}")
 
 
 def build_http_request(

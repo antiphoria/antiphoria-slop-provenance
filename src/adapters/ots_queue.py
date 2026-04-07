@@ -186,10 +186,7 @@ class OtsQueueAdapter:
                 message=commit_message,
             )
             line_count = sum(1 for line in new_content.splitlines() if line.strip())
-            if (
-                line_count > 0
-                and line_count % _QUEUE_GROWTH_WARN_EVERY_LINES == 0
-            ):
+            if line_count > 0 and line_count % _QUEUE_GROWTH_WARN_EVERY_LINES == 0:
                 _logger.warning(
                     "OTS queue has grown to %d events. Consider archival/compaction.",
                     line_count,

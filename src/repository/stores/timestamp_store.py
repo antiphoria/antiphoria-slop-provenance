@@ -84,10 +84,7 @@ class TimestampStore:
         if record is None:
             return TimestampVerification(
                 ok=False,
-                message=(
-                    "No timestamp token found "
-                    f"for artifact_hash={artifact_hash}."
-                ),
+                message=(f"No timestamp token found for artifact_hash={artifact_hash}."),
             )
         token_b64 = str(record["token_base64"])
         token_bytes = base64.b64decode(

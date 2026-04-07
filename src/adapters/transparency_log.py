@@ -48,9 +48,7 @@ def _read_response_bytes_bounded(
 
     raw = response.read(max_bytes + 1)
     if len(raw) > max_bytes:
-        raise RuntimeError(
-            f"{context} exceeded maximum allowed size ({max_bytes} bytes)."
-        )
+        raise RuntimeError(f"{context} exceeded maximum allowed size ({max_bytes} bytes).")
     return raw
 
 
@@ -258,11 +256,21 @@ def update_merkle_anchor_block_height(
             timeout=timeout,
             context="Merkle anchor fetch request URL",
         ) as resp:
-            raw = _read_response_bytes_bounded(
-                resp,
-                context="Merkle anchor fetch response",
-            ).decode("utf-8").strip()
-    except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, ConnectionError, RuntimeError) as exc:
+            raw = (
+                _read_response_bytes_bounded(
+                    resp,
+                    context="Merkle anchor fetch response",
+                )
+                .decode("utf-8")
+                .strip()
+            )
+    except (
+        TimeoutError,
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        ConnectionError,
+        RuntimeError,
+    ) as exc:
         _logger.warning(
             "Merkle anchor fetch for update failed: %s",
             _sanitize_for_log(str(exc)),
@@ -311,7 +319,13 @@ def update_merkle_anchor_block_height(
                 context="Merkle anchor patch response",
             )
         return True
-    except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, ConnectionError, RuntimeError) as exc:
+    except (
+        TimeoutError,
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        ConnectionError,
+        RuntimeError,
+    ) as exc:
         _logger.warning(
             "Merkle anchor block height update failed: %s",
             _sanitize_for_log(str(exc)),
@@ -723,14 +737,24 @@ class TransparencyLogAdapter:
                 timeout=timeout,
                 context="Transparency log publish request URL",
             ) as response:
-                raw = _read_response_bytes_bounded(
-                    response,
-                    context="Transparency publish response",
-                ).decode("utf-8").strip()
+                raw = (
+                    _read_response_bytes_bounded(
+                        response,
+                        context="Transparency publish response",
+                    )
+                    .decode("utf-8")
+                    .strip()
+                )
                 if not raw:
                     return None
                 return raw
-        except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, ConnectionError, RuntimeError) as exc:
+        except (
+            TimeoutError,
+            urllib.error.URLError,
+            urllib.error.HTTPError,
+            ConnectionError,
+            RuntimeError,
+        ) as exc:
             _logger.warning(
                 "Supabase broadcast soft-fail. Local anchor secure. Error: %s",
                 _sanitize_for_log(str(exc)),
@@ -809,10 +833,14 @@ class TransparencyLogAdapter:
                 timeout=timeout,
                 context="Remote transparency log fetch request URL",
             ) as response:
-                raw = _read_response_bytes_bounded(
-                    response,
-                    context="Remote transparency log fetch response",
-                ).decode("utf-8").strip()
+                raw = (
+                    _read_response_bytes_bounded(
+                        response,
+                        context="Remote transparency log fetch response",
+                    )
+                    .decode("utf-8")
+                    .strip()
+                )
                 if not raw:
                     return []
                 data = json.loads(raw)

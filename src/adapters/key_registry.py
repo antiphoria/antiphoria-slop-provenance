@@ -83,11 +83,7 @@ class KeyRegistryAdapter:
                 f"Invalid key status '{status}'. Allowed: {', '.join(sorted(_ALLOWED_STATUSES))}."
             )
         existing = self._store.get_key_registry_entry(fingerprint=fingerprint)
-        if (
-            existing is not None
-            and existing["status"] == "revoked"
-            and status == "active"
-        ):
+        if existing is not None and existing["status"] == "revoked" and status == "active":
             raise RuntimeError(
                 "Refusing to reactivate revoked key via register_key. "
                 "Use a controlled key-rotation path."

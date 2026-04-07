@@ -26,8 +26,6 @@ async def dispatch_command(
     if args.command == "admin":
         admin_handler = admin_handlers.get(args.admin_command)
         if admin_handler is None:
-            raise RuntimeError(
-                f"Unsupported admin command: {args.admin_command}"
-            )
+            raise RuntimeError(f"Unsupported admin command: {args.admin_command}")
         return admin_handler(args)
     raise RuntimeError(f"Unsupported command: {args.command}")

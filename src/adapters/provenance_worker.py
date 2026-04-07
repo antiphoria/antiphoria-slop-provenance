@@ -39,8 +39,7 @@ class ProvenanceWorkerAdapter:
         self._tsa_ca_cert_path = tsa_ca_cert_path
         self._env_path = env_path
         self._tsa_url_fallback = (
-            read_env_optional("RFC3161_TSA_URL", env_path=self._env_path)
-            or "unconfigured"
+            read_env_optional("RFC3161_TSA_URL", env_path=self._env_path) or "unconfigured"
         )
 
     async def start(self) -> None:
@@ -64,11 +63,7 @@ class ProvenanceWorkerAdapter:
                 timeout=_ANCHOR_TIMEOUT_SEC,
             )
         except Exception as exc:  # noqa: BLE001
-            message = (
-                "Anchoring timed out."
-                if isinstance(exc, asyncio.TimeoutError)
-                else str(exc)
-            )
+            message = "Anchoring timed out." if isinstance(exc, asyncio.TimeoutError) else str(exc)
             _adapter_logger.exception(
                 "Anchoring failed request_id=%s commit_oid=%s",
                 event.request_id,
@@ -140,9 +135,7 @@ class ProvenanceWorkerAdapter:
             )
         except Exception as exc:  # noqa: BLE001
             message = (
-                "Timestamping timed out."
-                if isinstance(exc, asyncio.TimeoutError)
-                else str(exc)
+                "Timestamping timed out." if isinstance(exc, asyncio.TimeoutError) else str(exc)
             )
             await self._event_bus.emit(
                 StoryTimestamped(

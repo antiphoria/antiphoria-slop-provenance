@@ -27,10 +27,13 @@ class CryptoNotaryC2PATest(unittest.IsolatedAsyncioTestCase):
         adapter._ed25519_private_key = b"fake-ed25519-key-32-bytes!!!!!!!"
         adapter._ed25519_signer_fingerprint = "a" * 32
 
-        with patch(
-            "src.adapters.crypto_notary.build_c2pa_sidecar_manifest",
-            side_effect=RuntimeError("sdk-sidecar-failed"),
-        ), self.assertRaises(RuntimeError) as error_ctx:
+        with (
+            patch(
+                "src.adapters.crypto_notary.build_c2pa_sidecar_manifest",
+                side_effect=RuntimeError("sdk-sidecar-failed"),
+            ),
+            self.assertRaises(RuntimeError) as error_ctx,
+        ):
             await adapter._build_signed_artifact(
                 title="INCIDENT_TEST",
                 source="synthetic",

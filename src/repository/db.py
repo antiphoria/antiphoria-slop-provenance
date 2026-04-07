@@ -57,8 +57,7 @@ def initialize_artifact_schema(connections: SQLiteConnectionFactory) -> None:
             """
         )
         existing_columns = {
-            row["name"]
-            for row in connection.execute("PRAGMA table_info(artifact_records);")
+            row["name"] for row in connection.execute("PRAGMA table_info(artifact_records);")
         }
         if "prompt" not in existing_columns:
             connection.execute(

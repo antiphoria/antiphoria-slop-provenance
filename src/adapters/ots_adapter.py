@@ -136,8 +136,7 @@ class OTSAdapter:
             proof_path = temp_path.with_suffix(".md.ots")
             if not proof_path.exists():
                 raise RuntimeError(
-                    "ots stamp completed without creating proof file "
-                    f"at '{proof_path}'."
+                    f"ots stamp completed without creating proof file at '{proof_path}'."
                 )
             return proof_path.read_bytes()
 

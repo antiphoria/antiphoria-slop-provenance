@@ -36,9 +36,7 @@ def _read_bounded_response_bytes(
 
     raw = response.read(max_bytes + 1)
     if len(raw) > max_bytes:
-        raise RuntimeError(
-            f"{context} exceeded maximum allowed size ({max_bytes} bytes)."
-        )
+        raise RuntimeError(f"{context} exceeded maximum allowed size ({max_bytes} bytes).")
     return raw
 
 
@@ -99,9 +97,7 @@ class RFC3161TSAAdapter:
         """Request RFC3161 token for a digest hex string."""
 
         if self._tsa_url is None:
-            raise RuntimeError(
-                "RFC3161 TSA URL is missing. Configure RFC3161_TSA_URL."
-            )
+            raise RuntimeError("RFC3161 TSA URL is missing. Configure RFC3161_TSA_URL.")
         normalized_digest_hex = _validate_digest_hex(
             digest_hex=digest_hex,
             digest_algorithm=digest_algorithm,
@@ -159,9 +155,7 @@ class RFC3161TSAAdapter:
                 ) from exc
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 reason = getattr(exc, "reason", None) or str(exc)
-                raise RuntimeError(
-                    f"Failed to reach TSA at '{self._tsa_url}': {reason}"
-                ) from exc
+                raise RuntimeError(f"Failed to reach TSA at '{self._tsa_url}': {reason}") from exc
         if not token:
             raise RuntimeError(
                 "TSA returned empty RFC3161 token payload. "
@@ -199,8 +193,7 @@ class RFC3161TSAAdapter:
                 ok=False,
                 message=(
                     (
-                        "No usable CA certificate bundle found for RFC3161 "
-                        f"verification. {details}"
+                        f"No usable CA certificate bundle found for RFC3161 verification. {details}"
                     ).strip()
                 ),
             )
@@ -237,10 +230,7 @@ class RFC3161TSAAdapter:
                     )
                     return TimestampVerification(
                         ok=True,
-                        message=(
-                            "RFC3161 verification succeeded "
-                            f"using '{ca_path}'."
-                        ),
+                        message=(f"RFC3161 verification succeeded using '{ca_path}'."),
                     )
                 failures.append(
                     self._format_verify_failure(
@@ -414,9 +404,7 @@ class RFC3161TSAAdapter:
             if tsa_ca_cert_path.exists():
                 candidates.append(tsa_ca_cert_path)
             else:
-                notes.append(
-                    f"Configured CA file missing: '{tsa_ca_cert_path}'."
-                )
+                notes.append(f"Configured CA file missing: '{tsa_ca_cert_path}'.")
 
         certifi_path = self._resolve_certifi_ca_bundle()
         if certifi_path is not None and certifi_path not in candidates:
@@ -479,11 +467,7 @@ class RFC3161TSAAdapter:
         tsa_ca_cert_path: Path,
         untrusted_cert_path: Path | None,
     ) -> str:
-        details = (
-            process.stderr.strip()
-            or process.stdout.strip()
-            or "unknown error"
-        )
+        details = process.stderr.strip() or process.stdout.strip() or "unknown error"
         if untrusted_cert_path is None:
             return f"verify failed with CA '{tsa_ca_cert_path}': {details}"
         return (

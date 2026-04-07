@@ -32,9 +32,7 @@ class ArtifactStore:
         """Create a new artifact lifecycle record."""
 
         if artifact.signature is None:
-            raise RuntimeError(
-                "Artifact signature block is missing for persistence."
-            )
+            raise RuntimeError("Artifact signature block is missing for persistence.")
 
         now = utc_now_iso()
         with self._connections.connect() as connection:
@@ -82,9 +80,7 @@ class ArtifactStore:
                 (str(request_id),),
             ).fetchone()
             if existing is None:
-                raise RuntimeError(
-                    f"Artifact record not found for request_id={request_id}."
-                )
+                raise RuntimeError(f"Artifact record not found for request_id={request_id}.")
             connection.execute(
                 """
                 UPDATE artifact_records
@@ -157,9 +153,7 @@ class ArtifactStore:
                 (str(request_id),),
             ).fetchone()
             if existing is None:
-                raise RuntimeError(
-                    f"Artifact record not found for request_id={request_id}."
-                )
+                raise RuntimeError(f"Artifact record not found for request_id={request_id}.")
 
             connection.execute(
                 """

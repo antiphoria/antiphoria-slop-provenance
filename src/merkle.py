@@ -74,9 +74,7 @@ def build_merkle_proof(entry_hashes: list[str], leaf_index: int) -> list[str]:
     if not entry_hashes:
         raise ValueError("entry_hashes cannot be empty")
     if leaf_index < 0 or leaf_index >= len(entry_hashes):
-        raise ValueError(
-            f"leaf_index {leaf_index} out of range [0, {len(entry_hashes)})"
-        )
+        raise ValueError(f"leaf_index {leaf_index} out of range [0, {len(entry_hashes)})")
     proof: list[str] = []
     current = [_hash_leaf(bytes.fromhex(h)) for h in entry_hashes]
     index = leaf_index

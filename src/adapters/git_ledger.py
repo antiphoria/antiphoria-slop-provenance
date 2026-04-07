@@ -345,9 +345,7 @@ class GitLedgerAdapter:
         """Build root tree when artifacts are written at repository root."""
 
         root_tb = (
-            repo.TreeBuilder(parent_tree_oid)
-            if parent_tree_oid is not None
-            else repo.TreeBuilder()
+            repo.TreeBuilder(parent_tree_oid) if parent_tree_oid is not None else repo.TreeBuilder()
         )
         root_tb.insert(path_obj.name, blob_oid, pygit2.GIT_FILEMODE_BLOB)
         if c2pa_sidecar_payload is not None:
@@ -374,9 +372,7 @@ class GitLedgerAdapter:
             parent_tree_oid=parent_tree_oid,
         )
         root_tb = (
-            repo.TreeBuilder(parent_tree_oid)
-            if parent_tree_oid is not None
-            else repo.TreeBuilder()
+            repo.TreeBuilder(parent_tree_oid) if parent_tree_oid is not None else repo.TreeBuilder()
         )
         root_tb.insert(self._artifacts_directory, artifacts_oid, pygit2.GIT_FILEMODE_TREE)
         return root_tb.write()

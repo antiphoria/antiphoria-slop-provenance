@@ -67,9 +67,7 @@ def _capture_registration_ceremony(env_path: Path) -> RegistrationCeremony:
                 encoding="utf-8",
                 timeout=5,
             )
-            git_commit = (
-                result.stdout.strip() if result.returncode == 0 else "unknown"
-            )
+            git_commit = result.stdout.strip() if result.returncode == 0 else "unknown"
         except (OSError, subprocess.SubprocessError):
             git_commit = "unknown"
     else:
@@ -78,9 +76,7 @@ def _capture_registration_ceremony(env_path: Path) -> RegistrationCeremony:
     if read_env_bool("CAPTURE_MACHINE_ID", default=False, env_path=env_path):
         try:
             node = uuid_module.getnode()
-            machine_id_hash = hashlib.sha256(
-                str(node).encode("utf-8")
-            ).hexdigest()
+            machine_id_hash = hashlib.sha256(str(node).encode("utf-8")).hexdigest()
         except Exception:
             _logger.debug("Machine id capture failed", exc_info=True)
     return RegistrationCeremony(
@@ -94,9 +90,7 @@ def _require_repo_path(args: argparse.Namespace) -> Path:
     """Resolve repo path from args or LEDGER_REPO_PATH. Raises if unset."""
     raw = getattr(args, "repo_path", None) or _default_repo_path()
     if not raw:
-        raise RuntimeError(
-            "Provide --repo-path or set LEDGER_REPO_PATH in .env"
-        )
+        raise RuntimeError("Provide --repo-path or set LEDGER_REPO_PATH in .env")
     return Path(raw).resolve()
 
 
@@ -106,17 +100,12 @@ def _verify_git_commit(repository_path: Path, commit_oid: str) -> str:
         repo = pygit2.Repository(str(repository_path.resolve()))
     except (KeyError, pygit2.GitError) as exc:
         raise RuntimeError(
-            
-                "Unable to open git repository for verification: "
-                f"'{repository_path}'."
-            
+            f"Unable to open git repository for verification: '{repository_path}'."
         ) from exc
     try:
         commit = repo.revparse_single(commit_oid)
     except (KeyError, pygit2.GitError) as exc:
-        raise RuntimeError(
-            f"Commit verification failed for oid={commit_oid}."
-        ) from exc
+        raise RuntimeError(f"Commit verification failed for oid={commit_oid}.") from exc
     return str(commit.id)
 
 
@@ -125,9 +114,7 @@ def _validate_artifact_under_repo(artifact_path: Path, repository_path: Path) ->
     try:
         artifact_path.resolve().relative_to(repository_path.resolve())
     except ValueError:
-        raise RuntimeError(
-            f"Artifact path must be under repository: {artifact_path}"
-        ) from None
+        raise RuntimeError(f"Artifact path must be under repository: {artifact_path}") from None
 
 
 def _validate_external_repo_path(repository_path: Path) -> None:
@@ -174,10 +161,7 @@ def _print_attest_next_step(repository_path: Path, request_id: UUID) -> None:
     """Print one-click follow-up attestation command."""
     print(
         "Next step:",
-        (
-            f'slop-cli attest --repo-path "{repository_path}" '
-            f"--request-id {request_id}"
-        ),
+        (f'slop-cli attest --repo-path "{repository_path}" --request-id {request_id}'),
     )
 
 

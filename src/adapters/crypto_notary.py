@@ -162,9 +162,7 @@ class CryptoNotaryAdapter:
                 self._ed25519_private_key,
                 self._ed25519_signer_fingerprint,
                 self._ed25519_private_key_obj,
-            ) = (
-                self._resolve_ed25519_key()
-            )
+            ) = self._resolve_ed25519_key()
         self._signer_fingerprint = self._resolve_signer_fingerprint()
         self._enable_c2pa = read_env_bool(
             "ENABLE_C2PA",
@@ -423,9 +421,7 @@ class CryptoNotaryAdapter:
                 request_id=request_id,
                 artifact=artifact,
                 body=body,
-                c2pa_manifest_hash=(
-                    None if c2pa_manifest is None else c2pa_manifest.manifest_hash
-                ),
+                c2pa_manifest_hash=(None if c2pa_manifest is None else c2pa_manifest.manifest_hash),
                 c2pa_manifest_bytes_b64=(
                     None
                     if c2pa_manifest is None

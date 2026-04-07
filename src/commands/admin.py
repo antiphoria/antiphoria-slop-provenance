@@ -23,9 +23,7 @@ def _run_admin_revoke_key_command(args: argparse.Namespace) -> int:
         db_path = (
             resolved
             if resolved is not None
-            else (
-                project_root / ".orchestrator-state" / "artifacts.db"
-            ).resolve()
+            else (project_root / ".orchestrator-state" / "artifacts.db").resolve()
         )
     else:
         db_path = Path(db_path).resolve()
@@ -36,9 +34,7 @@ def _run_admin_revoke_key_command(args: argparse.Namespace) -> int:
     repository = SQLiteRepository(db_path=db_path)
     key_registry = KeyRegistryAdapter(store=repository.keys)
     if key_registry.get_status(args.fingerprint) is None:
-        raise RuntimeError(
-            f"Key fingerprint not found in registry: {args.fingerprint}"
-        )
+        raise RuntimeError(f"Key fingerprint not found in registry: {args.fingerprint}")
 
     key_registry.set_status(fingerprint=args.fingerprint, status="revoked")
     print(f"Key revoked: fingerprint={args.fingerprint}")

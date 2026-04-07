@@ -129,10 +129,13 @@ class RFC3161TSAAdapterTest(unittest.TestCase):
             )
 
             adapter = RFC3161TSAAdapter(tsa_url=None, openssl_bin="openssl")
-            with patch(
-                "src.adapters.rfc3161_tsa.shutil.which",
-                return_value=str(openssl_bin),
-            ), patch.dict("os.environ", {}, clear=True):
+            with (
+                patch(
+                    "src.adapters.rfc3161_tsa.shutil.which",
+                    return_value=str(openssl_bin),
+                ),
+                patch.dict("os.environ", {}, clear=True),
+            ):
                 env = adapter._openssl_env()
 
             self.assertEqual(env.get("OPENSSL_CONF"), str(openssl_conf))

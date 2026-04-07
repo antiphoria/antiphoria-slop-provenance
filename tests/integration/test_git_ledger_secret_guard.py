@@ -85,10 +85,8 @@ class GitLedgerSecretGuardTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_rejects_prompt_containing_secret_pattern(self) -> None:
         event = _build_story_signed_event(
-            
-                "Prompt with leaked key "
-                "AIzaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"  # pragma: allowlist secret
-            
+            "Prompt with leaked key "
+            "AIzaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"  # pragma: allowlist secret
         )
 
         with self.assertRaises(RuntimeError):
