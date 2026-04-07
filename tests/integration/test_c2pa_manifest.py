@@ -84,13 +84,13 @@ class _FakeC2paModule:
         def sign(
             self,
             signer: object,
-            asset_format: str,
+            format: str,  # noqa: A002
             source: object,
             dest: object | None = None,
         ) -> bytes:
             _ = signer
             _FakeC2paModule.last_payload = source.read()
-            _FakeC2paModule.last_format = asset_format
+            _FakeC2paModule.last_format = format
             _FakeC2paModule.last_manifest_json = self._manifest_json
             if dest is not None:
                 dest.write(b"FAKE-C2PA-SIDECAR")

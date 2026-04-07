@@ -115,14 +115,13 @@ class EnvConfigTest(unittest.TestCase):
             temp_path = Path(temp_dir)
             env_file = temp_path / ".env"
             env_file.write_text("C2PA_MODE=broken\n", encoding="utf-8")
-            with patch.dict(os.environ, {}, clear=True):
-                with self.assertRaises(RuntimeError):
-                    read_env_choice(
-                        "C2PA_MODE",
-                        allowed_values=("mvp", "sdk"),
-                        default="mvp",
-                        env_path=env_file,
-                    )
+            with patch.dict(os.environ, {}, clear=True), self.assertRaises(RuntimeError):
+                read_env_choice(
+                    "C2PA_MODE",
+                    allowed_values=("mvp", "sdk"),
+                    default="mvp",
+                    env_path=env_file,
+                )
 
 
 if __name__ == "__main__":

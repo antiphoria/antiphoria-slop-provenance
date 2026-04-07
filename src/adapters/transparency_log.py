@@ -7,7 +7,6 @@ import logging
 import re
 import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,11 +16,11 @@ from uuid import uuid4
 from filelock import FileLock
 
 from src.env_config import read_env_optional
+from src.http_safe import build_http_request, ensure_allowed_http_url, open_http_urlopen
 from src.models import canonical_json_bytes, sha256_hex
 
 _logger = logging.getLogger(__name__)
 _MAX_REMOTE_RESPONSE_BYTES = 1_048_576
-_ALLOWED_OUTBOUND_SCHEMES = frozenset(("http", "https"))
 _MAX_REMOTE_TIMEOUT_SEC = 5.0
 
 
@@ -92,18 +91,6 @@ def _hash_payload_from_parts(
     return sha256_hex(canonical_json_bytes(hash_payload))
 
 
-def _ensure_allowed_outbound_url(url: str, *, context: str) -> None:
-    """Allow only explicit http(s) URLs for outbound remote operations."""
-
-    parsed = urllib.parse.urlparse(url.strip())
-    scheme = parsed.scheme.lower()
-    if scheme not in _ALLOWED_OUTBOUND_SCHEMES or not parsed.netloc:
-        raise RuntimeError(
-            f"{context} must use http/https with an explicit host. "
-            f"Got: {url!r}"
-        )
-
-
 def build_supabase_publish_config(
     publish_url: str | None,
     env_path: Path | None = None,
@@ -121,7 +108,7 @@ def build_supabase_publish_config(
     """
     if not publish_url:
         return {}, False
-    _ensure_allowed_outbound_url(
+    ensure_allowed_http_url(
         publish_url,
         context="TRANSPARENCY_LOG_PUBLISH_URL",
     )
@@ -167,17 +154,6 @@ def publish_merkle_anchor(
     """
     if not publish_url or not publish_url.strip() or not publish_headers:
         return False
-    try:
-        _ensure_allowed_outbound_url(
-            publish_url,
-            context="Merkle anchor publish_url",
-        )
-    except RuntimeError as exc:
-        _logger.warning(
-            "Merkle anchor publish soft-fail. Local anchor secure. Error: %s",
-            _sanitize_for_log(str(exc)),
-        )
-        return False
     payload = {
         "rootHash": root_hash,
         "entryCount": entry_count,
@@ -190,17 +166,26 @@ def publish_merkle_anchor(
         "Content-Type": "application/json",
         **publish_headers,
     }
-    request = urllib.request.Request(
-        publish_url,
-        method="POST",
-        headers=headers,
-        data=json.dumps(request_body).encode("utf-8"),
-    )
+    try:
+        request = build_http_request(
+            publish_url.strip(),
+            context="Merkle anchor publish_url",
+            method="POST",
+            headers=headers,
+            data=json.dumps(request_body).encode("utf-8"),
+        )
+    except RuntimeError as exc:
+        _logger.warning(
+            "Merkle anchor publish soft-fail. Local anchor secure. Error: %s",
+            _sanitize_for_log(str(exc)),
+        )
+        return False
     timeout = _normalize_remote_timeout(timeout_sec)
     try:
-        with urllib.request.urlopen(  # noqa: S310
+        with open_http_urlopen(
             request,
             timeout=timeout,
+            context="Merkle anchor publish request URL",
         ) as response:
             _read_response_bytes_bounded(
                 response,
@@ -247,7 +232,7 @@ def update_merkle_anchor_block_height(
     if not publish_url or not publish_url.strip() or not publish_headers:
         return False
     try:
-        _ensure_allowed_outbound_url(
+        ensure_allowed_http_url(
             publish_url,
             context="Merkle anchor publish_url",
         )
@@ -260,10 +245,19 @@ def update_merkle_anchor_block_height(
     query = urllib.parse.urlencode([("payload->>rootHash", f"eq.{root_hash}")])
     get_url = f"{publish_url.rstrip('/')}?{query}"
     headers = {k: v for k, v in publish_headers.items() if k != "Prefer"}
-    req = urllib.request.Request(get_url, method="GET", headers=headers)
     timeout = _normalize_remote_timeout(timeout_sec)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        req = build_http_request(
+            get_url,
+            context="Merkle anchor fetch request URL",
+            method="GET",
+            headers=headers,
+        )
+        with open_http_urlopen(
+            req,
+            timeout=timeout,
+            context="Merkle anchor fetch request URL",
+        ) as resp:
             raw = _read_response_bytes_bounded(
                 resp,
                 context="Merkle anchor fetch response",
@@ -299,14 +293,19 @@ def update_merkle_anchor_block_height(
         "Content-Type": "application/json",
         **publish_headers,
     }
-    req = urllib.request.Request(
-        patch_url,
-        method="PATCH",
-        headers=headers,
-        data=json.dumps(body).encode("utf-8"),
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        req = build_http_request(
+            patch_url,
+            context="Merkle anchor patch request URL",
+            method="PATCH",
+            headers=headers,
+            data=json.dumps(body).encode("utf-8"),
+        )
+        with open_http_urlopen(
+            req,
+            timeout=timeout,
+            context="Merkle anchor patch request URL",
+        ) as resp:
             _read_response_bytes_bounded(
                 resp,
                 context="Merkle anchor patch response",
@@ -350,7 +349,7 @@ class TransparencyLogAdapter:
     ) -> None:
         self._log_path = log_path
         if publish_url and publish_url.strip():
-            _ensure_allowed_outbound_url(
+            ensure_allowed_http_url(
                 publish_url,
                 context="Transparency log publish_url",
             )
@@ -698,7 +697,7 @@ class TransparencyLogAdapter:
         if not self._publish_url or not self._publish_url.strip():
             return None
         try:
-            _ensure_allowed_outbound_url(
+            ensure_allowed_http_url(
                 self._publish_url,
                 context="Transparency log publish_url",
             )
@@ -710,17 +709,19 @@ class TransparencyLogAdapter:
             return None
         headers: dict[str, str] = {"Content-Type": "application/json", **self._publish_headers}
         body = {"payload": payload} if self._publish_supabase_format else payload
-        request = urllib.request.Request(
-            self._publish_url,
-            method="POST",
-            headers=headers,
-            data=json.dumps(body).encode("utf-8"),
-        )
         timeout = _normalize_remote_timeout(self._publish_timeout_sec)
         try:
-            with urllib.request.urlopen(  # noqa: S310
+            request = build_http_request(
+                self._publish_url.strip(),
+                context="Transparency log publish_url",
+                method="POST",
+                headers=headers,
+                data=json.dumps(body).encode("utf-8"),
+            )
+            with open_http_urlopen(
                 request,
                 timeout=timeout,
+                context="Transparency log publish request URL",
             ) as response:
                 raw = _read_response_bytes_bounded(
                     response,
@@ -783,7 +784,7 @@ class TransparencyLogAdapter:
         if not (self._publish_url and self._publish_url.strip()) or not self._publish_headers:
             return None
         try:
-            _ensure_allowed_outbound_url(
+            ensure_allowed_http_url(
                 self._publish_url,
                 context="Transparency log publish_url",
             )
@@ -795,12 +796,18 @@ class TransparencyLogAdapter:
         query = urllib.parse.urlencode([("payload->>artifactHash", f"eq.{artifact_hash}")])
         url = f"{self._publish_url.rstrip('/')}?{query}"
         headers = {k: v for k, v in self._publish_headers.items() if k != "Prefer"}
-        request = urllib.request.Request(url, method="GET", headers=headers)
         timeout = _normalize_remote_timeout(self._publish_timeout_sec)
         try:
-            with urllib.request.urlopen(  # noqa: S310
+            request = build_http_request(
+                url,
+                context="Remote transparency log fetch request URL",
+                method="GET",
+                headers=headers,
+            )
+            with open_http_urlopen(
                 request,
                 timeout=timeout,
+                context="Remote transparency log fetch request URL",
             ) as response:
                 raw = _read_response_bytes_bounded(
                     response,

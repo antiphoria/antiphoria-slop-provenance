@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -13,6 +14,13 @@ from src.adapters.transparency_log import TransparencyLogAdapter
 from src.merkle import build_merkle_root
 
 from .conftest import run_cli
+
+
+def _require_git() -> str:
+    exe = shutil.which("git")
+    if not exe:
+        pytest.skip("git executable not found on PATH")
+    return exe
 
 
 def _generate_and_extract_artifact(env: dict, ledger_dir: Path) -> tuple[str, Path]:
@@ -32,8 +40,14 @@ def _generate_and_extract_artifact(env: dict, ledger_dir: Path) -> tuple[str, Pa
     if not match:
         raise pytest.skip("Could not parse request_id from generate output")
     request_id = match.group(1)
-    artifact_content = subprocess.run(
-        ["git", "-C", str(ledger_dir), "show", f"artifact/{request_id}:{request_id}.md"],
+    artifact_content = subprocess.run(  # noqa: S603
+        [
+            _require_git(),
+            "-C",
+            str(ledger_dir),
+            "show",
+            f"artifact/{request_id}:{request_id}.md",
+        ],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -295,8 +309,14 @@ def test_verify_valid_artifact_passes(isolated_env) -> None:
     assert attest_result.returncode == 0, attest_result.stderr or attest_result.stdout
 
     # 3. Re-extract attested (signed) artifact from git
-    artifact_content = subprocess.run(
-        ["git", "-C", str(ledger_dir), "show", f"artifact/{request_id}:{request_id}.md"],
+    artifact_content = subprocess.run(  # noqa: S603
+        [
+            _require_git(),
+            "-C",
+            str(ledger_dir),
+            "show",
+            f"artifact/{request_id}:{request_id}.md",
+        ],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -345,8 +365,14 @@ def test_redact_and_verify_allow_redacted(isolated_env) -> None:
     )
     assert attest_result.returncode == 0, attest_result.stderr or attest_result.stdout
 
-    artifact_content = subprocess.run(
-        ["git", "-C", str(ledger_dir), "show", f"artifact/{request_id}:{request_id}.md"],
+    artifact_content = subprocess.run(  # noqa: S603
+        [
+            _require_git(),
+            "-C",
+            str(ledger_dir),
+            "show",
+            f"artifact/{request_id}:{request_id}.md",
+        ],
         capture_output=True,
         text=True,
         encoding="utf-8",

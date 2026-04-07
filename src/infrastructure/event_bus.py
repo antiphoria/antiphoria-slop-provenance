@@ -186,7 +186,13 @@ class InMemoryEventBus:
         for error_handler in error_handlers:
             try:
                 await error_handler(payload)
-            except Exception:
+            except Exception as exc:
+                _route_logger.warning(
+                    "Error handler %s raised while dispatching handler failure: %s",
+                    getattr(error_handler, "__qualname__", repr(error_handler)),
+                    exc,
+                    exc_info=True,
+                )
                 continue
 
     async def drain(self) -> None:

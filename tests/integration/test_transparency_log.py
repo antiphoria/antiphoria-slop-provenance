@@ -188,9 +188,11 @@ class BuildSupabaseConfigTest(unittest.TestCase):
         self.assertFalse(use_format)
 
     def test_raises_when_url_set_but_no_key(self) -> None:
-        with patch("src.adapters.transparency_log.read_env_optional", return_value=None):
-            with self.assertRaises(RuntimeError) as ctx:
-                build_supabase_publish_config("https://x.supabase.co/rest/v1/t")
+        with patch(
+            "src.adapters.transparency_log.read_env_optional",
+            return_value=None,
+        ), self.assertRaises(RuntimeError) as ctx:
+            build_supabase_publish_config("https://x.supabase.co/rest/v1/t")
         self.assertIn("SUPABASE_SERVICE_KEY", str(ctx.exception))
         self.assertIn("SUPABASE_ANON_KEY", str(ctx.exception))
 
@@ -319,9 +321,10 @@ class FetchRemoteEntriesTest(unittest.TestCase):
             publish_headers={"apikey": "x", "Authorization": "Bearer x"},
         )
 
-        with patch("urllib.request.urlopen", fake_urlopen):
-            with self.assertRaises(RuntimeError) as ctx:
-                adapter.fetch_remote_entries_by_artifact_hash("c" * 64)
+        with patch("urllib.request.urlopen", fake_urlopen), self.assertRaises(
+            RuntimeError
+        ) as ctx:
+            adapter.fetch_remote_entries_by_artifact_hash("c" * 64)
         self.assertIn("Remote transparency log fetch failed", str(ctx.exception))
 
     def test_raises_on_urlerror(self) -> None:
@@ -336,9 +339,10 @@ class FetchRemoteEntriesTest(unittest.TestCase):
             publish_url="https://test.supabase.co/rest/v1/transparency_log",
             publish_headers={"apikey": "x", "Authorization": "Bearer x"},
         )
-        with patch("urllib.request.urlopen", fake_urlopen):
-            with self.assertRaises(RuntimeError) as ctx:
-                adapter.fetch_remote_entries_by_artifact_hash("e" * 64)
+        with patch("urllib.request.urlopen", fake_urlopen), self.assertRaises(
+            RuntimeError
+        ) as ctx:
+            adapter.fetch_remote_entries_by_artifact_hash("e" * 64)
         self.assertIn("Remote transparency log fetch failed", str(ctx.exception))
 
     def test_raises_on_non_transient_http_error(self) -> None:
@@ -354,9 +358,10 @@ class FetchRemoteEntriesTest(unittest.TestCase):
             publish_headers={"apikey": "x", "Authorization": "Bearer x"},
         )
 
-        with patch("urllib.request.urlopen", fake_urlopen):
-            with self.assertRaises(RuntimeError) as ctx:
-                adapter.fetch_remote_entries_by_artifact_hash("c" * 64)
+        with patch("urllib.request.urlopen", fake_urlopen), self.assertRaises(
+            RuntimeError
+        ) as ctx:
+            adapter.fetch_remote_entries_by_artifact_hash("c" * 64)
         self.assertIn("Remote transparency log fetch failed", str(ctx.exception))
         self.assertIn("404", str(ctx.exception))
 
@@ -369,9 +374,10 @@ class FetchRemoteEntriesTest(unittest.TestCase):
             publish_url="https://test.supabase.co/rest/v1/transparency_log",
             publish_headers={"apikey": "x", "Authorization": "Bearer x"},
         )
-        with patch("urllib.request.urlopen", fake_urlopen):
-            with self.assertRaises(RuntimeError) as ctx:
-                adapter.fetch_remote_entries_by_artifact_hash("f" * 64)
+        with patch("urllib.request.urlopen", fake_urlopen), self.assertRaises(
+            RuntimeError
+        ) as ctx:
+            adapter.fetch_remote_entries_by_artifact_hash("f" * 64)
         self.assertIn("Remote transparency log fetch failed", str(ctx.exception))
 
     def test_raises_when_response_body_exceeds_size_limit(self) -> None:
@@ -384,9 +390,10 @@ class FetchRemoteEntriesTest(unittest.TestCase):
             publish_url="https://test.supabase.co/rest/v1/transparency_log",
             publish_headers={"apikey": "x", "Authorization": "Bearer x"},
         )
-        with patch("urllib.request.urlopen", fake_urlopen):
-            with self.assertRaises(RuntimeError) as ctx:
-                adapter.fetch_remote_entries_by_artifact_hash("f" * 64)
+        with patch("urllib.request.urlopen", fake_urlopen), self.assertRaises(
+            RuntimeError
+        ) as ctx:
+            adapter.fetch_remote_entries_by_artifact_hash("f" * 64)
         self.assertIn("exceeded maximum allowed size", str(ctx.exception))
 
     def test_fetch_rejects_runtime_invalid_scheme_before_network_call(self) -> None:
@@ -397,9 +404,10 @@ class FetchRemoteEntriesTest(unittest.TestCase):
         )
         adapter._publish_url = "file:///tmp/transparency-log"
 
-        with patch("urllib.request.urlopen") as urlopen_mock:
-            with self.assertRaises(RuntimeError) as ctx:
-                adapter.fetch_remote_entries_by_artifact_hash("f" * 64)
+        with patch("urllib.request.urlopen") as urlopen_mock, self.assertRaises(
+            RuntimeError
+        ) as ctx:
+            adapter.fetch_remote_entries_by_artifact_hash("f" * 64)
 
         self.assertIn("http/https", str(ctx.exception))
         urlopen_mock.assert_not_called()

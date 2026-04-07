@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -45,8 +46,11 @@ def isolated_env(tmp_path: Path):
     state_dir = tmp_path / "state"
     ledger_dir.mkdir()
     state_dir.mkdir()
-    subprocess.run(
-        ["git", "init"],
+    git_exe = shutil.which("git")
+    if not git_exe:
+        pytest.skip("git executable not found on PATH")
+    subprocess.run(  # noqa: S603
+        [git_exe, "init"],
         cwd=ledger_dir,
         check=True,
         capture_output=True,
@@ -125,7 +129,7 @@ def run_cli(
     timeout: int = 15,
 ) -> subprocess.CompletedProcess:
     """Run CLI via current Python. Guarantees exact source code under test."""
-    return subprocess.run(
+    return subprocess.run(  # noqa: S603
         [sys.executable, "-m", "src.cli"] + args,
         env=env,
         capture_output=True,
@@ -143,7 +147,7 @@ def run_tool(
     timeout: int = 15,
 ) -> subprocess.CompletedProcess:
     """Run module entry points (e.g. metrics_report)."""
-    return subprocess.run(
+    return subprocess.run(  # noqa: S603
         [sys.executable, "-m", module] + args,
         env=env,
         capture_output=True,

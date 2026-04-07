@@ -114,7 +114,7 @@ class OTSAdapter:
             temp_path = Path(temp_dir) / "payload.md"
             temp_path.write_bytes(payload_bytes)
             try:
-                subprocess.run(
+                subprocess.run(  # noqa: S603
                     [bin_, "stamp", str(temp_path)],
                     check=True,
                     timeout=timeout,
@@ -165,7 +165,7 @@ class OTSAdapter:
             proof_path = temp_path / "proof.ots"
             proof_path.write_bytes(pending_bytes)
             try:
-                subprocess.run(
+                subprocess.run(  # noqa: S603
                     [bin_, "upgrade", "proof.ots"],
                     check=True,
                     timeout=timeout,
@@ -239,7 +239,7 @@ class OTSAdapter:
             payload_path.write_bytes(payload_bytes)
             proof_path.write_bytes(ots_bytes)
             try:
-                result = subprocess.run(
+                result = subprocess.run(  # noqa: S603
                     [ots_bin, "verify", "payload.md.ots", "payload.md"],
                     capture_output=True,
                     text=True,

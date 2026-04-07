@@ -81,14 +81,11 @@ extend-exclude = [
 select = ["E4", "E7", "E9", "F", "B", "UP", "I", "SIM", "A", "S"]
 ignore = [
     "E203",
-    "S112",
-    "S310",
-    "S603",
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "S607", "SIM117"]
-"**/tests/**/*.py" = ["S101", "S607", "SIM117"]
+"tests/**/*.py" = ["S101"]
+"**/tests/**/*.py" = ["S101"]
 
 [tool.ruff.format]
 quote-style = "double"

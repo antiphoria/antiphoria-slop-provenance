@@ -9,10 +9,11 @@ import shutil
 import subprocess
 import tempfile
 import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from src.http_safe import build_http_request, open_http_urlopen
 
 _ALLOWED_DIGEST_ALGORITHMS = frozenset(("sha256", "sha384", "sha512"))
 _DIGEST_HEX_LENGTHS = {
@@ -119,8 +120,9 @@ class RFC3161TSAAdapter:
                 digest_algorithm,
             )
             query_bytes = query_path.read_bytes()
-            request = urllib.request.Request(
+            request = build_http_request(
                 self._tsa_url,
+                context="RFC3161 TSA URL",
                 method="POST",
                 headers={
                     "Content-Type": "application/timestamp-query",
@@ -129,9 +131,10 @@ class RFC3161TSAAdapter:
                 data=query_bytes,
             )
             try:
-                with urllib.request.urlopen(  # noqa: S310
+                with open_http_urlopen(
                     request,
                     timeout=self._request_timeout_sec,
+                    context="RFC3161 TSA request URL",
                 ) as response:
                     token = _read_bounded_response_bytes(
                         response,
@@ -303,7 +306,7 @@ class RFC3161TSAAdapter:
             "-out",
             str(output_path),
         ]
-        process = subprocess.run(
+        process = subprocess.run(  # noqa: S603
             command,
             check=False,
             capture_output=True,
@@ -314,11 +317,9 @@ class RFC3161TSAAdapter:
         if process.returncode != 0:
             stderr = process.stderr.strip() or process.stdout.strip()
             raise RuntimeError(
-                
-                    "OpenSSL ts query generation failed. "
-                    "Ensure OpenSSL is available. "
-                    f"Details: {stderr or '<no error output>'}"
-                
+                "OpenSSL ts query generation failed. "
+                "Ensure OpenSSL is available. "
+                f"Details: {stderr or '<no error output>'}"
             )
 
     def _run_ts_verify(
@@ -343,7 +344,7 @@ class RFC3161TSAAdapter:
         ]
         if untrusted_cert_path is not None:
             command.extend(["-untrusted", str(untrusted_cert_path)])
-        return subprocess.run(
+        return subprocess.run(  # noqa: S603
             command,
             check=False,
             capture_output=True,
@@ -358,7 +359,7 @@ class RFC3161TSAAdapter:
         output_path: Path,
     ) -> Path | None:
         token_path = output_path.with_suffix(".p7b")
-        extract_token = subprocess.run(
+        extract_token = subprocess.run(  # noqa: S603
             [
                 self._openssl_bin,
                 "ts",
@@ -377,7 +378,7 @@ class RFC3161TSAAdapter:
         )
         if extract_token.returncode != 0 or not token_path.exists():
             return None
-        extract_certs = subprocess.run(
+        extract_certs = subprocess.run(  # noqa: S603
             [
                 self._openssl_bin,
                 "pkcs7",

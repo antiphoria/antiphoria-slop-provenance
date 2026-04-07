@@ -24,46 +24,46 @@ class RFC3161TSAAdapterTest(unittest.TestCase):
 
             adapter = RFC3161TSAAdapter(tsa_url="https://example.invalid/tsr")
 
-            with patch.object(adapter, "_build_query_file", return_value=None):
-                with patch.object(
+            first = CompletedProcess(
+                args=[],
+                returncode=1,
+                stdout="",
+                stderr="unable to get local issuer certificate",
+            )
+            second = CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout="Verification: OK",
+                stderr="",
+            )
+            with (
+                patch.object(adapter, "_build_query_file", return_value=None),
+                patch.object(
                     adapter,
                     "_resolve_ca_candidates",
                     return_value=([ca_file], []),
-                ):
-                    with patch.object(
-                        adapter,
-                        "_resolve_untrusted_cert_path",
-                        return_value=None,
-                    ):
-                        with patch.object(
-                            adapter,
-                            "_extract_embedded_untrusted_cert_bundle",
-                            return_value=embedded_chain,
-                        ):
-                            first = CompletedProcess(
-                                args=[],
-                                returncode=1,
-                                stdout="",
-                                stderr=(
-                                    "unable to get local issuer certificate"
-                                ),
-                            )
-                            second = CompletedProcess(
-                                args=[],
-                                returncode=0,
-                                stdout="Verification: OK",
-                                stderr="",
-                            )
-                            with patch.object(
-                                adapter,
-                                "_run_ts_verify",
-                                side_effect=[first, second],
-                            ) as run_verify:
-                                result = adapter.verify_timestamp_token(
-                                    digest_hex="a" * 64,
-                                    token_bytes=b"token",
-                                    tsa_ca_cert_path=ca_file,
-                                )
+                ),
+                patch.object(
+                    adapter,
+                    "_resolve_untrusted_cert_path",
+                    return_value=None,
+                ),
+                patch.object(
+                    adapter,
+                    "_extract_embedded_untrusted_cert_bundle",
+                    return_value=embedded_chain,
+                ),
+                patch.object(
+                    adapter,
+                    "_run_ts_verify",
+                    side_effect=[first, second],
+                ) as run_verify,
+            ):
+                result = adapter.verify_timestamp_token(
+                    digest_hex="a" * 64,
+                    token_bytes=b"token",
+                    tsa_ca_cert_path=ca_file,
+                )
 
             self.assertTrue(result.ok)
             self.assertIn("embedded TSA chain", result.message)
@@ -77,38 +77,40 @@ class RFC3161TSAAdapterTest(unittest.TestCase):
             missing_ca = temp_path / "missing-ca.pem"
             adapter = RFC3161TSAAdapter(tsa_url="https://example.invalid/tsr")
 
-            with patch.object(adapter, "_build_query_file", return_value=None):
-                with patch.object(
+            ok_process = CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout="Verification: OK",
+                stderr="",
+            )
+            with (
+                patch.object(adapter, "_build_query_file", return_value=None),
+                patch.object(
                     adapter,
                     "_resolve_certifi_ca_bundle",
                     return_value=certifi_bundle,
-                ):
-                    with patch.object(
-                        adapter,
-                        "_resolve_untrusted_cert_path",
-                        return_value=None,
-                    ):
-                        with patch.object(
-                            adapter,
-                            "_extract_embedded_untrusted_cert_bundle",
-                            return_value=None,
-                        ):
-                            ok_process = CompletedProcess(
-                                args=[],
-                                returncode=0,
-                                stdout="Verification: OK",
-                                stderr="",
-                            )
-                            with patch.object(
-                                adapter,
-                                "_run_ts_verify",
-                                return_value=ok_process,
-                            ) as run_verify:
-                                result = adapter.verify_timestamp_token(
-                                    digest_hex="b" * 64,
-                                    token_bytes=b"token",
-                                    tsa_ca_cert_path=missing_ca,
-                                )
+                ),
+                patch.object(
+                    adapter,
+                    "_resolve_untrusted_cert_path",
+                    return_value=None,
+                ),
+                patch.object(
+                    adapter,
+                    "_extract_embedded_untrusted_cert_bundle",
+                    return_value=None,
+                ),
+                patch.object(
+                    adapter,
+                    "_run_ts_verify",
+                    return_value=ok_process,
+                ) as run_verify,
+            ):
+                result = adapter.verify_timestamp_token(
+                    digest_hex="b" * 64,
+                    token_bytes=b"token",
+                    tsa_ca_cert_path=missing_ca,
+                )
 
             self.assertTrue(result.ok)
             called_ca = run_verify.call_args.kwargs["tsa_ca_cert_path"]
@@ -159,13 +161,16 @@ class RFC3161TSAAdapterTest(unittest.TestCase):
         response.__enter__ = MagicMock(return_value=response)
         response.__exit__ = MagicMock(return_value=False)
 
-        with patch.object(
-            adapter,
-            "_build_query_file",
-            side_effect=fake_build_query,
-        ), patch("urllib.request.urlopen", return_value=response):
-            with self.assertRaises(RuntimeError) as ctx:
-                adapter.request_timestamp_token(digest_hex="a" * 64)
+        with (
+            patch.object(
+                adapter,
+                "_build_query_file",
+                side_effect=fake_build_query,
+            ),
+            patch("urllib.request.urlopen", return_value=response),
+            self.assertRaises(RuntimeError) as ctx,
+        ):
+            adapter.request_timestamp_token(digest_hex="a" * 64)
 
         self.assertIn("exceeded maximum allowed size", str(ctx.exception))
 
