@@ -1,6 +1,11 @@
 # Direct dependencies for antiphoria-slop-provenance (from pyproject.toml)
 # Used by pip-compile to generate requirements.txt
-filelock>=3.13.0
+cryptography>=46.0.6
+filelock>=3.20.3
+# Transitive pins (security / Trivy)
+pyasn1>=0.6.3
+pygments>=2.20.0
+requests>=2.33.0
 google-genai
 pydantic>=2.5.0,<3.0.0
 liboqs-python>=0.14.0
