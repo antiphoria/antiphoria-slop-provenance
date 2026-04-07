@@ -44,7 +44,7 @@ class CryptoNotaryC2PATest(unittest.IsolatedAsyncioTestCase):
                 usage_metrics=None,
                 embedded_watermark=None,
                 content_type="text/markdown",
-                license="CC0-1.0",
+                license_id="CC0-1.0",
                 curation=None,
             )
         self.assertIn("fail-closed", str(error_ctx.exception))
@@ -96,7 +96,7 @@ class CryptoNotaryC2PATest(unittest.IsolatedAsyncioTestCase):
                 usage_metrics=None,
                 embedded_watermark=None,
                 content_type="text/markdown",
-                license="ARR",
+                license_id="ARR",
                 curation=None,
                 author_attestation=attestation,
             )
@@ -133,7 +133,7 @@ class CryptoNotaryC2PATest(unittest.IsolatedAsyncioTestCase):
                 usage_metrics=None,
                 embedded_watermark=None,
                 content_type="text/markdown",
-                license="CC0-1.0",
+                license_id="CC0-1.0",
                 curation=None,
             )
         self.assertIn("Ed25519 private key", str(error_ctx.exception))
@@ -171,7 +171,7 @@ class CryptoNotaryC2PATest(unittest.IsolatedAsyncioTestCase):
                 usage_metrics=None,
                 embedded_watermark=None,
                 content_type="text/markdown",
-                license="CC0-1.0",
+                license_id="CC0-1.0",
                 curation=None,
             )
 

@@ -5,18 +5,31 @@ Phase 0 fixtures: physical state, no mocks for pygit2/subprocess.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import pygit2
 import pytest
 
-from src.repository.sqlite import SQLiteRepository
+_OQS_STUB_DISABLE_ENV = "PYTEST_DISABLE_OQS_STUB"
+_TESTS_ROOT = Path(__file__).resolve().parent
+_OQS_STUB_PATH = _TESTS_ROOT / "stubs"
+
+if os.getenv(_OQS_STUB_DISABLE_ENV) != "1" and _OQS_STUB_PATH.exists():
+    oqs_stub_path = str(_OQS_STUB_PATH)
+    if oqs_stub_path not in sys.path:
+        sys.path.insert(0, oqs_stub_path)
+
+from src.repository.sqlite import SQLiteRepository  # noqa: E402
 
 
 @pytest.fixture
 def empty_git_repo(tmp_path: Path) -> Path:
-    """Real pygit2 repo on disk. No mocks. Use for GitLedgerAdapter, OtsQueueAdapter, ProvenanceService."""
+    """Real pygit2 repo on disk.
+
+    No mocks. Use for GitLedgerAdapter, OtsQueueAdapter, ProvenanceService.
+    """
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
     pygit2.init_repository(str(repo_path), bare=False)
@@ -25,7 +38,11 @@ def empty_git_repo(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def fake_ots_binary(tmp_path: Path) -> Path:
-    """Fake OTS CLI. MUST parse sys.argv: stamp writes sys.argv[2]+'.ots'; upgrade overwrites sys.argv[2]."""
+    """Fake OTS CLI.
+
+    MUST parse sys.argv: stamp writes sys.argv[2]+'.ots'; upgrade overwrites
+    sys.argv[2].
+    """
     script_content = """import sys
 from pathlib import Path
 if len(sys.argv) < 3:
@@ -59,7 +76,10 @@ else:
 
 @pytest.fixture
 def temp_sqlite_db(tmp_path: Path) -> Path:
-    """SQLite DB with schema initialized. MUST instantiate SQLiteRepository to create tables before yielding."""
+    """SQLite DB with schema initialized.
+
+    MUST instantiate SQLiteRepository to create tables before yielding.
+    """
     db_path = tmp_path / "state.db"
     SQLiteRepository(db_path=db_path)
     return db_path

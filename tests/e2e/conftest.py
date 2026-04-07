@@ -16,6 +16,22 @@ from cryptography.hazmat.primitives.serialization import (
     PublicFormat,
 )
 
+_OQS_STUB_DISABLE_ENV = "PYTEST_DISABLE_OQS_STUB"
+
+
+def _prepend_pythonpath(env: dict[str, str], path: Path) -> None:
+    """Prepend one path to PYTHONPATH if not already present."""
+
+    path_value = str(path)
+    existing = env.get("PYTHONPATH")
+    if not existing:
+        env["PYTHONPATH"] = path_value
+        return
+    entries = existing.split(os.pathsep)
+    if path_value in entries:
+        return
+    env["PYTHONPATH"] = path_value + os.pathsep + existing
+
 
 @pytest.fixture
 def isolated_env(tmp_path: Path):
@@ -63,6 +79,10 @@ def isolated_env(tmp_path: Path):
 
     artifact_db = state_dir / "artifacts.db"
     env = os.environ.copy()
+    if os.getenv(_OQS_STUB_DISABLE_ENV) != "1":
+        oqs_stub_path = Path(__file__).resolve().parents[1] / "stubs"
+        if oqs_stub_path.exists():
+            _prepend_pythonpath(env, oqs_stub_path)
     env.update(
         {
             "LEDGER_REPO_PATH": str(ledger_dir),
@@ -73,7 +93,9 @@ def isolated_env(tmp_path: Path):
             "ENABLE_C2PA": "false",
             "TRANSPARENCY_LOG_PUBLISH_URL": "",
             "RFC3161_TSA_URL": "",
-            "PQC_PRIVATE_KEY_PATH": str(priv_path) if priv_path.exists() else "",
+            "PQC_PRIVATE_KEY_PATH": (
+                str(priv_path) if priv_path.exists() else ""
+            ),
             "OQS_PUBLIC_KEY_PATH": str(pub_path) if pub_path.exists() else "",
             "C2PA_PRIVATE_KEY_PATH": "",
             "ED25519_PRIVATE_KEY_PATH": str(ed_priv_path),
@@ -97,7 +119,11 @@ def tsa_mock(httpserver):
     return httpserver.url_for("/")
 
 
-def run_cli(args: list[str], env: dict, timeout: int = 15) -> subprocess.CompletedProcess:
+def run_cli(
+    args: list[str],
+    env: dict,
+    timeout: int = 15,
+) -> subprocess.CompletedProcess:
     """Run CLI via current Python. Guarantees exact source code under test."""
     return subprocess.run(
         [sys.executable, "-m", "src.cli"] + args,
