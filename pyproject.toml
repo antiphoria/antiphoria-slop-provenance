@@ -27,7 +27,8 @@ dev = [
     "pytest-httpserver>=1.0.0",
     "hypothesis>=6.0.0",
     "mutmut>=2.0.0",
-    "ruff>=0.8.0",
+    # Pinned to match antiphoria/.github Org Quality gate (ci/requirements-ruff.txt).
+    "ruff==0.15.8",
 ]
 webauthn = ["fido2>=1.1.0"]
 
@@ -92,7 +93,7 @@ ignore = [
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
-line-ending = "lf"
+line-ending = "auto"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
