@@ -1,7 +1,3 @@
-# Scan full git history for leaked secrets (complements Trivy + GitHub secret scanning).
-#
-# Org repos: add repository or organization secret GITLEAKS_LICENSE (free org key from
-# gitleaks.io). Personal repos: secret can be omitted; see gitleaks-action docs.
 name: Gitleaks
 
 on:

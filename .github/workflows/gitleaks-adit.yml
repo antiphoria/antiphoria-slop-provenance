@@ -1,0 +1,23 @@
+name: Gitleaks Full History Audit
+
+on:
+  workflow_dispatch: # Allows you to trigger this full scan manually from the GitHub UI
+
+jobs:
+  gitleaks-full-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code (Full History)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # CRITICAL: This downloads the entire git history!
+
+      - name: Install Gitleaks
+        run: |
+          wget https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
+          tar -xzf gitleaks_8.24.3_linux_x64.tar.gz
+          sudo mv gitleaks /usr/local/bin/
+
+      - name: Run Full History Scan
+        run: |
+          gitleaks detect --source . -v
