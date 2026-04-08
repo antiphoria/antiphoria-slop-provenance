@@ -1,27 +1,26 @@
-# Python-focused org quality gate template.
-name: Org Quality (Python)
+# Caller for org quality-gate: tests + Ruff (separate status check / badge).
+name: CI Tests
 
 on:
-  pull_request:
   push:
-    branches:
-      - $default-branch
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  quality-gate:
+  tests:
     uses: antiphoria/.github/.github/workflows/quality-gate.yml@main
     with:
       policy-ref: main
       # CodeAudit 1.6.1 raises SyntaxError on Python 3.11 when importing reporting.py
       # (f-string expression contains backslashes). 3.12+ accepts that syntax (PEP 701).
       python-version: "3.12"
-      run-trivy: true
+      run-trivy: false
       run-python-ruff: true
       run-python-test: true
-      run-python-codeaudit: true
+      run-python-codeaudit: false
       run-node-quality: false
       run-ci-handoff: true

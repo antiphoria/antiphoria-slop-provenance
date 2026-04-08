@@ -1,7 +1,8 @@
 # Antiphoria Slop Provenance
 
-[![Org Quality (Python)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/quality-gate.yml/badge.svg)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/quality-gate.yml)
-
+[![CI Tests](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/ci-tests.yml/badge.svg)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/ci-tests.yml)
+[![CI Trivy](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/ci-trivy.yml/badge.svg)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/ci-trivy.yml)
+[![CI CodeAudit](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/ci-codeaudit.yml/badge.svg)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/ci-codeaudit.yml)
 [![Gitleaks](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/gitleaks.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/antiphoria/antiphoria-slop-provenance/badge)](https://securityscorecards.dev/viewer/?uri=github.com/antiphoria/antiphoria-slop-provenance)
 
@@ -52,7 +53,7 @@ Copy [`.env.example`](.env.example) to `.env` and edit. **Never commit `.env`.**
 - **Live generation:** set `GOOGLE_API_KEY` and `GENERATOR_DUMMY_MODE=false`.
 - **Transparency log:** if `TRANSPARENCY_LOG_PUBLISH_URL` is set, you must set `SUPABASE_SERVICE_KEY` or `SUPABASE_ANON_KEY`.
 
-**Production keys:** use BYOV and the secure launchers — [docs/SECURITY.md](docs/SECURITY.md).
+**Production keys:** use BYOV and the secure launchers — [SECURITY.md](SECURITY.md).
 
 ```bash
 # Windows (PowerShell as Administrator)
@@ -156,4 +157,4 @@ slop-metrics --metrics-dir ./.metrics --json
 - [docs/TERMS_OF_USE.md](docs/TERMS_OF_USE.md)
 - [docs/CONTENT_LICENSE_POLICY.md](docs/CONTENT_LICENSE_POLICY.md)
 - [docs/KEY_MANAGEMENT_POLICY.md](docs/KEY_MANAGEMENT_POLICY.md)
-- [docs/SECURITY.md](docs/SECURITY.md)
+- [SECURITY.md](SECURITY.md)
