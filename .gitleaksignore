@@ -1,0 +1,18 @@
+# Gitleaks Ignore / Baseline File
+# These fingerprints are verified false positives from our historical audit.
+
+# False Positive: Python type hint in crypto_notary.py
+[rules]
+description = "Ignore Ed25519PrivateKey type hint"
+regex = '''Ed25519PrivateKey'''
+fingerprints = [
+    "5392e83ee115c733b79c79d868de1d27e0f31da7:src/adapters/crypto_notary.py:generic-api-key:157"
+]
+
+# False Positive: Mock RSA key in tests
+[[rules]]
+description = "Ignore mock RSA key in test_secrets_guard.py"
+regex = '''BEGIN RSA PRIVATE KEY'''
+fingerprints = [
+    "0451f1687cdf54daa14dd7e7026a6f3953a9cf12:tests/unit/test_secrets_guard.py:private-key:35"
+]
