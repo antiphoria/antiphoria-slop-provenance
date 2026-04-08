@@ -1,6 +1,7 @@
 # Antiphoria Slop Provenance
 
 [![Org Quality (Python)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/quality-gate.yml/badge.svg)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/quality-gate.yml)
+
 [![Gitleaks](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/gitleaks.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/antiphoria/antiphoria-slop-provenance/badge)](https://securityscorecards.dev/viewer/?uri=github.com/antiphoria/antiphoria-slop-provenance)
 
