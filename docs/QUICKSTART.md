@@ -91,7 +91,7 @@ Goal: run **`pytest`** and basic **`slop-cli`** without API keys or cloud servic
 
 ### Production / vault (BYOV)
 
-Do not rely on long-lived private keys on disk. Use the launchers and procedures in [SECURITY.md](SECURITY.md):
+Do not rely on long-lived private keys on disk. Use the launchers and procedures in [SECURITY.md](../SECURITY.md):
 
 ```bash
 # Windows (PowerShell as Administrator)

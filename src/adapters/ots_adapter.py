@@ -74,7 +74,7 @@ def resolve_ots_binary(env_path: Path | None = None) -> str:
 
     if bundled_path.exists():
         resolved = _ots_cli_path_must_be_file(bundled_path)
-        # Advisory only (not a security gate); see docs/SECURITY.md.
+        # Advisory only (not a security gate); see SECURITY.md.
         if os.name != "nt" and not os.access(bundled_path, os.X_OK):
             _logger.warning(
                 "Bundled binary %s lacks executable permissions. "

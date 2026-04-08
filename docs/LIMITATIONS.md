@@ -2,7 +2,7 @@
 
 This software must be used in a research setting only.
 
-This document complements the overview in the root [README.md](../README.md). It is not a substitute for [SECURITY.md](SECURITY.md) or legal/policy docs in this folder.
+This document complements the overview in the root [README.md](../README.md). It is not a substitute for [SECURITY.md](../SECURITY.md) or legal/policy docs in this folder.
 
 ## Reproducibility and “truth”
 
@@ -13,7 +13,7 @@ This document complements the overview in the root [README.md](../README.md). It
 
 - **ML-DSA** signing is provided via `liboqs-python`; deployment must match supported platforms and library versions.
 - **Hybrid signing** includes Ed25519 alongside ML-DSA; both key materials must be configured for generation/signing paths. See [QUICKSTART.md](QUICKSTART.md) Track A.
-- **Canonical JSON** for signing uses JCS (RFC 8785). Older artifacts may not verify if they were produced under different canonicalization rules (see [SECURITY.md](SECURITY.md) remediation notes).
+- **Canonical JSON** for signing uses JCS (RFC 8785). Older artifacts may not verify if they were produced under different canonicalization rules (see [SECURITY.md](../SECURITY.md) remediation notes).
 
 ## C2PA modes
 
@@ -30,5 +30,5 @@ Git ledger commits use **process-local** file locks. Multiple processes or hosts
 
 ## Operational
 
-- **BYOV / vault** workflows are required for production-grade private key handling; dev keys on disk are explicitly discouraged for production (see [SECURITY.md](SECURITY.md)).
+- **BYOV / vault** workflows are required for production-grade private key handling; dev keys on disk are explicitly discouraged for production (see [SECURITY.md](../SECURITY.md)).
 - **Windows native** development is best-effort; **WSL2** is the supported Windows path ([WSL2_SETUP.md](WSL2_SETUP.md)).

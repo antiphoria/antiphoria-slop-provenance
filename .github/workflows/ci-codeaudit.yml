@@ -1,0 +1,24 @@
+# Caller for org quality-gate: CodeAudit only (separate status check / badge).
+name: CI CodeAudit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  codeaudit:
+    uses: antiphoria/.github/.github/workflows/quality-gate.yml@main
+    with:
+      policy-ref: main
+      python-version: "3.12"
+      run-trivy: false
+      run-python-ruff: false
+      run-python-test: false
+      run-python-codeaudit: true
+      run-node-quality: false
+      run-ci-handoff: false

@@ -29,7 +29,7 @@ sudo apt install -y build-essential libssl-dev pkg-config libgit2-1.1 libgit2-de
 sudo apt install -y python3.12 python3.12-venv
 ```
 
-If `python3.12` is not in your Ubuntu repos, use `deadsnakes` or `pyenv` — or align with the newest `python3` available and match CI in [.github/workflows/org-quality.yml](../.github/workflows/org-quality.yml) when possible.
+If `python3.12` is not in your Ubuntu repos, use `deadsnakes` or `pyenv` — or align with the newest `python3` available and match CI (see [`ci-tests.yml`](../.github/workflows/ci-tests.yml), `python-version: "3.12"`) when possible.
 
 ## 4. Clone and install inside WSL
 
