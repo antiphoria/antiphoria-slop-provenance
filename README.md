@@ -1,6 +1,8 @@
 # Antiphoria Slop Provenance
 
-Event-driven provenance engine for short-story generation, cryptographic signing and provenance, and long-term auditability.
+[![Org Quality (Python)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/quality-gate.yml/badge.svg)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/quality-gate.yml)
+[![Gitleaks](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/gitleaks.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/antiphoria/antiphoria-slop-provenance/badge)](https://securityscorecards.dev/viewer/?uri=github.com/antiphoria/antiphoria-slop-provenance)
 
 This project is **research and artistic exploration**: technical experiments in provenance, signing, and ledgers. It is **not** a legal, regulatory, or commercial certification service. Signatures and metadata are **technical records** for transparency and audit—they are not determinations of law, platform compliance, or third-party rights.
 
