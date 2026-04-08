@@ -81,9 +81,6 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
         self._repo_temp = tempfile.TemporaryDirectory()
         self._repo_path = Path(self._repo_temp.name)
         pygit2.init_repository(str(self._repo_path), initial_head="master")
-        self._state_temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-        self._state_db_path = Path(self._state_temp.name) / "state.db"
-        self._old_state_db_path = os.getenv("STATE_DB_PATH")
         self._old_enable_ots = os.getenv("ENABLE_OTS_FORGE")
         self._old_pqc_private_key_path = os.getenv("PQC_PRIVATE_KEY_PATH")
         self._old_ed25519_private_key_path = os.getenv("ED25519_PRIVATE_KEY_PATH")
@@ -100,16 +97,11 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
                 encryption_algorithm=NoEncryption(),
             )
         )
-        os.environ["STATE_DB_PATH"] = str(self._state_db_path)
         os.environ["ENABLE_OTS_FORGE"] = "false"
         os.environ["PQC_PRIVATE_KEY_PATH"] = str(pqc_private_key_path)
         os.environ["ED25519_PRIVATE_KEY_PATH"] = str(ed25519_private_key_path)
 
     def tearDown(self) -> None:
-        if self._old_state_db_path is None:
-            os.environ.pop("STATE_DB_PATH", None)
-        else:
-            os.environ["STATE_DB_PATH"] = self._old_state_db_path
         if self._old_enable_ots is None:
             os.environ.pop("ENABLE_OTS_FORGE", None)
         else:
@@ -122,7 +114,6 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
             os.environ.pop("ED25519_PRIVATE_KEY_PATH", None)
         else:
             os.environ["ED25519_PRIVATE_KEY_PATH"] = self._old_ed25519_private_key_path
-        self._state_temp.cleanup()
         self._key_temp.cleanup()
         self._repo_temp.cleanup()
 

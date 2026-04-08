@@ -2,10 +2,48 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pygit2
 import pytest
 
-from src.git_tree_utils import tree_get_blob, tree_get_entry
+from src.git_tree_utils import MAX_TREE_DEPTH, tree_get_blob
+
+
+def _validate_relative_path(relative_path: str) -> None:
+    """Reject path traversal and absolute paths (mirrors git_tree_utils)."""
+    path = Path(relative_path)
+    if path.is_absolute() or relative_path.startswith("/"):
+        raise ValueError("Absolute paths are not permitted.")
+    for part in path.parts:
+        if part in (".", ".."):
+            raise ValueError("Path traversal ('.' or '..') is not permitted.")
+
+
+def _tree_get_entry(
+    repo: pygit2.Repository,
+    tree: pygit2.Tree,
+    relative_path: str,
+) -> pygit2.TreeEntry | None:
+    """Get tree entry at path (test-local; production uses tree_get_blob only)."""
+    _validate_relative_path(relative_path)
+    parts = Path(relative_path).parts
+    if not parts:
+        return None
+    current: pygit2.Tree | None = tree
+    for depth, part in enumerate(parts[:-1]):
+        if depth >= MAX_TREE_DEPTH:
+            return None
+        if current is None or part not in current:
+            return None
+        entry = current[part]
+        obj = repo[entry.id]
+        if not isinstance(obj, pygit2.Tree):
+            return None
+        current = obj
+    if current is None or parts[-1] not in current:
+        return None
+    return current[parts[-1]]
 
 
 def _make_signature() -> pygit2.Signature:
@@ -142,7 +180,7 @@ def test_tree_get_entry(
     assert isinstance(commit, pygit2.Commit)
     tree = commit.tree
 
-    result = tree_get_entry(repo_with_tree, tree, relative_path)
+    result = _tree_get_entry(repo_with_tree, tree, relative_path)
 
     if expected_entry is None:
         assert result is None

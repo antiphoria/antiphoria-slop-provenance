@@ -48,7 +48,6 @@ Copy [`.env.example`](.env.example) to `.env` and edit. **Never commit `.env`.**
 - **Dummy / local testing:** set `GENERATOR_DUMMY_MODE=true` — no `GOOGLE_API_KEY` required.
 - **Live generation:** set `GOOGLE_API_KEY` and `GENERATOR_DUMMY_MODE=false`.
 - **Transparency log:** if `TRANSPARENCY_LOG_PUBLISH_URL` is set, you must set `SUPABASE_SERVICE_KEY` or `SUPABASE_ANON_KEY`.
-- **Worker dedup DB (advanced):** optional `STATE_DB_PATH`; default state layout uses `ORCHESTRATOR_STATE_DIR` (see `src/env_config.py`).
 
 **Production keys:** use BYOV and the secure launchers — [docs/SECURITY.md](docs/SECURITY.md).
 

@@ -189,11 +189,6 @@ class Artifact(StrictModel):
     hybrid_signature: SignatureBlock | None = Field(alias="hybridSignature", default=None)
     record_status: Literal["unverified"] = Field(alias="recordStatus", default="unverified")
 
-    def to_frontmatter_dict(self) -> dict[str, object]:
-        """Return frontmatter dictionary with alias keys."""
-
-        return self.model_dump(by_alias=True, exclude_none=True)
-
 
 def canonical_json_bytes(data: dict[str, Any]) -> bytes:
     """Return deterministic canonical JSON bytes for signing.
@@ -241,7 +236,3 @@ def sha256_hex(data: bytes) -> str:
     """Return lowercase SHA-256 digest for bytes payload."""
 
     return hashlib.sha256(data).hexdigest()
-
-
-EternityEnvelopeV1 = Artifact
-"""Explicit alias for the embedded Eternity v1 envelope model."""

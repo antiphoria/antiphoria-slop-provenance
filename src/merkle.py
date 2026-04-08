@@ -24,24 +24,6 @@ def _hash_internal(left: bytes, right: bytes) -> bytes:
     return hashlib.sha256(_INTERNAL_PREFIX + left + right).digest()
 
 
-def _subtree_root(nodes: list[bytes]) -> bytes:
-    """Compute Merkle root of a list of tree nodes (no leaf hashing)."""
-    if not nodes:
-        raise ValueError("nodes cannot be empty")
-    current = list(nodes)
-    while len(current) > 1:
-        next_level: list[bytes] = []
-        for i in range(0, len(current), 2):
-            left = current[i]
-            if i + 1 < len(current):
-                right = current[i + 1]
-                next_level.append(_hash_internal(left, right))
-            else:
-                next_level.append(left)
-        current = next_level
-    return current[0]
-
-
 def build_merkle_root(entry_hashes: list[str]) -> str:
     """Build Merkle root from ordered list of entry hashes.
 

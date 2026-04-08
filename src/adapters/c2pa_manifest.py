@@ -377,8 +377,8 @@ def validate_c2pa_sidecar(
 ) -> C2PAManifestValidation:
     """Validate one sidecar manifest against one payload.
 
-    body_for_mvp is **required** when the manifest is MVP format (determined by
-    _manifest_looks_like_mvp). payload_bytes may be a JPEG dummy carrier for SDK
+    body_for_mvp is **required** when the manifest is MVP format (see
+    `_parse_mvp_manifest`). payload_bytes may be a JPEG dummy carrier for SDK
     mode; for MVP, the actual markdown body must be passed via body_for_mvp for
     payload hash validation. Third-party callers must pass body_for_mvp when
     validating MVP sidecars; otherwise validation fails with a clear error.
@@ -610,12 +610,6 @@ def _parse_mvp_manifest(manifest_bytes: bytes) -> dict[str, Any] | None:
     if not isinstance(expected_hash, str):
         return None
     return manifest
-
-
-def _manifest_looks_like_mvp(manifest_bytes: bytes) -> bool:
-    """Return True if manifest has MVP JSON structure (assertions.c2pa.asset)."""
-
-    return _parse_mvp_manifest(manifest_bytes) is not None
 
 
 def _validate_mvp_manifest(

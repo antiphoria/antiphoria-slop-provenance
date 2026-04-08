@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -78,17 +77,11 @@ class SyncTransparencyLogTest(unittest.IsolatedAsyncioTestCase):
         self._repo_temp = tempfile.TemporaryDirectory()
         self._repo_path = Path(self._repo_temp.name)
         pygit2.init_repository(str(self._repo_path), initial_head="master")
-        self._state_temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-        self._state_db_path = Path(self._state_temp.name) / "state.db"
-        self._old_state_db_path = os.getenv("STATE_DB_PATH")
-        os.environ["STATE_DB_PATH"] = str(self._state_db_path)
+        self._db_temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self._artifact_db_path = Path(self._db_temp.name) / "artifacts.db"
 
     def tearDown(self) -> None:
-        if self._old_state_db_path is None:
-            os.environ.pop("STATE_DB_PATH", None)
-        else:
-            os.environ["STATE_DB_PATH"] = self._old_state_db_path
-        self._state_temp.cleanup()
+        self._db_temp.cleanup()
         self._repo_temp.cleanup()
 
     async def test_sync_publishes_when_entry_missing_in_remote(self) -> None:
@@ -114,7 +107,7 @@ class SyncTransparencyLogTest(unittest.IsolatedAsyncioTestCase):
             publish_headers={"apikey": "x", "Authorization": "Bearer x"},
             publish_supabase_format=True,
         )
-        repository = SQLiteRepository(db_path=self._state_db_path)
+        repository = SQLiteRepository(db_path=self._artifact_db_path)
         provenance_service = ProvenanceService(
             transparency_store=repository.transparency,
             timestamp_store=repository.timestamps,
@@ -174,7 +167,7 @@ class SyncTransparencyLogTest(unittest.IsolatedAsyncioTestCase):
             publish_headers={"apikey": "x", "Authorization": "Bearer x"},
             publish_supabase_format=True,
         )
-        repository = SQLiteRepository(db_path=self._state_db_path)
+        repository = SQLiteRepository(db_path=self._artifact_db_path)
         provenance_service = ProvenanceService(
             transparency_store=repository.transparency,
             timestamp_store=repository.timestamps,

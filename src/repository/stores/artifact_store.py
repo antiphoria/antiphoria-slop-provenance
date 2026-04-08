@@ -112,28 +112,6 @@ class ArtifactStore:
             return None
         return self._row_to_record(row)
 
-    def list_artifact_records(
-        self,
-        status: ArtifactLifecycleStatus | None = None,
-        limit: int = 100,
-    ) -> list[ArtifactRecord]:
-        """List lifecycle records, optionally filtered by status."""
-
-        if limit <= 0:
-            raise RuntimeError("list limit must be a positive integer.")
-
-        query = "SELECT * FROM artifact_records"
-        params: tuple[object, ...] = ()
-        if status is not None:
-            query += " WHERE status = ?"
-            params = (status,)
-        query += " ORDER BY updated_at DESC LIMIT ?;"
-        params = (*params, limit)
-
-        with self._connections.connect() as connection:
-            rows = connection.execute(query, params).fetchall()
-        return [self._row_to_record(row) for row in rows]
-
     def update_artifact_status(
         self,
         request_id: UUID,
@@ -165,15 +143,6 @@ class ArtifactStore:
                 WHERE request_id = ?;
                 """,
                 (status, ledger_path, commit_oid, now, str(request_id)),
-            )
-
-    def delete_artifact_record(self, request_id: UUID) -> None:
-        """Delete one lifecycle record."""
-
-        with self._connections.connect() as connection:
-            connection.execute(
-                "DELETE FROM artifact_records WHERE request_id = ?;",
-                (str(request_id),),
             )
 
     @staticmethod

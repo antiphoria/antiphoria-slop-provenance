@@ -57,30 +57,3 @@ def tree_get_blob(
     if not isinstance(obj, pygit2.Blob):
         return None
     return obj
-
-
-def tree_get_entry(
-    repo: pygit2.Repository,
-    tree: pygit2.Tree,
-    relative_path: str,
-) -> pygit2.TreeEntry | None:
-    """Get tree entry at path by traversing. Returns None if path not found.
-    Rejects path traversal (.., .) and absolute paths."""
-    _validate_relative_path(relative_path)
-    parts = Path(relative_path).parts
-    if not parts:
-        return None
-    current: pygit2.Tree | None = tree
-    for depth, part in enumerate(parts[:-1]):
-        if depth >= MAX_TREE_DEPTH:
-            return None
-        if current is None or part not in current:
-            return None
-        entry = current[part]
-        obj = repo[entry.id]
-        if not isinstance(obj, pygit2.Tree):
-            return None
-        current = obj
-    if current is None or parts[-1] not in current:
-        return None
-    return current[parts[-1]]

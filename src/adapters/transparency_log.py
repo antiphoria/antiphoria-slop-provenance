@@ -497,14 +497,6 @@ class TransparencyLogAdapter:
         entries = self.parse_entries_from_jsonl(self._log_path.read_text(encoding="utf-8"))
         return [entry for entry in entries if entry.artifact_hash == artifact_hash]
 
-    def verify_integrity(self) -> bool:
-        """Verify hash chain integrity for all local entries."""
-
-        if not self._log_path.exists():
-            return True
-        entries = self.parse_entries_from_jsonl(self._log_path.read_text(encoding="utf-8"))
-        return self.verify_integrity_entries(entries)
-
     def parse_entries_from_jsonl(self, jsonl_text: str) -> list[TransparencyLogEntry]:
         """Parse transparency entries from JSONL content in-memory.
 

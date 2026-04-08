@@ -151,18 +151,3 @@ def initialize_artifact_schema(connections: SQLiteConnectionFactory) -> None:
             );
             """
         )
-
-
-def initialize_dedup_schema(connections: SQLiteConnectionFactory) -> None:
-    """Create per-service message-deduplication schema if absent."""
-
-    with connections.connect() as connection:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS processed_messages (
-                message_id TEXT PRIMARY KEY,
-                consumer_name TEXT NOT NULL,
-                processed_at TEXT NOT NULL
-            );
-            """
-        )

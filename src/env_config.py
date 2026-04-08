@@ -76,22 +76,6 @@ def read_env_bool(
     raise RuntimeError(f"Environment variable '{env_key}' must be a boolean value.")
 
 
-def read_env_int(
-    env_key: str,
-    default: int,
-    env_path: Path | None = None,
-) -> int:
-    """Read integer value from env/.env with strict validation."""
-
-    value = read_env_optional(env_key, env_path=env_path)
-    if value is None:
-        return default
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise RuntimeError(f"Environment variable '{env_key}' must be an integer.") from exc
-
-
 def get_project_env_path() -> Path:
     """Return path to .env at project root. Tries module location, then CWD."""
     candidates = [
@@ -123,31 +107,6 @@ def resolve_artifact_db_path(
         return Path(state_dir).resolve() / "artifacts.db"
     if project_root is not None:
         return (project_root / ".orchestrator-state" / "artifacts.db").resolve()
-    return None
-
-
-def resolve_state_db_path(
-    env_path: Path | None = None,
-    project_root: Path | None = None,
-    service_name: str | None = None,
-) -> Path | None:
-    """Resolve per-service dedup DB path from STATE_DB_PATH or ORCHESTRATOR_STATE_DIR.
-
-    When service_name is given and STATE_DB_PATH is not set, uses
-    {ORCHESTRATOR_STATE_DIR}/dedup/{service_name}.db.
-    Returns None when neither is set.
-    """
-    raw = read_env_optional("STATE_DB_PATH", env_path=env_path)
-    if raw:
-        return Path(raw).resolve()
-    state_dir = read_env_optional("ORCHESTRATOR_STATE_DIR", env_path=env_path)
-    if state_dir:
-        base = Path(state_dir).resolve()
-        if service_name:
-            return base / "dedup" / f"{service_name}.db"
-        return base / "state.db"
-    if project_root is not None and service_name:
-        return (project_root / ".orchestrator-state" / "dedup" / f"{service_name}.db").resolve()
     return None
 
 

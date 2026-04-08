@@ -11,7 +11,7 @@ The following changes were made to address cryptographic and integrity vulnerabi
 - **Merkle tree:** RFC 6962-style domain separation (leaf vs internal node hashing) and odd-node promotion (no duplication). Merkle roots will change. `verify_merkle_proof` now accepts optional `tree_size` for odd-sized trees.
 - **Null bytes:** Artifacts containing `\x00` are rejected (no longer stripped). Invalid payloads raise `RuntimeError`.
 - **JSON canonicalization:** `canonical_json_bytes` now uses RFC 8785 (JCS). Existing signatures may break if the previous output differed from JCS.
-- **Path traversal:** `tree_get_blob` and `tree_get_entry` reject `..`, `.`, and absolute paths with `ValueError`.
+- **Path traversal:** `tree_get_blob` rejects `..`, `.`, and absolute paths with `ValueError`.
 
 ## Threat Model
 
