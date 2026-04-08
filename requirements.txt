@@ -23,15 +23,17 @@ cffi==2.0.0
     #   pygit2
 charset-normalizer==3.4.4
     # via requests
-colorama==0.4.6
-    # via pytest
-cryptography==46.0.6
+cryptography==46.0.7
     # via
     #   -r requirements.in
     #   c2pa-python
     #   google-auth
 distro==1.9.0
     # via google-genai
+exceptiongroup==1.3.1
+    # via
+    #   anyio
+    #   pytest
 filelock==3.25.2
     # via -r requirements.in
 google-auth[requests]==2.49.0.dev0
@@ -73,7 +75,7 @@ pydantic==2.12.5
     #   google-genai
 pydantic-core==2.41.5
     # via pydantic
-pygit2==1.19.1
+pygit2==1.18.2
     # via -r requirements.in
 pygments==2.20.0
     # via
@@ -95,8 +97,15 @@ tenacity==9.1.4
     # via google-genai
 toml==0.10.2
     # via c2pa-python
+tomli==2.4.1
+    # via
+    #   liboqs-python
+    #   pytest
 typing-extensions==4.15.0
     # via
+    #   anyio
+    #   cryptography
+    #   exceptiongroup
     #   google-genai
     #   pydantic
     #   pydantic-core
