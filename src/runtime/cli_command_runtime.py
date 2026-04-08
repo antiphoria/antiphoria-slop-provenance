@@ -59,6 +59,7 @@ def _capture_registration_ceremony(env_path: Path) -> RegistrationCeremony:
     git_exe = shutil.which("git")
     if git_exe:
         try:
+            # List argv; fixed args. git_exe comes from shutil.which only (no user argv).
             result = subprocess.run(  # noqa: S603
                 [git_exe, "rev-parse", "HEAD"],
                 cwd=project_root,

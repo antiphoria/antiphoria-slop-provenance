@@ -6,6 +6,8 @@ import argparse
 import asyncio
 import base64
 import json
+import logging
+import sys
 from datetime import UTC
 from pathlib import Path
 from uuid import UUID
@@ -29,6 +31,24 @@ from src.runtime.cli_command_runtime import (
     _validate_external_repo_path,
 )
 from src.services.ots_upgrade import process_single_ots_record
+
+_logger = logging.getLogger(__name__)
+
+
+def _warn_merkle_remote_config(exc: RuntimeError) -> None:
+    """Surface Supabase config errors that previously were swallowed."""
+    msg = str(exc)
+    _logger.warning("Merkle remote step skipped (configuration): %s", msg)
+    print(f"Warning: Merkle remote publish skipped: {msg}", file=sys.stderr)
+
+
+def _warn_merkle_remote_publish_failed(context: str) -> None:
+    """Tell the operator when HTTP publish failed (details already in adapter logs)."""
+    _logger.warning("%s: remote call returned False", context)
+    print(
+        f"Warning: {context}. Local ledger is updated; check logs for remote error detail.",
+        file=sys.stderr,
+    )
 
 
 async def _run_upgrade_command(args: argparse.Namespace) -> int:
@@ -346,8 +366,12 @@ def _run_anchor_merkle_root_command(args: argparse.Namespace) -> int:
                 )
                 if published:
                     print("Merkle anchor published to remote.")
-    except RuntimeError:
-        pass
+                else:
+                    _warn_merkle_remote_publish_failed(
+                        "Merkle anchor was not published to the remote",
+                    )
+    except RuntimeError as exc:
+        _warn_merkle_remote_config(exc)
 
     repo = pygit2.Repository(str(repository_path))
     repo.index.add(ots_rel)
@@ -491,15 +515,20 @@ def _run_upgrade_merkle_ots_command(args: argparse.Namespace) -> int:
                     update_merkle_anchor_block_height,
                 )
 
-                if update_merkle_anchor_block_height(
+                updated = update_merkle_anchor_block_height(
                     root_hash=merkle_root,
                     bitcoin_block_height=block_height,
                     publish_url=publish_url,
                     publish_headers=publish_headers,
-                ):
+                )
+                if updated:
                     print("Supabase merkle_anchors updated.")
-    except RuntimeError:
-        pass
+                else:
+                    _warn_merkle_remote_publish_failed(
+                        "Merkle anchor block height was not updated on the remote",
+                    )
+    except RuntimeError as exc:
+        _warn_merkle_remote_config(exc)
     return 0
 
 

@@ -78,7 +78,12 @@ class RFC3161TSAAdapter:
         openssl_conf_path: Path | None = None,
     ) -> None:
         self._tsa_url = tsa_url
-        self._openssl_bin = openssl_bin
+        stripped = openssl_bin.strip() if openssl_bin else "openssl"
+        if stripped == "openssl":
+            resolved = shutil.which("openssl")
+            self._openssl_bin = resolved or stripped
+        else:
+            self._openssl_bin = stripped
         self._request_timeout_sec = request_timeout_sec
         self._untrusted_cert_path = untrusted_cert_path
         self._openssl_conf_path = openssl_conf_path
@@ -284,7 +289,13 @@ class RFC3161TSAAdapter:
         digest_hex: str,
         digest_algorithm: str,
     ) -> None:
-        """Build OpenSSL RFC3161 query file from digest hex."""
+        """Build OpenSSL RFC3161 query file from digest hex.
+
+        Subprocess note: OpenSSL is invoked with list argv (no shell). Subcommands
+        are fixed (``ts``, ``pkcs7``). User-influenced values are the digest
+        (validated by ``_validate_digest_hex`` at public entrypoints) and temp file
+        paths under our control.
+        """
         command = [
             self._openssl_bin,
             "ts",

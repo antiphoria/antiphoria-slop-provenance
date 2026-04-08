@@ -13,6 +13,17 @@ The following changes were made to address cryptographic and integrity vulnerabi
 - **JSON canonicalization:** `canonical_json_bytes` now uses RFC 8785 (JCS). Existing signatures may break if the previous output differed from JCS.
 - **Path traversal:** `tree_get_blob` rejects `..`, `.`, and absolute paths with `ValueError`.
 
+## Subprocess usage and automated scanners
+
+Tools such as **Python Code Audit** often flag every `subprocess.run` or `os.access` call. In this project:
+
+- **No shell** is used for those calls: arguments are passed as a **list** (`argv`), not a single string interpreted by `/bin/sh`, which avoids the usual command-injection class when combined with static subcommands (`git rev-parse`, `openssl ts`, `ots stamp`, etc.).
+- **`OPENSSL_BIN`** and **`OTS_BIN`** are **operator trust boundaries**: they must point at the real OpenSSL and OpenTimestamps CLI binaries. The application does not execute arbitrary user-provided command lines.
+- **`os.access(..., X_OK)`** on the bundled `bin/ots` (Unix) is an **advisory** chmod hint for developers, not an access-control or security gate.
+- **Base64** in the codebase is used for **binary encoding** (signatures, RFC3161 tokens, OTS proofs), not for confidentiality or “hiding” secrets.
+
+Re-run static analysis after refactors; many findings are **false positives** (e.g. regexes that redact `Bearer` / `apikey` in logs, or the string `secret` in error messages).
+
 ## Threat Model
 
 Private keys (ML-DSA `private.key`, C2PA `c2pa-private-key.pem`, and Ed25519 `ed25519_private.pem`) must never be written to disk at runtime. The BYOV (Bring Your Own Vault) architecture ensures **zero-disk-exposure**: keys are provided via secure, volatile mounts. The application receives paths to keys in RAM or on a temporarily mounted volume; when the process exits, the launcher unmounts or deletes the volatile storage.

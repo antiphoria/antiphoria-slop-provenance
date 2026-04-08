@@ -2,6 +2,11 @@
 
 Uses the `ots` CLI exclusively (no Python opentimestamps API) to avoid
 bit-rotted dependencies. All operations run via subprocess with 60s timeout.
+
+Trust: ``OTS_BIN`` (or the bundled ``bin/ots`` / PATH ``ots``) names the
+executable used as argv[0]; arguments are fixed (``stamp``, ``upgrade``,
+``verify``) and are not merged from user input. Treat the binary path as an
+operator-controlled trust boundary (like ``OPENSSL_BIN``).
 """
 
 from __future__ import annotations
@@ -19,6 +24,17 @@ from pathlib import Path
 from src.env_config import read_env_optional
 
 _logger = logging.getLogger(__name__)
+
+
+def _ots_cli_path_must_be_file(path: Path) -> str:
+    """Require a concrete OTS executable path (regular file)."""
+    if not path.exists():
+        raise FileNotFoundError(
+            f"OTS binary not found at '{path}'. Set OTS_BIN or install the OpenTimestamps CLI."
+        )
+    if not path.is_file():
+        raise RuntimeError(f"OTS binary path must be a regular file, not a directory: '{path}'")
+    return str(path.resolve())
 
 
 def build_ots_adapter(env_path: Path | None = None) -> OTSAdapter | None:
@@ -50,27 +66,27 @@ def resolve_ots_binary(env_path: Path | None = None) -> str:
         override_path = Path(env_override)
         if not override_path.is_absolute():
             override_path = (base / override_path).resolve()
-        if override_path.exists():
-            return str(override_path)
-        return env_override  # Let subprocess fail with clear error if missing
+        return _ots_cli_path_must_be_file(override_path)
 
     # 2. Check for bundled binary
     exe_name = "ots.exe" if os.name == "nt" else "ots"
     bundled_path = base / "bin" / exe_name
 
     if bundled_path.exists():
-        # Optional: Warn if Unix binary lacks execute permissions
+        resolved = _ots_cli_path_must_be_file(bundled_path)
+        # Advisory only (not a security gate); see docs/SECURITY.md.
         if os.name != "nt" and not os.access(bundled_path, os.X_OK):
             _logger.warning(
                 "Bundled binary %s lacks executable permissions. "
                 "Run: git update-index --chmod=+x bin/ots",
                 bundled_path,
             )
-        return str(bundled_path.resolve())
+        return resolved
 
     # 3. Fallback to system PATH
-    if shutil.which("ots"):
-        return "ots"
+    which_ots = shutil.which("ots")
+    if which_ots:
+        return _ots_cli_path_must_be_file(Path(which_ots))
 
     # No binary found
     raise FileNotFoundError(
@@ -246,7 +262,11 @@ class OTSAdapter:
                     timeout=timeout,
                     cwd=temp_path,
                 )
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            except subprocess.TimeoutExpired as exc:
+                _logger.warning("ots verify timed out after %s seconds", exc.timeout)
+                return False, None
+            except OSError as exc:
+                _logger.warning("ots verify could not run %s: %s", ots_bin, exc)
                 return False, None
             if result.returncode != 0:
                 _logger.warning(
