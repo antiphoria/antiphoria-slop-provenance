@@ -84,13 +84,23 @@ def _require_oqs() -> None:
 
 
 class HybridSigner:
-    """Default Signer. Signs with both ML-DSA-44 and Ed25519."""
+    """Default Signer. Signs with both ML-DSA-44 and Ed25519.
 
-    def __init__(self, keys: HybridKeys) -> None:
+    The optional ``key_id`` argument is forward-compat metadata for key
+    rotation and epoch tagging (D-1 algorithm-agility prep). It is
+    embedded verbatim in every produced :class:`Signature` and exposed
+    on the wire so future consumers can disambiguate re-issued or
+    versioned keys without changing the canonical record schema.
+    Verifiers MAY use it for lookup; the default :class:`HybridVerifier`
+    treats it as informational only.
+    """
+
+    def __init__(self, keys: HybridKeys, *, key_id: str | None = None) -> None:
         if keys.mldsa_private is None or keys.ed25519_private is None:
             raise ValueError("HybridSigner requires both private keys.")
         _require_oqs()
         self._keys = keys
+        self._key_id = key_id
         self._ed25519_priv = ed25519.Ed25519PrivateKey.from_private_bytes(
             keys.ed25519_private,
         )
@@ -98,6 +108,11 @@ class HybridSigner:
     @property
     def public_key_fingerprint(self) -> str:
         return self._keys.fingerprint
+
+    @property
+    def key_id(self) -> str | None:
+        """Rotation / epoch tag embedded in produced signatures, if any."""
+        return self._key_id
 
     def sign(self, data: bytes) -> Signature:
         with oqs.Signature(_MLDSA_ALG, self._keys.mldsa_private) as sig:
@@ -108,6 +123,7 @@ class HybridSigner:
             mldsa_signature_b64=base64.b64encode(mldsa_sig).decode("ascii"),
             ed25519_signature_b64=base64.b64encode(ed_sig).decode("ascii"),
             public_key_fingerprint=self._keys.fingerprint,
+            key_id=self._key_id,
         )
 
 

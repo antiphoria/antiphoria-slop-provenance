@@ -31,6 +31,19 @@ _STEP_TYPE_PATTERN = r"^[A-Z][A-Z0-9_]{0,63}$"
 _SHA256_PATTERN = r"^sha256:[0-9a-f]{64}$"
 _SHA256_RE = re.compile(_SHA256_PATTERN)
 
+# Permissive algorithm identifier: lowercase ASCII tokens joined by `-` and
+# `+` (for hybrid suites), e.g. ``ml-dsa-44``, ``ed25519``,
+# ``ml-dsa-44+ed25519``, ``ml-dsa-65+ed25519``. Designed so that future
+# post-quantum upgrades (ML-DSA-65/87, hybrid combos) parse without an SDK
+# bump; concrete acceptance is the verifier's responsibility — see
+# ``HybridVerifier.verify``.
+_ALGORITHM_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*(?:\+[a-z0-9]+(?:-[a-z0-9]+)*)*$"
+
+# ``key_id`` is a free-form rotation / epoch identifier (e.g. ``"2026-Q2"``
+# or a fingerprint). Constrained to printable ASCII excluding whitespace
+# and quotes, capped at 64 chars to keep canonical bytes bounded.
+_KEY_ID_PATTERN = r"^[!-~]{1,64}$"
+
 
 def is_safe_relative_path(rel: str) -> bool:
     """Return True when ``rel`` is a safe POSIX-style relative path.
@@ -51,17 +64,37 @@ def is_safe_relative_path(rel: str) -> bool:
 
 
 class Signature(BaseModel):
-    """Hybrid signature: ML-DSA-44 (post-quantum) + Ed25519 (classical).
+    """Hybrid signature carrying both classical and post-quantum components.
 
-    Both MUST verify for a signature to be considered valid.
+    Algorithm agility (D-1, M5+ rotation prep)
+    ------------------------------------------
+    ``algorithm`` is validated against a *permissive* identifier pattern so
+    that a chain sealed by a future SDK release (e.g. ``"ml-dsa-65+ed25519"``
+    after a post-quantum upgrade) parses without a Pydantic crash on older
+    consumers. Concrete acceptance — i.e. *which* algorithms a verifier will
+    actually trust — is the responsibility of the :class:`Verifier`
+    implementation, not this schema. The default :class:`HybridVerifier`
+    accepts only the algorithm it was built for and rejects others with a
+    warning.
+
+    ``key_id`` is reserved for **rotation / epoch tagging**. It carries no
+    cryptographic meaning on its own; verifiers MAY use it to disambiguate
+    multiple keys that share a fingerprint history (re-issued, rolled, or
+    versioned material). When unset, key resolution falls back to
+    ``public_key_fingerprint`` exclusively.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    algorithm: str = Field(pattern=r"^ml-dsa-44\+ed25519$")
+    algorithm: str = Field(
+        pattern=_ALGORITHM_PATTERN,
+        min_length=1,
+        max_length=64,
+    )
     mldsa_signature_b64: str = Field(min_length=1)
     ed25519_signature_b64: str = Field(min_length=1)
     public_key_fingerprint: str = Field(min_length=16, max_length=64, pattern=r"^[0-9a-f]+$")
+    key_id: str | None = Field(default=None, pattern=_KEY_ID_PATTERN)
 
 
 class ChainRecord(BaseModel):
