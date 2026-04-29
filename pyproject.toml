@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "antiphoria-slop-provenance"
-version = "0.0.1"
+version = "0.2.0"
 description = "Antiphoria slop provenance: event-driven story generation, signing, and ledger-backed auditability."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "cryptography>=46.0.7",
     "rfc8785>=0.1.4",
@@ -38,16 +38,16 @@ slop-cli = "src.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*"]
+include = ["src*", "antiphoria_sdk*"]
 namespaces = true
 
 [tool.black]
 line-length = 88
-target-version = ["py310"]
+target-version = ["py311"]
 include = '\.pyi?$'
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
