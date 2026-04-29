@@ -22,7 +22,6 @@ from src.adapters.c2pa_manifest import (
     _normalize_private_key_to_pkcs8,
     build_c2pa_sidecar_manifest,
     build_c2pa_validation_payload,
-    build_sdk_bridge_payload,
     resolve_c2pa_mode,
     validate_c2pa_sidecar,
 )
@@ -191,14 +190,6 @@ class C2PAManifestTest(unittest.TestCase):
         pkcs8_pem = key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()).decode()
         normalized = _normalize_private_key_to_pkcs8(pkcs8_pem)
         self.assertEqual(normalized, pkcs8_pem)
-
-    def test_sdk_bridge_payload_is_deterministic(self) -> None:
-        artifact = self._build_artifact()
-        first = build_sdk_bridge_payload(artifact, "payload")
-        second = build_sdk_bridge_payload(artifact, "payload")
-        self.assertEqual(first.payload_format, "text/xml")
-        self.assertEqual(first.payload_bytes, second.payload_bytes)
-        self.assertIn(b"<payloadSha256>", first.payload_bytes)
 
     def test_sdk_provider_signs_bridge_payload_bytes(self) -> None:
         artifact = self._build_artifact()

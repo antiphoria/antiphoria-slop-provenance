@@ -103,7 +103,6 @@ async def _run_upgrade_command(args: argparse.Namespace) -> int:
         provenance_service.transparency_log_adapter,
         repository_path,
         ".provenance/ots-{request_id}.ots",
-        bus=None,
     )
 
     updated = ots_queue.get_ots_forge_record(request_id)
@@ -171,7 +170,6 @@ async def _run_process_pending_command(args: argparse.Namespace) -> int:
                 provenance_service.transparency_log_adapter,
                 repository_path,
                 ".provenance/ots-{request_id}.ots",
-                bus=None,
             )
             for r in records
         ],

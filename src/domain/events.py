@@ -105,31 +105,6 @@ class StoryAnchored(BaseModel):
     anchored_at: datetime = Field(default_factory=_utc_now)
 
 
-class StoryOtsPending(BaseModel):
-    """Event emitted when OTS stamp is requested."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    request_id: UUID
-    event_version: str = Field(default="v1")
-    artifact_hash: str = Field(min_length=64, max_length=64)
-    pending_ots_b64: str = Field(min_length=1)
-    ots_pending_at: datetime = Field(default_factory=_utc_now)
-
-
-class StoryForged(BaseModel):
-    """Event emitted when OTS proof is Bitcoin-anchored."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    request_id: UUID
-    event_version: str = Field(default="v1")
-    artifact_hash: str = Field(min_length=64, max_length=64)
-    bitcoin_block_height: int = Field(ge=0)
-    final_ots_b64: str = Field(min_length=1)
-    forged_at: datetime = Field(default_factory=_utc_now)
-
-
 class StoryTimestamped(BaseModel):
     """Event emitted when RFC3161 timestamping is completed."""
 
@@ -212,18 +187,8 @@ class EventBusPort(Protocol):
     ) -> None:
         """Register an async handler for an event type."""
 
-    async def unsubscribe(
-        self,
-        event_type: type[EventT],
-        handler: EventHandler[EventT],
-    ) -> None:
-        """Remove a previously registered event handler."""
-
     async def subscribe_errors(self, handler: ErrorHandler) -> None:
         """Register an async handler for event-dispatch errors."""
-
-    async def unsubscribe_errors(self, handler: ErrorHandler) -> None:
-        """Remove a previously registered event-dispatch error handler."""
 
     async def emit(self, event: EventT) -> None:
         """Dispatch one typed event instance to subscribers."""
@@ -239,10 +204,8 @@ __all__ = [
     "StoryAudited",
     "StoryCommitted",
     "StoryCurated",
-    "StoryForged",
     "StoryGenerated",
     "StoryHumanRegistered",
-    "StoryOtsPending",
     "StoryRequested",
     "StorySigned",
     "StoryTimestamped",

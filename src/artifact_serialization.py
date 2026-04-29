@@ -159,7 +159,6 @@ def render_artifact_markdown(artifact: Artifact, body: str) -> str:
         ceremony_block = "  registrationCeremony: null\n"
 
     public_key_uri_line = ""
-    public_key_uri_line = ""
     if sig.verification_anchor.public_key_uri is not None:
         public_key_uri_line = (
             f"    publicKeyUri: {_yaml_quoted(str(sig.verification_anchor.public_key_uri))}\n"

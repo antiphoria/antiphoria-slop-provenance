@@ -2,48 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Literal
 
 ProvenanceClass = Literal["human", "hybrid", "synthetic"]
 
-
-@dataclass(frozen=True)
-class ContentLicensePolicy:
-    """License policy assigned to one provenance class."""
-
-    provenance_class: ProvenanceClass
-    license_id: str
-    attribution_required: bool
-    description: str
-
-
-DEFAULT_CONTENT_POLICIES: tuple[ContentLicensePolicy, ...] = (
-    ContentLicensePolicy(
-        provenance_class="human",
-        license_id="ARR",
-        attribution_required=False,
-        description="Human-authored works default to all rights reserved.",
-    ),
-    ContentLicensePolicy(
-        provenance_class="hybrid",
-        license_id="CC-BY-4.0",
-        attribution_required=True,
-        description="Hybrid works require source and model attribution.",
-    ),
-    ContentLicensePolicy(
-        provenance_class="synthetic",
-        license_id="CC0-1.0",
-        attribution_required=False,
-        description="Fully synthetic outputs default to CC0 dedication.",
-    ),
-)
+DEFAULT_CONTENT_LICENSES: dict[ProvenanceClass, str] = {
+    "human": "ARR",
+    "hybrid": "CC-BY-4.0",
+    "synthetic": "CC0-1.0",
+}
 
 
 def get_license_id(provenance_class: ProvenanceClass) -> str:
-    """Return the default license_id for a provenance class per CONTENT_LICENSE_POLICY."""
-
-    for policy in DEFAULT_CONTENT_POLICIES:
-        if policy.provenance_class == provenance_class:
-            return policy.license_id
-    raise ValueError(f"Unknown provenance class: {provenance_class!r}")
+    """Return the default license_id for a provenance class."""
+    return DEFAULT_CONTENT_LICENSES[provenance_class]

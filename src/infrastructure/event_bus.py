@@ -42,37 +42,11 @@ class InMemoryEventBus:
             raw_handler = cast(_RawEventHandler, handler)
             self._subscribers.setdefault(event_type, []).append(raw_handler)
 
-    async def unsubscribe(
-        self,
-        event_type: type[EventT],
-        handler: Callable[[EventT], Awaitable[None]],
-    ) -> None:
-        """Remove an existing handler for an event type."""
-
-        async with self._lock:
-            handlers = self._subscribers.get(event_type)
-            if handlers is None:
-                return
-
-            raw_handler = cast(_RawEventHandler, handler)
-            if raw_handler in handlers:
-                handlers.remove(raw_handler)
-
-            if not handlers:
-                del self._subscribers[event_type]
-
     async def subscribe_errors(self, handler: ErrorHandler) -> None:
         """Register an async handler for event-dispatch errors."""
 
         async with self._lock:
             self._error_subscribers.append(handler)
-
-    async def unsubscribe_errors(self, handler: ErrorHandler) -> None:
-        """Remove a previously registered event-dispatch error handler."""
-
-        async with self._lock:
-            if handler in self._error_subscribers:
-                self._error_subscribers.remove(handler)
 
     async def emit(self, event: EventT) -> None:
         """Dispatch an event to subscribers without awaiting completion."""

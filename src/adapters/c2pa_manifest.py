@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from datetime import UTC
 from pathlib import Path
 from typing import Any, Literal, Protocol
-from xml.sax.saxutils import escape as _xml_escape
 
 from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives.serialization import (
@@ -43,8 +42,6 @@ _C2PA_ALGORITHM_VALUES: tuple[str, ...] = (
 )
 _DEFAULT_C2PA_MODE = "mvp"
 _DEFAULT_C2PA_ALGORITHM = "ES256"
-_SDK_BRIDGE_SCHEMA_VERSION = "antiphoria-slop-provenance.c2pa.bridge.v1"
-_SDK_BRIDGE_FORMAT = "text/xml"
 _SDK_CARRIER_FORMAT = "image/jpeg"
 _SDK_MARKDOWN_ASSERTION_LABEL = "org.antiphoria.markdown"
 _SDK_MINIMAL_JPEG_BYTES = bytes.fromhex(
@@ -94,14 +91,6 @@ class C2PASdkSettings:
     algorithm: str
     tsa_url: str | None
     asset_format_override: str | None
-
-
-@dataclass(frozen=True)
-class C2PASdkBridgePayload:
-    """Deterministic XML payload used as SDK signing source."""
-
-    payload_bytes: bytes
-    payload_format: str
 
 
 class C2PAManifestProvider(Protocol):
@@ -161,7 +150,7 @@ class SdkC2PAManifestProvider:
         manifest_definition = self._manifest_definition(
             envelope=envelope,
             body=body,
-            bridge_format=_SDK_BRIDGE_FORMAT,
+            bridge_format="text/xml",
             asset_format=_SDK_CARRIER_FORMAT,
         )
         try:
@@ -335,36 +324,6 @@ def build_c2pa_validation_payload(
         else body.encode("utf-8")
     )
     return payload_bytes, envelope.content_type
-
-
-def build_sdk_bridge_payload(
-    envelope: Artifact,
-    body: str,
-) -> C2PASdkBridgePayload:
-    """Build deterministic XML bridge payload from markdown artifact data."""
-
-    payload_hash = compute_payload_hash(body)
-    bridge_xml = (
-        '<?xml version="1.0" encoding="UTF-8"?>'
-        "<slopOrchestratorBridge>"
-        f"<bridgeSchemaVersion>{_SDK_BRIDGE_SCHEMA_VERSION}</bridgeSchemaVersion>"
-        f"<artifactId>{_xml_escape(str(envelope.id))}</artifactId>"
-        f"<artifactSchemaVersion>{_xml_escape(envelope.schema_version)}</artifactSchemaVersion>"
-        f"<artifactContentType>{_xml_escape(envelope.content_type)}</artifactContentType>"
-        f"<artifactTitle>{_xml_escape(envelope.title)}</artifactTitle>"
-        f"<artifactTimestamp>{_xml_escape(envelope.timestamp.isoformat())}</artifactTimestamp>"
-        f"<payloadSha256>{payload_hash}</payloadSha256>"
-        "<provenance>"
-        f"<source>{_xml_escape(envelope.provenance.source)}</source>"
-        f"<engineVersion>{_xml_escape(envelope.provenance.engine_version)}</engineVersion>"
-        f"<modelId>{_xml_escape(envelope.provenance.model_id)}</modelId>"
-        "</provenance>"
-        "</slopOrchestratorBridge>"
-    )
-    return C2PASdkBridgePayload(
-        payload_bytes=bridge_xml.encode("utf-8"),
-        payload_format=_SDK_BRIDGE_FORMAT,
-    )
 
 
 def validate_c2pa_sidecar(
@@ -860,14 +819,12 @@ __all__ = [
     "C2PAManifestArtifact",
     "C2PAManifestValidation",
     "C2PAMode",
-    "C2PASdkBridgePayload",
     "C2PASdkSettings",
     "MvpC2PAManifestProvider",
     "SdkC2PAManifestProvider",
     "build_c2pa_manifest_provider",
     "build_c2pa_sidecar_manifest",
     "build_c2pa_validation_payload",
-    "build_sdk_bridge_payload",
     "resolve_c2pa_mode",
     "validate_c2pa_sidecar",
 ]
