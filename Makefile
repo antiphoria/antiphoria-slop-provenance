@@ -1,4 +1,4 @@
-.PHONY: install lint test compile migrate metrics requirements
+.PHONY: install lint test compile migrate requirements
 
 install:
 	pip install -e ".[dev]"
@@ -21,5 +21,3 @@ compile:
 migrate:
 	python scripts/migrate_state_v2.py --db-path state.db
 
-metrics:
-	slop-metrics --metrics-dir ./.metrics

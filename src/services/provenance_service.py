@@ -23,7 +23,6 @@ from src.adapters.rfc3161_tsa import RFC3161TSAAdapter, TimestampVerification
 from src.adapters.transparency_log import TransparencyLogAdapter, TransparencyLogEntry
 from src.artifact_serialization import render_artifact_markdown
 from src.canonicalization import canonicalize_body_for_hash, compute_payload_hash
-from src.domain.events import StoryOtsPending
 from src.env_config import read_env_bool, read_env_optional
 from src.git_tree_utils import tree_get_blob
 from src.lock_paths import build_repo_ref_lock_path
@@ -109,7 +108,6 @@ class TimestampOutcome:
     digest_algorithm: str
     verification: TimestampVerification
     token_base64: str | None = None
-    story_ots_pending: StoryOtsPending | None = None
 
 
 class ProvenanceService:
@@ -470,7 +468,6 @@ class ProvenanceService:
                 )
 
             # OTS stamp (gated by ENABLE_OTS_FORGE)
-            story_ots_pending: StoryOtsPending | None = None
             if (
                 request_id is not None
                 and self._ots_adapter is not None
@@ -505,21 +502,6 @@ class ProvenanceService:
                         payload_bytes=ots_bytes,
                         commit_message=f"provenance: add OTS pending proof ({request_id})",
                     )
-                    story_ots_pending = StoryOtsPending(
-                        request_id=request_id,
-                        artifact_hash=artifact_hash,
-                        pending_ots_b64=pending_b64,
-                    )
-
-            if story_ots_pending is not None:
-                return TimestampOutcome(
-                    created_at=outcome.created_at,
-                    tsa_url=outcome.tsa_url,
-                    digest_algorithm=outcome.digest_algorithm,
-                    verification=outcome.verification,
-                    token_base64=outcome.token_base64,
-                    story_ots_pending=story_ots_pending,
-                )
         return outcome
 
     def _timestamp_parsed_artifact(

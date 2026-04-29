@@ -134,17 +134,9 @@ make lint       # ruff check + format --check
 make test       # pytest -v
 make compile    # python -m compileall src
 make requirements   # regenerate requirements.txt from requirements.in
-make metrics
 ```
 
 Optional: `ruff check .` and `ruff format .` if Ruff is installed.
-
-Worker services can write metric snapshots under `.metrics/`:
-
-```bash
-slop-metrics --metrics-dir ./.metrics
-slop-metrics --metrics-dir ./.metrics --json
-```
 
 ## Limitations
 

@@ -34,7 +34,6 @@ webauthn = ["fido2>=1.1.0"]
 
 [project.scripts]
 slop-cli = "src.cli:main"
-slop-metrics = "src.runtime.metrics_report:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

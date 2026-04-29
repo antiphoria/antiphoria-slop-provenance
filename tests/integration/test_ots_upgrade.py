@@ -128,7 +128,6 @@ async def test_process_single_ots_record_append_entry_failure_calls_append_faile
         ots_adapter=FakeOTSAdapter(),
         transparency_log_adapter=FailingTransparencyLogAdapter(),
         repository_path=empty_git_repo,
-        bus=None,
     )
 
     assert "OTS furnace: marking request_id" in caplog.text

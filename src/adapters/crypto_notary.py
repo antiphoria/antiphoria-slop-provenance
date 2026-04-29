@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
-import contextlib
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
@@ -182,24 +181,6 @@ class CryptoNotaryAdapter:
         await self._event_bus.subscribe(StoryGenerated, self._on_story_generated)
         await self._event_bus.subscribe(StoryCurated, self._on_story_curated)
         await self._event_bus.subscribe(StoryHumanRegistered, self._on_story_human_registered)
-
-    def clear_key_material(self) -> None:
-        """Best-effort cleanup of in-memory private key references."""
-
-        self._private_key = None
-        self._ed25519_private_key = None
-        self._ed25519_private_key_obj = None
-
-    def close(self) -> None:
-        """Release sensitive in-memory key references."""
-
-        self.clear_key_material()
-
-    def __del__(self) -> None:
-        """Best-effort cleanup hook for adapter teardown."""
-
-        with contextlib.suppress(Exception):
-            self.clear_key_material()
 
     def _resolve_private_key(self) -> bytes:
         """Resolve and load private key bytes from configured path."""

@@ -1,7 +1,7 @@
 """Shared OTS upgrade logic for furnace and CLI.
 
 This module has no transport-specific imports. Both the provenance worker
-and the CLI import from here. When bus is None, the StoryForged emit is skipped.
+and the CLI import from here.
 """
 
 from __future__ import annotations
@@ -11,13 +11,12 @@ import base64
 import contextlib
 import logging
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 from uuid import UUID
 
 from src.adapters.ots_adapter import OTSAdapter
 from src.adapters.ots_queue import OtsQueueAdapter
 from src.adapters.transparency_log import TransparencyLogAdapter
-from src.domain.events import StoryForged
 from src.logging_config import bind_log_context, get_log_extra, should_log_route
 from src.repository.types import ArtifactRecord, OtsForgeRecord
 from src.services.provenance_service import ProvenanceService
@@ -62,12 +61,10 @@ async def process_single_ots_record(
     transparency_log_adapter: TransparencyLogAdapter,
     repository_path: Path,
     ots_path_template: str = ".provenance/ots-{request_id}.ots",
-    bus: Any = None,
 ) -> None:
     """Process one pending OTS record; on failure, mark FAILED and return.
 
-    When bus is not None, emits StoryForged after successful upgrade.
-    When bus is None (CLI path), skips the emit.
+    This function updates git, transparency log, and queue state only.
     """
     async with semaphore:
         try:
@@ -201,17 +198,6 @@ async def process_single_ots_record(
                 artifact_hash=record.artifact_hash,
                 final_ots_b64=final_b64,
             )
-
-            # 4. Emit (skip when bus is None, e.g. CLI path)
-            if bus is not None:
-                await bus.emit(
-                    StoryForged(
-                        request_id=request_id,
-                        artifact_hash=record.artifact_hash,
-                        bitcoin_block_height=block_height,
-                        final_ots_b64=final_b64,
-                    )
-                )
 
         except Exception as exc:
             _logger.warning(
