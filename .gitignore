@@ -237,3 +237,7 @@ __marimo__/
 # Skills
 skills-lock.json
 .agents/
+
+# Executables
+*.exe
+bin/*.exe
