@@ -28,6 +28,28 @@ The `antiphoria_sdk` package is intentionally **not** coupled to `src.adapters` 
   value its `Signer.public_key_fingerprint` attribute advertises, or
   `_build_sign_and_write` raises `ChainError` before the record reaches disk.
 
+## Algorithm agility (D-1 prep)
+
+`Signature.algorithm` is validated against a permissive identifier pattern
+(`ml-dsa-44+ed25519`, `ml-dsa-65+ed25519`, `slh-dsa-sha2-128s+ed25519`, ...),
+not a closed enum. A chain produced by a future SDK release with an upgraded
+post-quantum suite parses cleanly on older readers; *acceptance* is the
+verifier's job. The default `HybridVerifier` still rejects anything other
+than the suite it was built for and logs a warning. Bring-your-own verifier
+implementations may opt into additional algorithm strings without an SDK
+schema bump.
+
+`Signature.key_id` is a forward-compat **rotation / epoch slot** carried on
+the wire so future consumers can disambiguate re-issued or versioned key
+material that shares a fingerprint history. It is informational on the
+default verifier; bridges that mint signatures from a KMS / HSM SHOULD set
+`key_id` to a stable rotation tag (e.g. `"factory-2026-Q2"`) via
+`HybridSigner(keys, key_id=...)`. Records sealed without a `key_id`
+serialize as `"key_id": null` and verify identically; tagged records verify
+so long as the corresponding `HybridKeys` remain registered with the
+verifier (key resolution is still by `public_key_fingerprint`; `key_id`-based
+lookup is a future hook).
+
 ## Performance characteristics
 
 `HybridVerifier.verify` instantiates a fresh `oqs.Signature` context per
