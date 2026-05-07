@@ -241,3 +241,6 @@ skills-lock.json
 # Executables
 *.exe
 bin/*.exe
+
+# local test files
+artifact_zero.txt

@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import re
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -477,9 +478,14 @@ class ProvenanceService:
                     payload_bytes = canonicalize_body_for_hash(payload)
                     artifact_hash = sha256_hex(payload_bytes)
                     ots_bytes = self._ots_adapter.request_ots_stamp(payload_bytes)
-                except (OSError, ValueError) as exc:
+                except (
+                    OSError,
+                    ValueError,
+                    subprocess.SubprocessError,
+                    RuntimeError,
+                ) as exc:
                     _logger.warning(
-                        "OTS stamp skipped for request_id=%s (e.g. OpenSSL/bitcoinlib on Windows): %s",
+                        "OTS stamp skipped for request_id=%s: %s",
                         request_id,
                         _sanitize_for_log(str(exc)),
                     )
