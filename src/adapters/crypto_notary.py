@@ -28,7 +28,7 @@ from src.env_config import (
 
 apply_liboqs_env_from_dotenv()
 
-import oqs  # noqa: E402 — after OQS_INSTALL_PATH seeded from .env for liboqs-python
+import oqs  # loads native lib after apply_liboqs_env_from_dotenv()
 
 from src.adapters.c2pa_manifest import (
     C2PAManifestArtifact,

@@ -88,6 +88,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101"]
 "**/tests/**/*.py" = ["S101"]
+# Intentional: seed OQS_INSTALL_PATH from .env before `import oqs` (liboqs-python loads native lib at import).
+"src/adapters/crypto_notary.py" = ["E402"]
 
 [tool.ruff.format]
 quote-style = "double"
