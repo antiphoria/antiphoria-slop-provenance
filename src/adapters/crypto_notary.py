@@ -1,5 +1,7 @@
 """Post-quantum notary adapter for Eternity v1 signed envelopes."""
 
+# ruff: noqa: E402  # apply_liboqs_env_from_dotenv() before `import oqs` (native lib loads at import)
+
 from __future__ import annotations
 
 import asyncio

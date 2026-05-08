@@ -67,35 +67,7 @@ select = [
     "W",
 ]
 
-[tool.ruff]
-line-length = 100
-indent-width = 4
-target-version = "py311"
-extend-exclude = [
-  ".venv",
-  "venv",
-  "build",
-  "dist",
-  "node_modules",
-]
-
-[tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "B", "UP", "I", "SIM", "A", "S"]
-ignore = [
-    "E203",
-]
-
-[tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101"]
-"**/tests/**/*.py" = ["S101"]
-# Intentional: seed OQS_INSTALL_PATH from .env before `import oqs` (liboqs-python loads native lib at import).
-"src/adapters/crypto_notary.py" = ["E402"]
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-skip-magic-trailing-comma = false
-line-ending = "auto"
+# Ruff config: see `ruff.toml` (mirrors antiphoria/.github; single source of truth at repo root).
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
