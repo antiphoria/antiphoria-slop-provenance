@@ -15,7 +15,7 @@ dependencies = [
     "google-genai",
     "pydantic>=2.5.0,<3.0.0",
     "liboqs-python>=0.14.0",
-    "c2pa-python>=0.28.0",
+    "c2pa-python>=0.30.0",
     "pygit2>=1.14.0,<2.0.0",
     "PyYAML>=6.0",
 ]

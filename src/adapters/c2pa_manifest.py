@@ -160,10 +160,10 @@ class SdkC2PAManifestProvider:
                 signer = self._build_signer(c2pa)
                 try:
                     manifest_bytes = builder.sign(
-                        signer=signer,
-                        format=_SDK_CARRIER_FORMAT,
-                        source=io.BytesIO(_SDK_MINIMAL_JPEG_BYTES),
-                        dest=io.BytesIO(),
+                        signer,
+                        _SDK_CARRIER_FORMAT,
+                        io.BytesIO(_SDK_MINIMAL_JPEG_BYTES),
+                        io.BytesIO(),
                     )
                 finally:
                     signer.close()
@@ -661,6 +661,24 @@ def _read_assertion_data(manifest_store: Any, label: str) -> Any | None:
     return None
 
 
+def _effective_timestamp_authority_url(url: str | None) -> str | None:
+    """Return ``url`` if it looks usable for RFC3161/https; otherwise None.
+
+    ``read_env_optional`` parses ``KEY=value`` literally: a line like
+    ``KEY=  # note`` yields a value beginning with ``#``, which breaks the
+    C2PA native signer ("Signature: invalid format"). Treat those as unset so
+    fallbacks can apply.
+    """
+    if url is None:
+        return None
+    s = url.strip()
+    if not s or s.lstrip().startswith("#"):
+        return None
+    if not s.startswith(("http://", "https://")):
+        return None
+    return s
+
+
 def _normalize_private_key_to_pkcs8(pem: str) -> str:
     """Normalize private key PEM to PKCS#8 for C2PA SDK compatibility.
 
@@ -705,9 +723,13 @@ def _resolve_sdk_settings(env_path: Path | None = None) -> C2PASdkSettings:
         default=_DEFAULT_C2PA_ALGORITHM,
         env_path=env_path,
     )
-    tsa_url = read_env_optional("C2PA_TSA_URL", env_path=env_path)
+    tsa_url = _effective_timestamp_authority_url(
+        read_env_optional("C2PA_TSA_URL", env_path=env_path)
+    )
     if not tsa_url:
-        tsa_url = read_env_optional("RFC3161_TSA_URL", env_path=env_path)
+        tsa_url = _effective_timestamp_authority_url(
+            read_env_optional("RFC3161_TSA_URL", env_path=env_path)
+        )
     return C2PASdkSettings(
         cert_chain_pem=cert_chain_pem,
         private_key_pem=private_key_pem,

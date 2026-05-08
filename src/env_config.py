@@ -129,3 +129,24 @@ def read_env_choice(
         allowed = ", ".join(allowed_values)
         raise RuntimeError(f"Environment variable '{env_key}' must be one of: {allowed}.")
     return normalized_allowed[normalized]
+
+
+def apply_liboqs_env_from_dotenv(env_path: Path | None = None) -> None:
+    """Populate ``os.environ[\"OQS_INSTALL_PATH\"]`` from ``.env`` when unset.
+
+    ``liboqs-python`` loads ``liboqs`` inside ``import oqs`` using **only**
+    ``os.environ``. The rest of this project reads ``.env`` via
+    :func:`read_env_optional`, which never writes into the process environment,
+    so ``OQS_INSTALL_PATH`` in ``.env`` would otherwise be ignored unless the
+    shell exports it. Call this once before ``import oqs`` (see
+    ``crypto_notary``).
+
+    Process environment takes precedence (12-factor); a non-empty existing
+    ``OQS_INSTALL_PATH`` is left unchanged.
+    """
+    if os.getenv("OQS_INSTALL_PATH", "").strip():
+        return
+    resolved_env = env_path if env_path is not None else get_project_env_path()
+    value = read_env_optional("OQS_INSTALL_PATH", env_path=resolved_env)
+    if value:
+        os.environ["OQS_INSTALL_PATH"] = value

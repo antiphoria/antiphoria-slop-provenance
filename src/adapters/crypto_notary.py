@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
-import oqs
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
@@ -19,6 +18,17 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
     load_pem_public_key,
 )
+
+from src.env_config import (
+    apply_liboqs_env_from_dotenv,
+    read_env_bool,
+    read_env_optional,
+    read_env_required,
+)
+
+apply_liboqs_env_from_dotenv()
+
+import oqs  # noqa: E402 — after OQS_INSTALL_PATH seeded from .env for liboqs-python
 
 from src.adapters.c2pa_manifest import (
     C2PAManifestArtifact,
@@ -32,7 +42,6 @@ from src.domain.events import (
     StoryHumanRegistered,
     StorySigned,
 )
-from src.env_config import read_env_bool, read_env_optional, read_env_required
 from src.logging_config import bind_log_context, should_log_route
 from src.models import (
     CRYPTO_ALGORITHM_ED25519,
