@@ -22,9 +22,11 @@ class LockPathHelperTest(unittest.TestCase):
                 "refs/heads/artifact/test-request",
             )
 
+            # Production code resolves repo_path; macOS tempfile can be /var/...
+            # while resolved form is /private/var/... — compare resolved paths.
             self.assertEqual(
                 lock_path.parent,
-                repo_path / ".git" / "antiphoria-locks",
+                (repo_path / ".git" / "antiphoria-locks").resolve(),
             )
             self.assertTrue(lock_path.parent.exists())
             self.assertTrue(lock_path.name.endswith(".lock"))
@@ -43,7 +45,7 @@ class LockPathHelperTest(unittest.TestCase):
 
             self.assertEqual(
                 lock_path.parent,
-                repo_path / ".git-real" / "antiphoria-locks",
+                (repo_path / ".git-real" / "antiphoria-locks").resolve(),
             )
             self.assertTrue(lock_path.parent.exists())
 
@@ -53,7 +55,10 @@ class LockPathHelperTest(unittest.TestCase):
 
             lock_path = build_repo_ref_lock_path(repo_path, "refs/heads/main")
 
-            self.assertEqual(lock_path.parent, repo_path / ".antiphoria-locks")
+            self.assertEqual(
+                lock_path.parent,
+                (repo_path / ".antiphoria-locks").resolve(),
+            )
             self.assertTrue(lock_path.parent.exists())
 
     def test_is_stable_for_same_repo_and_ref(self) -> None:
