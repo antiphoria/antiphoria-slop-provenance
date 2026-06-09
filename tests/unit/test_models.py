@@ -86,8 +86,72 @@ def test_author_attestation_rejects_excessive_attestations() -> None:
     attestations = [{"question": f"Q{i}", "answer": "a"} for i in range(65)]
     with pytest.raises(ValidationError, match="64"):
         AuthorAttestation.model_validate(
-            {"classification": "fiction", "attestations": attestations}
+            {
+                "classification": "fiction",
+                "attestationMode": "interactive",
+                "attestations": attestations,
+            }
         )
+
+
+def test_author_attestation_unattended_rejects_qa_pairs() -> None:
+    """Unattended mode must not include fabricated Q&A pairs."""
+    with pytest.raises(ValidationError, match="unattended"):
+        AuthorAttestation.model_validate(
+            {
+                "attestationMode": "unattended",
+                "attestations": _attestations_dict(),
+            }
+        )
+
+
+def test_author_attestation_unattended_rejects_classification() -> None:
+    """Unattended mode must not claim an artistic classification."""
+    with pytest.raises(ValidationError, match="unattended"):
+        AuthorAttestation.model_validate(
+            {
+                "classification": "fiction",
+                "attestationMode": "unattended",
+                "attestations": [],
+            }
+        )
+
+
+def test_author_attestation_interactive_requires_classification() -> None:
+    """Interactive mode requires an artistic classification."""
+    with pytest.raises(ValidationError, match="interactive"):
+        AuthorAttestation.model_validate(
+            {
+                "attestationMode": "interactive",
+                "attestations": _attestations_dict(),
+            }
+        )
+
+
+def test_author_attestation_interactive_requires_four_prompts() -> None:
+    """Interactive mode requires at least four Q&A pairs."""
+    with pytest.raises(ValidationError, match="interactive"):
+        AuthorAttestation.model_validate(
+            {
+                "classification": "fiction",
+                "attestationMode": "interactive",
+                "attestations": _attestations_dict()[:2],
+            }
+        )
+
+
+def test_author_attestation_unattended_accepts_empty_qa() -> None:
+    """Unattended mode records mode and nature only."""
+    att = AuthorAttestation.model_validate(
+        {
+            "attestationMode": "unattended",
+            "attestations": [],
+        }
+    )
+    assert att.attestation_mode == "unattended"
+    assert att.attestation_nature == "self-declaration"
+    assert att.classification is None
+    assert att.attestations == []
 
 
 @pytest.mark.parametrize(
@@ -165,12 +229,17 @@ class AuthorAttestationTest(unittest.TestCase):
     def test_serializes_with_attestations(self) -> None:
         att = AuthorAttestation(
             classification="fiction",
+            attestation_mode="interactive",
             attestations=_sample_attestations(),
         )
         dumped = att.model_dump(by_alias=True)
         self.assertIn("classification", dumped)
+        self.assertIn("attestationNature", dumped)
+        self.assertIn("attestationMode", dumped)
         self.assertIn("attestations", dumped)
         self.assertEqual(dumped["classification"], "fiction")
+        self.assertEqual(dumped["attestationNature"], "self-declaration")
+        self.assertEqual(dumped["attestationMode"], "interactive")
         self.assertEqual(len(dumped["attestations"]), 4)
         self.assertEqual(dumped["attestations"][0]["question"], "Are you human?")
         self.assertEqual(dumped["attestations"][0]["answer"], "y")
@@ -182,6 +251,7 @@ class ProvenanceAuthorAttestationTest(unittest.TestCase):
     def test_provenance_accepts_author_attestation(self) -> None:
         att = AuthorAttestation(
             classification="opinion",
+            attestation_mode="interactive",
             attestations=_sample_attestations(),
         )
         prov = Provenance(

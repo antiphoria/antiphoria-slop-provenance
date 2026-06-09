@@ -65,10 +65,13 @@ def register_pipeline_parsers(
     register_parser.add_argument(
         "--non-interactive",
         action="store_true",
-        help="Skip artistic attestation wizard; use defaults (for CI/automation).",
+        help=(
+            "Skip self-declaration wizard; record unattended registration only "
+            "(for CI/automation, no Q&A captured)."
+        ),
     )
     register_parser.add_argument(
         "--no-webauthn",
         action="store_true",
-        help="Skip WebAuthn/FIDO2 attestation; use legacy (y/N) only.",
+        help="Skip WebAuthn/FIDO2; use self-declaration prompts only.",
     )

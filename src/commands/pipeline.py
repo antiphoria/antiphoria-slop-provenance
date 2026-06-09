@@ -349,39 +349,28 @@ def _derive_register_title(body: str, filename: str) -> str:
     return Path(filename).stem or "Untitled"
 
 
-# Canonical attestation questions for human registration. Stored verbatim in
-# artifact frontmatter for legal record. Do not truncate or normalize.
+# Canonical self-declaration prompts for human registration. Stored verbatim in
+# artifact frontmatter. Do not truncate or normalize.
+_REGISTER_DISCLAIMER = (
+    "This records your self-declaration. It is not notarization, copyright "
+    "registration, or legal proof of authorship."
+)
 _REGISTER_QUESTION_1 = (
-    "Do you affirm that you are a human acting on your own behalf, "
-    "and that you possess the artistic capacity to make these declarations?"
+    "Do you state that you are a human acting on your own behalf, "
+    "and that you are able to make these statements?"
 )
 _REGISTER_QUESTION_2 = (
-    "Do you publicly declare ownership of this text, affirming that it is your original creation?"
+    "Do you state that you are the author of this text and that it is your original work?"
 )
 _REGISTER_QUESTION_3_TEMPLATE = (
-    "Do you declare in good faith that this text is your independent creation, "
-    "and that its content accurately reflects the classification ({}) "
-    "you selected above?"
+    "Do you state that this text is your independent work and that its content "
+    "matches the {} classification you selected above?"
 )
 _REGISTER_QUESTION_4 = (
-    "Do you fully understand and consent that this declaration will be "
-    "cryptographically sealed into a public, append-only ledger, and that any future "
-    "attempt to alter or delete this record will deliberately break the cryptographic "
-    "chain of trust?"
+    "Do you understand that this statement will be cryptographically sealed into a "
+    "public, append-only ledger, and that changing or removing it later would break "
+    "the provenance chain?"
 )
-
-
-def _build_attestation_qa(
-    classification: str,
-) -> list[tuple[str, str]]:
-    """Return (question, answer) pairs for non-interactive default attestation."""
-    q3 = _REGISTER_QUESTION_3_TEMPLATE.format(classification.upper())
-    return [
-        (_REGISTER_QUESTION_1, "y"),
-        (_REGISTER_QUESTION_2, "y"),
-        (q3, "y"),
-        (_REGISTER_QUESTION_4, "y"),
-    ]
 
 
 async def _run_register_command(args: argparse.Namespace) -> int:
@@ -426,21 +415,22 @@ async def _run_register_command(args: argparse.Namespace) -> int:
         raise RuntimeError("Pseudonym salt detected in artifact body; publication blocked.")
     title = args.title or _derive_register_title(body, artifact_path.name)
 
-    # --- Artistic attestation wizard ---
+    # --- Self-declaration wizard ---
     if getattr(args, "non_interactive", False):
-        qa_pairs = _build_attestation_qa("fiction")
         attestation = AuthorAttestation(
-            classification="fiction",
-            attestations=[AttestationQa(question=q, answer=a) for q, a in qa_pairs],
+            attestation_mode="unattended",
+            attestations=[],
         )
     else:
         try:
             print("\n" + "=" * 50)
-            print("ARTISTIC ATTESTATION WIZARD")
+            print("SELF-DECLARATION WIZARD")
             print("=" * 50)
+            print(_REGISTER_DISCLAIMER)
+            print()
             print("STEP 1: Artistic Classification")
             print(
-                "To establish the proper artistic context for this public record, "
+                "To establish the artistic context for this record, "
                 "how do you classify the primary intent of this text? Select one:"
             )
             print("[1] Statement of Fact / Record (Intended as literal truth)")
@@ -453,7 +443,7 @@ async def _run_register_command(args: argparse.Namespace) -> int:
                 raise RuntimeError("Registration aborted: Invalid classification selected.")
             classification = class_map[class_choice]
 
-            print("\nSTEP 2: The Attestations")
+            print("\nSTEP 2: Self-Declaration Prompts")
             questions = [
                 _REGISTER_QUESTION_1,
                 _REGISTER_QUESTION_2,
@@ -466,11 +456,12 @@ async def _run_register_command(args: argparse.Namespace) -> int:
                 answers.append(raw)
                 if raw.lower() != "y":
                     raise RuntimeError(
-                        "Registration aborted: All attestations must be agreed to (y) to proceed."
+                        "Registration aborted: All prompts must be agreed to (y) to proceed."
                     )
 
             attestation = AuthorAttestation(
                 classification=classification,
+                attestation_mode="interactive",
                 attestations=[
                     AttestationQa(question=q, answer=a)
                     for q, a in zip(questions, answers, strict=True)

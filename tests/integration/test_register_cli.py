@@ -254,7 +254,7 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
             artifact_path.unlink(missing_ok=True)
 
     async def test_register_non_interactive_skips_wizard(self) -> None:
-        """With --non-interactive, input() is never called."""
+        """With --non-interactive, input() is never called and attestation is unattended."""
 
         markdown_content = "Human-only content."
         with tempfile.NamedTemporaryFile(
@@ -263,12 +263,15 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
             f.write(markdown_content)
             artifact_path = Path(f.name)
 
+        captured: list[StoryHumanRegistered] = []
+
         try:
             with patch("builtins.input") as mock_input:
 
                 async def _fake_on_story_human_registered(
                     self: object, event: StoryHumanRegistered
                 ) -> None:
+                    captured.append(event)
                     signed = _build_human_story_signed_event(
                         request_id=event.request_id,
                         body=event.body,
@@ -298,5 +301,11 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(exit_code, 0)
                 mock_input.assert_not_called()
+                self.assertEqual(len(captured), 1)
+                att = captured[0].attestation
+                self.assertEqual(att.attestation_mode, "unattended")
+                self.assertEqual(att.attestation_nature, "self-declaration")
+                self.assertIsNone(att.classification)
+                self.assertEqual(att.attestations, [])
         finally:
             artifact_path.unlink(missing_ok=True)

@@ -90,7 +90,7 @@ slop-cli curate --file ../my-ledger/<request_id>.md --repo-path ../my-ledger
 
 ### Human-only registration
 
-Register self-attested human markdown (no AI generation). Interactive mode runs an attestation wizard; optional Touch ID / FIDO2 WebAuthn and operator pseudonym continuity are configured in `.env`. See [docs/QUICKSTART.md](docs/QUICKSTART.md) Track C.
+Register self-declared human markdown (no AI generation). Interactive mode runs a self-declaration wizard; optional Touch ID / FIDO2 WebAuthn and operator pseudonym continuity are configured in `.env`. See [docs/QUICKSTART.md](docs/QUICKSTART.md) Track C.
 
 ```bash
 # One-time Touch ID / passkey enrollment (macOS platform provider)
@@ -100,7 +100,7 @@ slop-cli webauthn-register --repo-path ../my-ledger
 slop-cli register --file ../my-ledger/human-story.md --repo-path ../my-ledger
 ```
 
-CI / automation (skips wizard and WebAuthn):
+CI / automation (skips wizard; no Q&A captured, `attestationMode: unattended`):
 
 ```bash
 slop-cli register --file ../my-ledger/human-story.md --repo-path ../my-ledger --non-interactive

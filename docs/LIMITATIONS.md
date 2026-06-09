@@ -30,12 +30,14 @@ Git ledger commits use **process-local** file locks. Multiple processes or hosts
 
 ## Human registration and personhood metadata
 
-- **Self-attestation** (wizard Q&A) records what the operator agreed to at signing time; it is not independent proof of authorship to third parties.
+- **Self-declaration** (wizard Q&A when run interactively) records what the operator stated at signing time; it is not independent proof of authorship, notarization, or copyright registration.
+- **`attestationNature: self-declaration`** and **`attestationMode`** (`interactive` vs `unattended`) are embedded in artifact frontmatter so third parties can see how the record was captured.
+- **`--non-interactive`:** skips the wizard and records `attestationMode: unattended` with no Q&A pairs and `classification: null`. Suitable for CI, not operator self-declaration.
 - **WebAuthn** (`attestationStrength: webauthn`) binds a platform or roaming authenticator assertion to the artifact body hash. The engine **embeds** assertion metadata; it does not currently **verify** WebAuthn assertions in `verify` / `attest` (treat as experimental provenance, not a legal identity guarantee).
 - **Platform provider (macOS Touch ID):** uses a short-lived `127.0.0.1` browser bridge with per-ceremony token auth. Credentials are bound to `localhost` RP ID—not a production web domain.
 - **HID provider (USB FIDO2):** requires `pip install -e ".[webauthn]"` and a connected security key.
 - **Operator pseudonym** (`operatorPseudonymHash`): HMAC-derived from a secret salt you control. Proves continuity across artifacts registered with the same salt; reveals no device data. Losing the salt breaks continuity; leaking it lets others impersonate that pseudonym. Prefer this over `CAPTURE_MACHINE_ID` (MAC hash), which remains opt-in and off by default.
-- **`--non-interactive` / `--no-webauthn`:** downgrade to legacy attestation only; suitable for CI, not maximum personhood metadata.
+- **`--non-interactive` / `--no-webauthn`:** unattended or self-declaration-only paths; suitable for CI, not maximum personhood metadata.
 
 ## Operational
 

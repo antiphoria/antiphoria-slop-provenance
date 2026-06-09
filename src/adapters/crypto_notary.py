@@ -474,7 +474,12 @@ class CryptoNotaryAdapter:
                 attestationStrength=(
                     "webauthn"
                     if webauthn_attestation
-                    else ("legacy" if author_attestation else None)
+                    else (
+                        "unattended"
+                        if author_attestation
+                        and author_attestation.attestation_mode == "unattended"
+                        else ("legacy" if author_attestation else None)
+                    )
                 ),
                 registrationCeremony=registration_ceremony,
             ),

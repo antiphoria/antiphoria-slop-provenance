@@ -111,13 +111,23 @@ def render_artifact_markdown(artifact: Artifact, body: str) -> str:
         att = artifact.provenance.author_attestation
         attestation_lines = [
             "  authorAttestation:\n",
-            f"    classification: {_yaml_quoted(att.classification)}\n",
-            "    attestations:\n",
+            f"    attestationNature: {_yaml_quoted(att.attestation_nature)}\n",
+            f"    attestationMode: {_yaml_quoted(att.attestation_mode)}\n",
         ]
-        for qa in att.attestations:
-            q_block = _yaml_literal_block(qa.question, indent=10)
-            attestation_lines.append(f"      - question: |-\n{q_block}\n")
-            attestation_lines.append(f"        answer: {_yaml_quoted(qa.answer)}\n")
+        if att.classification is None:
+            attestation_lines.append("    classification: null\n")
+        else:
+            attestation_lines.append(
+                f"    classification: {_yaml_quoted(att.classification)}\n"
+            )
+        if att.attestations:
+            attestation_lines.append("    attestations:\n")
+            for qa in att.attestations:
+                q_block = _yaml_literal_block(qa.question, indent=10)
+                attestation_lines.append(f"      - question: |-\n{q_block}\n")
+                attestation_lines.append(f"        answer: {_yaml_quoted(qa.answer)}\n")
+        else:
+            attestation_lines.append("    attestations: []\n")
         attestation_block = "".join(attestation_lines)
     else:
         attestation_block = "  authorAttestation: null\n"

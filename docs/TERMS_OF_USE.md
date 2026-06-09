@@ -24,7 +24,7 @@ You are solely responsible for private key custody, backup, rotation, and revoca
 
 ## 5. Provenance claims
 
-You are solely responsible for the truthfulness and legal consequences of any provenance claims you publish using outputs from this software.
+You are solely responsible for the truthfulness and legal consequences of any provenance claims you publish using outputs from this software. Self-declaration prompts in `register` record your statements at signing time; they are not notarization, copyright registration, or legal proof of authorship.
 
 ## 6. Content licensing
 
