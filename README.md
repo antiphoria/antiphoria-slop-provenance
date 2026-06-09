@@ -28,6 +28,7 @@ Use of this software is subject to [docs/TERMS_OF_USE.md](docs/TERMS_OF_USE.md) 
 - Signs artifacts with ML-DSA (`liboqs`) and Ed25519.
 - Commits signed markdown artifacts into a git ledger.
 - Optionally anchors artifact hashes into a transparency log and requests RFC3161 timestamps.
+- Supports human-only registration with optional WebAuthn (Touch ID / FIDO2) and operator pseudonym continuity.
 - Produces machine-readable provenance audit reports.
 
 ## Installation
@@ -42,6 +43,8 @@ pip install -e ".[dev]"
 Runtime-only (no test extras): `pip install -e .`
 
 Optional OpenTimestamps: `pip install -e ".[ots]"`
+
+Optional WebAuthn (USB FIDO2 or macOS Touch ID bridge): `pip install -e ".[webauthn]"`
 
 ## Environment
 
@@ -87,9 +90,23 @@ slop-cli curate --file ../my-ledger/<request_id>.md --repo-path ../my-ledger
 
 ### Human-only registration
 
+Register self-attested human markdown (no AI generation). Interactive mode runs an attestation wizard; optional Touch ID / FIDO2 WebAuthn and operator pseudonym continuity are configured in `.env`. See [docs/QUICKSTART.md](docs/QUICKSTART.md) Track C.
+
+```bash
+# One-time Touch ID / passkey enrollment (macOS platform provider)
+slop-cli webauthn-register --repo-path ../my-ledger
+
+# Register plain markdown (interactive wizard + optional WebAuthn)
+slop-cli register --file ../my-ledger/human-story.md --repo-path ../my-ledger
+```
+
+CI / automation (skips wizard and WebAuthn):
+
 ```bash
 slop-cli register --file ../my-ledger/human-story.md --repo-path ../my-ledger --non-interactive
 ```
+
+Skip WebAuthn only: add `--no-webauthn`.
 
 ### Strict attestation (RFC3161)
 

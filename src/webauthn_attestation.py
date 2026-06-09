@@ -21,6 +21,23 @@ from src.env_config import read_env_optional
 from src.models import WebAuthnAttestation
 
 _CREDENTIALS_FILE = ".webauthn-credentials.json"
+_WEBAUTHN_PROVIDERS = frozenset({"hid", "platform"})
+
+
+def _resolve_provider(env_path: Path | None = None) -> str:
+    """Resolve WebAuthn provider: hid (USB key) or platform (Touch ID bridge)."""
+    raw = read_env_optional("WEBAUTHN_PROVIDER", env_path=env_path)
+    if not raw:
+        return "hid"
+    provider = raw.strip().lower()
+    if provider in _WEBAUTHN_PROVIDERS:
+        return provider
+    return "hid"
+
+
+def get_webauthn_provider(env_path: Path | None = None) -> str:
+    """Public accessor for the active WebAuthn provider."""
+    return _resolve_provider(env_path)
 
 
 def _resolve_rp_id(env_path: Path | None = None) -> str | None:
@@ -60,13 +77,17 @@ def get_webauthn_assertion(
     repo_path: Path | None = None,
     env_path: Path | None = None,
 ) -> WebAuthnAttestation | None:
-    """Get WebAuthn assertion from FIDO2 device.
+    """Get WebAuthn assertion from FIDO2 device or platform bridge.
 
     Returns None if WEBAUTHN_RP_ID is unset, fido2 is not installed, or no device.
     """
     rp_id = _resolve_rp_id(env_path)
     if not rp_id:
         return None
+    if _resolve_provider(env_path) == "platform":
+        from src.webauthn_bridge import get_assertion_platform
+
+        return get_assertion_platform(challenge, repo_path=repo_path, env_path=env_path)
     try:
         from fido2.hid import CtapHidDevice
         from fido2.webauthn import (
@@ -135,6 +156,10 @@ def register_webauthn_credential(
     rp_id = _resolve_rp_id(env_path)
     if not rp_id:
         return False
+    if _resolve_provider(env_path) == "platform":
+        from src.webauthn_bridge import register_credential_platform
+
+        return register_credential_platform(repo_path=repo_path, env_path=env_path)
     try:
         from fido2.hid import CtapHidDevice
         from fido2.webauthn import (

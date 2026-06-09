@@ -26,6 +26,7 @@ from src.env_config import (
 )
 from src.infrastructure.event_bus import EventBus
 from src.models import RegistrationCeremony
+from src.pseudonym import get_pseudonym_hash
 from src.repository.sqlite import SQLiteRepository
 from src.runtime.cli_composition import (
     build_provenance_services as _compose_provenance_services,
@@ -84,6 +85,7 @@ def _capture_registration_ceremony(env_path: Path) -> RegistrationCeremony:
         registrationUtcMs=registration_utc_ms,
         orchestratorGitCommit=git_commit,
         machineIdHash=machine_id_hash,
+        operatorPseudonymHash=get_pseudonym_hash(env_path),
     )
 
 

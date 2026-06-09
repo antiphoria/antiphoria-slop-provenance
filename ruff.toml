@@ -30,8 +30,8 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-"tests/**/*.py" = ["S101"]
-"**/tests/**/*.py" = ["S101"]
+"tests/**/*.py" = ["S101", "S107", "S310", "SIM117"]
+"**/tests/**/*.py" = ["S101", "S107", "S310", "SIM117"]
 "src/adapters/crypto_notary.py" = ["E402"]
 
 [format]

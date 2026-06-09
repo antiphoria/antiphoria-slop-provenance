@@ -28,6 +28,15 @@ In `sdk` mode, markdown is not always the direct signed C2PA “asset”; the pi
 
 Git ledger commits use **process-local** file locks. Multiple processes or hosts writing the same ledger repo without a **single-writer** or distributed lock strategy risk corruption. This repository focuses on local `slop-cli` execution; design multi-worker topologies accordingly.
 
+## Human registration and personhood metadata
+
+- **Self-attestation** (wizard Q&A) records what the operator agreed to at signing time; it is not independent proof of authorship to third parties.
+- **WebAuthn** (`attestationStrength: webauthn`) binds a platform or roaming authenticator assertion to the artifact body hash. The engine **embeds** assertion metadata; it does not currently **verify** WebAuthn assertions in `verify` / `attest` (treat as experimental provenance, not a legal identity guarantee).
+- **Platform provider (macOS Touch ID):** uses a short-lived `127.0.0.1` browser bridge with per-ceremony token auth. Credentials are bound to `localhost` RP ID—not a production web domain.
+- **HID provider (USB FIDO2):** requires `pip install -e ".[webauthn]"` and a connected security key.
+- **Operator pseudonym** (`operatorPseudonymHash`): HMAC-derived from a secret salt you control. Proves continuity across artifacts registered with the same salt; reveals no device data. Losing the salt breaks continuity; leaking it lets others impersonate that pseudonym. Prefer this over `CAPTURE_MACHINE_ID` (MAC hash), which remains opt-in and off by default.
+- **`--non-interactive` / `--no-webauthn`:** downgrade to legacy attestation only; suitable for CI, not maximum personhood metadata.
+
 ## Operational
 
 - **BYOV / vault** workflows are required for production-grade private key handling; dev keys on disk are explicitly discouraged for production (see [SECURITY.md](../SECURITY.md)).

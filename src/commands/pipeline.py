@@ -420,6 +420,10 @@ async def _run_register_command(args: argparse.Namespace) -> int:
         raise RuntimeError(f"File body is empty: '{artifact_path}'.")
 
     assert_secret_free("artifact body", body)
+    from src.pseudonym import salt_appears_in_text
+
+    if salt_appears_in_text(runtime.env_path, body):
+        raise RuntimeError("Pseudonym salt detected in artifact body; publication blocked.")
     title = args.title or _derive_register_title(body, artifact_path.name)
 
     # --- Artistic attestation wizard ---
@@ -480,21 +484,30 @@ async def _run_register_command(args: argparse.Namespace) -> int:
     webauthn_attestation = None
     if not getattr(args, "no_webauthn", False):
         from src.canonicalization import canonicalize_body_for_hash
-        from src.webauthn_attestation import get_webauthn_assertion
+        from src.webauthn_attestation import get_webauthn_assertion, get_webauthn_provider
 
         challenge_bytes = canonicalize_body_for_hash(body)
         challenge_hash = hashlib.sha256(challenge_bytes).digest()
-        print("Insert your security key and touch it to complete attestation...")
+        if get_webauthn_provider(env_path=runtime.env_path) == "platform":
+            print("Opening browser for Touch ID attestation...")
+        else:
+            print("Insert your security key and touch it to complete attestation...")
         webauthn_attestation = get_webauthn_assertion(
             challenge=challenge_hash,
             repo_path=repository_path,
             env_path=runtime.env_path,
         )
         if webauthn_attestation is None:
-            print(
-                "WebAuthn skipped (set WEBAUTHN_RP_ID to your production domain, "
-                "or no device/fido2). Using legacy."
-            )
+            if get_webauthn_provider(env_path=runtime.env_path) == "platform":
+                print(
+                    "WebAuthn skipped (set WEBAUTHN_RP_ID, run webauthn-register first, "
+                    "or approve Touch ID in the browser). Using legacy."
+                )
+            else:
+                print(
+                    "WebAuthn skipped (set WEBAUTHN_RP_ID to your production domain, "
+                    "or no device/fido2). Using legacy."
+                )
         else:
             print("WebAuthn attestation captured.")
 

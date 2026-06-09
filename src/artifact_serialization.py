@@ -149,11 +149,17 @@ def render_artifact_markdown(artifact: Artifact, body: str) -> str:
             if rc.machine_id_hash is not None
             else "    machineIdHash: null\n"
         )
+        pseudonym_line = (
+            f"    operatorPseudonymHash: {_yaml_quoted(rc.operator_pseudonym_hash)}\n"
+            if rc.operator_pseudonym_hash is not None
+            else "    operatorPseudonymHash: null\n"
+        )
         ceremony_block = (
             "  registrationCeremony:\n"
             f"    registrationUtcMs: {rc.registration_utc_ms}\n"
             f"    orchestratorGitCommit: {_yaml_quoted(rc.orchestrator_git_commit)}\n"
             f"{machine_line}"
+            f"{pseudonym_line}"
         )
     else:
         ceremony_block = "  registrationCeremony: null\n"

@@ -114,6 +114,11 @@ class RegistrationCeremony(StrictModel):
     registration_utc_ms: int = Field(alias="registrationUtcMs")
     orchestrator_git_commit: str = Field(alias="orchestratorGitCommit", min_length=1)
     machine_id_hash: str | None = Field(alias="machineIdHash", default=None)
+    operator_pseudonym_hash: str | None = Field(
+        alias="operatorPseudonymHash",
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
 
 
 class Provenance(StrictModel):
