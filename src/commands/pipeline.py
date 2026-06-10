@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import json
 import logging
 from pathlib import Path
 from uuid import UUID
@@ -19,11 +20,12 @@ from src.domain.events import (
     StoryHumanRegistered,
     StoryRequested,
     StorySigned,
+    StorySyntheticSealed,
     StoryTimestamped,
 )
 from src.infrastructure.event_bus import EventBus
 from src.logging_config import bind_log_context, should_log_route
-from src.models import AttestationQa, AuthorAttestation
+from src.models import AttestationQa, AuthorAttestation, canonical_json_bytes, sha256_hex
 from src.ports import ProvenanceServicePort
 from src.runtime.cli_command_runtime import (
     _capture_registration_ceremony,
@@ -582,5 +584,284 @@ async def _run_register_command(args: argparse.Namespace) -> int:
         f"path={committed_event.ledger_path}",
     )
     _print_attest_next_step(repository_path, human_event.request_id)
+    await event_bus.drain()
+    return 0
+
+
+# Orchestration declaration prompts for LLM-only sealing. Stored verbatim in
+# artifact frontmatter. Do not truncate or normalize.
+_SEAL_DISCLAIMER = (
+    "This records your orchestration declaration. It is not proof of process "
+    "lineage, notarization, or legal proof of authorship."
+)
+_SEAL_QUESTION_1 = (
+    "Do you state that no human authored this text body, and that it was "
+    "produced by machine generation?"
+)
+_SEAL_QUESTION_2 = (
+    "Do you state that you acted as orchestrator only (prompting, selection, "
+    "assembly — not composition)?"
+)
+_SEAL_QUESTION_3 = (
+    "Do you state that any attached process description is a good-faith account "
+    "and not verified lineage?"
+)
+_SEAL_QUESTION_4 = (
+    "Do you understand that this will be sealed into a public, append-only ledger "
+    "and dedicated to the public domain (CC0)?"
+)
+
+
+def _parse_models_list(raw: str | None) -> list[str]:
+    """Parse comma-separated model identifiers from CLI input."""
+    if not raw:
+        return []
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _load_process_narrative(process_file: Path) -> tuple[bytes, str]:
+    """Wrap operator narrative JSON in the mandatory unverified envelope."""
+    raw_text = process_file.read_text(encoding="utf-8").lstrip("\ufeff")
+    try:
+        loaded = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Process narrative file is not valid JSON: '{process_file}'."
+        ) from exc
+    if not isinstance(loaded, dict):
+        raise RuntimeError("Process narrative must be a JSON object.")
+    wrapped = {
+        "schemaVersion": "process-narrative.v1",
+        "kind": "operator-narrative",
+        "verified": False,
+        "narrative": loaded,
+    }
+    narrative_bytes = canonical_json_bytes(wrapped)
+    return narrative_bytes, sha256_hex(narrative_bytes)
+
+
+async def _run_seal_command(args: argparse.Namespace) -> int:
+    """Run LLM-only sealing pipeline with orchestration declaration."""
+    runtime = build_provenance_command_runtime(args, enforce_external_repo_path=True)
+    event_bus = runtime.event_bus
+    repository = runtime.repository
+    telemetry_adapter = runtime.telemetry_adapter
+    repository_path = runtime.repository_path
+    provenance_service = runtime.provenance_service
+    completion_future = create_story_committed_future()
+
+    notary_adapter = CryptoNotaryAdapter(event_bus=event_bus, env_path=runtime.env_path)
+    ledger_adapter = GitLedgerAdapter(
+        event_bus=event_bus,
+        repository_path=repository_path,
+        env_path=runtime.env_path,
+    )
+
+    artifact_path = Path(args.file).resolve()
+    if not artifact_path.exists():
+        raise RuntimeError(f"File not found: '{artifact_path}'.")
+
+    raw_text = artifact_path.read_text(encoding="utf-8").lstrip("\ufeff")
+    if raw_text.startswith("---\n"):
+        try:
+            body = extract_markdown_body(raw_text)
+        except RuntimeError:
+            raise RuntimeError(
+                f"File has malformed frontmatter. For LLM-only sealing, "
+                f"use plain markdown or fix the frontmatter: '{artifact_path}'."
+            ) from None
+    else:
+        body = raw_text.strip()
+    if not body:
+        raise RuntimeError(f"File body is empty: '{artifact_path}'.")
+
+    assert_secret_free("artifact body", body)
+    from src.pseudonym import salt_appears_in_text
+
+    if salt_appears_in_text(runtime.env_path, body):
+        raise RuntimeError("Pseudonym salt detected in artifact body; publication blocked.")
+    title = args.title or _derive_register_title(body, artifact_path.name)
+    models_used = _parse_models_list(getattr(args, "models", None))
+
+    process_narrative_bytes: bytes | None = None
+    process_narrative_hash: str | None = None
+    process_file = getattr(args, "process_file", None)
+    if process_file:
+        process_path = Path(process_file).resolve()
+        if not process_path.exists():
+            raise RuntimeError(f"Process narrative file not found: '{process_path}'.")
+        process_narrative_bytes, process_narrative_hash = _load_process_narrative(process_path)
+
+    if getattr(args, "non_interactive", False):
+        attestation = AuthorAttestation(
+            attestation_nature="orchestration-declaration",
+            attestation_mode="unattended",
+            attestations=[],
+        )
+    else:
+        try:
+            print("\n" + "=" * 50)
+            print("ORCHESTRATION DECLARATION WIZARD")
+            print("=" * 50)
+            print(_SEAL_DISCLAIMER)
+            print()
+            print("STEP 1: Artistic Classification")
+            print(
+                "To establish the artistic context for this record, "
+                "how do you classify the primary intent of this text? Select one:"
+            )
+            print("[1] Statement of Fact / Record (Intended as literal truth)")
+            print("[2] Opinion / Commentary (Subjective analysis or belief)")
+            print("[3] Creative Fiction / Art (Imaginative or literary work)")
+            print("[4] Satire / Parody (Humorous or exaggerated critique)")
+            class_choice = input("Enter 1-4: ").strip()
+            class_map = {"1": "fact", "2": "opinion", "3": "fiction", "4": "satire"}
+            if class_choice not in class_map:
+                raise RuntimeError("Sealing aborted: Invalid classification selected.")
+            classification = class_map[class_choice]
+
+            print("\nSTEP 2: Orchestration Declaration Prompts")
+            questions = [
+                _SEAL_QUESTION_1,
+                _SEAL_QUESTION_2,
+                _SEAL_QUESTION_3,
+                _SEAL_QUESTION_4,
+            ]
+            answers: list[str] = []
+            for i, q in enumerate(questions, 1):
+                raw = input(f"Prompt {i}: {q} [y/N]: ").strip()
+                answers.append(raw)
+                if raw.lower() != "y":
+                    raise RuntimeError(
+                        "Sealing aborted: All prompts must be agreed to (y) to proceed."
+                    )
+
+            attestation = AuthorAttestation(
+                attestation_nature="orchestration-declaration",
+                classification=classification,
+                attestation_mode="interactive",
+                attestations=[
+                    AttestationQa(question=q, answer=a)
+                    for q, a in zip(questions, answers, strict=True)
+                ],
+            )
+            print("=" * 50 + "\n")
+        except (KeyboardInterrupt, EOFError):
+            print("\nSealing aborted by user.")
+            return 1
+
+    webauthn_attestation = None
+    if not getattr(args, "no_webauthn", False):
+        from src.canonicalization import canonicalize_body_for_hash
+        from src.webauthn_attestation import get_webauthn_assertion, get_webauthn_provider
+
+        challenge_bytes = canonicalize_body_for_hash(body)
+        challenge_hash = hashlib.sha256(challenge_bytes).digest()
+        if get_webauthn_provider(env_path=runtime.env_path) == "platform":
+            print("Opening browser for Touch ID attestation...")
+        else:
+            print("Insert your security key and touch it to complete attestation...")
+        webauthn_attestation = get_webauthn_assertion(
+            challenge=challenge_hash,
+            repo_path=repository_path,
+            env_path=runtime.env_path,
+        )
+        if webauthn_attestation is None:
+            if get_webauthn_provider(env_path=runtime.env_path) == "platform":
+                print(
+                    "WebAuthn skipped (set WEBAUTHN_RP_ID, run webauthn-register first, "
+                    "or approve Touch ID in the browser). Using legacy."
+                )
+            else:
+                print(
+                    "WebAuthn skipped (set WEBAUTHN_RP_ID to your production domain, "
+                    "or no device/fido2). Using legacy."
+                )
+        else:
+            print("WebAuthn attestation captured.")
+
+    async def _record_signed(event: StorySigned) -> None:
+        if event.artifact.signature is None:
+            raise RuntimeError("Signed artifact is missing signature block.")
+        await asyncio.to_thread(
+            repository.artifacts.create_artifact_record,
+            event.request_id,
+            "signed",
+            event.artifact,
+            event.artifact.provenance.generation_context.prompt,
+            event.body,
+            event.artifact.provenance.model_id,
+        )
+        await asyncio.to_thread(
+            provenance_service.register_signing_key,
+            event.artifact.signature.verification_anchor.signer_fingerprint,
+            _read_env_optional("SIGNING_KEY_VERSION", env_path=runtime.env_path),
+        )
+
+    async def _record_committed(event: StoryCommitted) -> None:
+        try:
+            commit_id = await asyncio.to_thread(
+                _verify_git_commit,
+                repository_path,
+                event.commit_oid,
+            )
+            await asyncio.to_thread(
+                repository.artifacts.update_artifact_status,
+                event.request_id,
+                "committed",
+                event.ledger_path,
+                commit_id,
+            )
+            if not completion_future.done():
+                completion_future.set_result(event)
+        except Exception as exc:
+            if not completion_future.done():
+                completion_future.set_exception(exc)
+            raise
+
+    ceremony = _capture_registration_ceremony(runtime.env_path)
+    sealed_event = StorySyntheticSealed(
+        body=body,
+        title=title,
+        license=args.license,
+        models_used=models_used,
+        attestation=attestation,
+        webauthn_attestation=webauthn_attestation,
+        registration_ceremony=ceremony,
+        process_narrative_bytes=process_narrative_bytes,
+        process_narrative_hash=process_narrative_hash,
+    )
+
+    if should_log_route("coarse"):
+        _cli_logger.info(
+            "command seal file=%s repo_path=%s",
+            getattr(args, "file", "-"),
+            getattr(args, "repo_path", None) or _default_repo_path(),
+            extra={"command": "seal"},
+        )
+
+    await event_bus.subscribe(StorySigned, _record_signed)
+    await event_bus.subscribe(StoryCommitted, _record_committed)
+    await event_bus.subscribe_errors(build_dispatch_error_handler(completion_future))
+    await telemetry_adapter.start()
+    await notary_adapter.start()
+    await ledger_adapter.start()
+
+    bind_log_context(request_id=sealed_event.request_id)
+    await event_bus.emit(sealed_event)
+    committed_event = await asyncio.wait_for(completion_future, timeout=300.0)
+    await _anchor_and_timestamp_committed_artifact(
+        event_bus=event_bus,
+        provenance_service=provenance_service,
+        repository_path=repository_path,
+        committed_event=committed_event,
+    )
+    print(
+        "Sealing completed:",
+        f"request_id={sealed_event.request_id}",
+        f"commit={committed_event.commit_oid}",
+        f"path={committed_event.ledger_path}",
+    )
+    _print_attest_next_step(repository_path, sealed_event.request_id)
     await event_bus.drain()
     return 0

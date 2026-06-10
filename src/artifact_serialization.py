@@ -192,6 +192,29 @@ def render_artifact_markdown(artifact: Artifact, body: str) -> str:
         else body
     )
 
+    if artifact.provenance.provenance_grade is not None:
+        provenance_grade_line = (
+            f"  provenanceGrade: {_yaml_quoted(artifact.provenance.provenance_grade)}\n"
+        )
+    else:
+        provenance_grade_line = "  provenanceGrade: null\n"
+
+    if artifact.provenance.models_used:
+        models_used_lines = ["  modelsUsed:\n"]
+        for model_id in artifact.provenance.models_used:
+            models_used_lines.append(f"    - {_yaml_quoted(model_id)}\n")
+        models_used_block = "".join(models_used_lines)
+    else:
+        models_used_block = "  modelsUsed: null\n"
+
+    if artifact.provenance.process_narrative_hash is not None:
+        process_narrative_hash_line = (
+            "  processNarrativeHash: "
+            f"{_yaml_quoted(artifact.provenance.process_narrative_hash)}\n"
+        )
+    else:
+        process_narrative_hash_line = "  processNarrativeHash: null\n"
+
     return (
         "---\n"
         f"schemaVersion: {_yaml_quoted(artifact.schema_version)}\n"
@@ -204,6 +227,9 @@ def render_artifact_markdown(artifact: Artifact, body: str) -> str:
         f"  source: {_yaml_quoted(artifact.provenance.source)}\n"
         f"  engineVersion: {_yaml_quoted(artifact.provenance.engine_version)}\n"
         f"  modelId: {_yaml_quoted(artifact.provenance.model_id)}\n"
+        f"{provenance_grade_line}"
+        f"{models_used_block}"
+        f"{process_narrative_hash_line}"
         "  generationContext:\n"
         "    systemInstruction: |-\n"
         f"{system_instruction_yaml}\n"

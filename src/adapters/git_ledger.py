@@ -80,6 +80,7 @@ class GitLedgerAdapter:
         markdown_payload = self._render_markdown(event)
         relative_path = self._build_relative_artifact_path(event)
         c2pa_sidecar_payload = self._resolve_c2pa_sidecar_payload(event)
+        process_narrative_payload = self._resolve_process_narrative_sidecar_payload(event)
         commit_message = f"ledger: notarize {event.artifact.title} ({event.request_id})"
 
         commit_oid = await asyncio.to_thread(
@@ -88,6 +89,7 @@ class GitLedgerAdapter:
             relative_path,
             markdown_payload,
             c2pa_sidecar_payload,
+            process_narrative_payload,
             commit_message,
         )
         if should_log_route("coarse"):
@@ -129,6 +131,30 @@ class GitLedgerAdapter:
         raise RuntimeError(
             "C2PA manifest bytes required. Event must carry c2pa_manifest_bytes_b64."
         )
+
+    def _resolve_process_narrative_sidecar_payload(self, event: StorySigned) -> bytes | None:
+        """Resolve process narrative bytes from event payload with hash enforcement."""
+        narrative_hash = event.process_narrative_hash
+        if narrative_hash is None and event.process_narrative_bytes_b64 is not None:
+            raise RuntimeError("Process narrative bytes supplied without narrative hash.")
+        if event.process_narrative_bytes_b64 is not None:
+            try:
+                sidecar_payload = base64.b64decode(
+                    event.process_narrative_bytes_b64,
+                    validate=True,
+                )
+            except binascii.Error as exc:
+                raise RuntimeError("Invalid base64 process narrative sidecar payload.") from exc
+            if narrative_hash is not None and sha256_hex(sidecar_payload) != narrative_hash:
+                raise RuntimeError(
+                    "Process narrative hash mismatch while writing sidecar bytes."
+                )
+            return sidecar_payload
+        if narrative_hash is not None:
+            raise RuntimeError(
+                "Process narrative hash supplied without process_narrative_bytes_b64."
+            )
+        return None
 
     @staticmethod
     def _assert_publishable_content_is_secret_free(event: StorySigned) -> None:
@@ -201,6 +227,7 @@ class GitLedgerAdapter:
         relative_path: str,
         markdown_payload: str,
         c2pa_sidecar_payload: bytes | None,
+        process_narrative_payload: bytes | None,
         commit_message: str,
     ) -> str:
         """Synchronously write blob/tree and create branch-isolated commit.
@@ -226,6 +253,7 @@ class GitLedgerAdapter:
                 relative_path=relative_path,
                 markdown_payload=markdown_payload,
                 c2pa_sidecar_payload=c2pa_sidecar_payload,
+                process_narrative_payload=process_narrative_payload,
                 commit_message=commit_message,
                 ref_name=ref_name,
             )
@@ -236,6 +264,7 @@ class GitLedgerAdapter:
         relative_path: str,
         markdown_payload: str,
         c2pa_sidecar_payload: bytes | None,
+        process_narrative_payload: bytes | None,
         commit_message: str,
         ref_name: str,
     ) -> str:
@@ -248,6 +277,7 @@ class GitLedgerAdapter:
             relative_path=relative_path,
             markdown_payload=markdown_payload,
             c2pa_sidecar_payload=c2pa_sidecar_payload,
+            process_narrative_payload=process_narrative_payload,
             parent_tree_oid=parent_commit.tree_id if parent_commit else None,
         )
 
@@ -284,6 +314,7 @@ class GitLedgerAdapter:
         relative_path: str,
         markdown_payload: str,
         c2pa_sidecar_payload: bytes | None,
+        process_narrative_payload: bytes | None,
         parent_tree_oid: pygit2.Oid | None = None,
     ) -> pygit2.Oid:
         """Build root tree with artifact files, preserving parent tree (e.g. .provenance)."""
@@ -313,6 +344,7 @@ class GitLedgerAdapter:
                 path_obj=path_obj,
                 blob_oid=blob_oid,
                 c2pa_sidecar_payload=c2pa_sidecar_payload,
+                process_narrative_payload=process_narrative_payload,
                 parent_tree_oid=parent_tree_oid,
             )
 
@@ -323,6 +355,7 @@ class GitLedgerAdapter:
                 path_obj=path_obj,
                 blob_oid=blob_oid,
                 c2pa_sidecar_payload=c2pa_sidecar_payload,
+                process_narrative_payload=process_narrative_payload,
                 parent_tree_oid=parent_tree_oid,
             )
         return self._build_nested_dir_tree(
@@ -330,9 +363,28 @@ class GitLedgerAdapter:
             path_obj=path_obj,
             blob_oid=blob_oid,
             c2pa_sidecar_payload=c2pa_sidecar_payload,
+            process_narrative_payload=process_narrative_payload,
             parent_tree_oid=parent_tree_oid,
             path_parts=path_parts,
         )
+
+    @staticmethod
+    def _insert_sidecar_blobs(
+        repo: pygit2.Repository,
+        tree_builder: pygit2.TreeBuilder,
+        path_obj: Path,
+        c2pa_sidecar_payload: bytes | None,
+        process_narrative_payload: bytes | None,
+    ) -> None:
+        """Insert optional C2PA and process narrative sidecars into a tree builder."""
+        if c2pa_sidecar_payload is not None:
+            sidecar_blob_oid = repo.create_blob(c2pa_sidecar_payload)
+            sidecar_name = f"{path_obj.stem}.c2pa"
+            tree_builder.insert(sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB)
+        if process_narrative_payload is not None:
+            sidecar_blob_oid = repo.create_blob(process_narrative_payload)
+            sidecar_name = f"{path_obj.stem}.process.json"
+            tree_builder.insert(sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB)
 
     def _build_flat_tree(
         self,
@@ -340,6 +392,7 @@ class GitLedgerAdapter:
         path_obj: Path,
         blob_oid: pygit2.Oid,
         c2pa_sidecar_payload: bytes | None,
+        process_narrative_payload: bytes | None,
         parent_tree_oid: pygit2.Oid | None,
     ) -> pygit2.Oid:
         """Build root tree when artifacts are written at repository root."""
@@ -348,10 +401,13 @@ class GitLedgerAdapter:
             repo.TreeBuilder(parent_tree_oid) if parent_tree_oid is not None else repo.TreeBuilder()
         )
         root_tb.insert(path_obj.name, blob_oid, pygit2.GIT_FILEMODE_BLOB)
-        if c2pa_sidecar_payload is not None:
-            sidecar_blob_oid = repo.create_blob(c2pa_sidecar_payload)
-            sidecar_name = f"{path_obj.stem}.c2pa"
-            root_tb.insert(sidecar_name, sidecar_blob_oid, pygit2.GIT_FILEMODE_BLOB)
+        self._insert_sidecar_blobs(
+            repo,
+            root_tb,
+            path_obj,
+            c2pa_sidecar_payload,
+            process_narrative_payload,
+        )
         return root_tb.write()
 
     def _build_single_dir_tree(
@@ -360,6 +416,7 @@ class GitLedgerAdapter:
         path_obj: Path,
         blob_oid: pygit2.Oid,
         c2pa_sidecar_payload: bytes | None,
+        process_narrative_payload: bytes | None,
         parent_tree_oid: pygit2.Oid | None,
     ) -> pygit2.Oid:
         """Build tree when artifacts_directory is a single path segment."""
@@ -369,6 +426,7 @@ class GitLedgerAdapter:
             path_obj=path_obj,
             blob_oid=blob_oid,
             c2pa_sidecar_payload=c2pa_sidecar_payload,
+            process_narrative_payload=process_narrative_payload,
             parent_tree_oid=parent_tree_oid,
         )
         root_tb = (
@@ -383,6 +441,7 @@ class GitLedgerAdapter:
         path_obj: Path,
         blob_oid: pygit2.Oid,
         c2pa_sidecar_payload: bytes | None,
+        process_narrative_payload: bytes | None,
         parent_tree_oid: pygit2.Oid | None,
         path_parts: list[str],
     ) -> pygit2.Oid:
@@ -393,6 +452,7 @@ class GitLedgerAdapter:
             path_obj=path_obj,
             blob_oid=blob_oid,
             c2pa_sidecar_payload=c2pa_sidecar_payload,
+            process_narrative_payload=process_narrative_payload,
             parent_tree_oid=parent_tree_oid,
         )
         parent_tree = repo[parent_tree_oid] if parent_tree_oid else None
@@ -426,6 +486,7 @@ class GitLedgerAdapter:
         path_obj: Path,
         blob_oid: pygit2.Oid,
         c2pa_sidecar_payload: bytes | None,
+        process_narrative_payload: bytes | None,
         parent_tree_oid: pygit2.Oid | None,
     ) -> pygit2.Oid:
         """Build or update artifacts subtree and return its tree oid."""
@@ -441,14 +502,13 @@ class GitLedgerAdapter:
             else repo.TreeBuilder()
         )
         artifacts_tree_builder.insert(path_obj.name, blob_oid, pygit2.GIT_FILEMODE_BLOB)
-        if c2pa_sidecar_payload is not None:
-            sidecar_blob_oid = repo.create_blob(c2pa_sidecar_payload)
-            sidecar_name = f"{path_obj.stem}.c2pa"
-            artifacts_tree_builder.insert(
-                sidecar_name,
-                sidecar_blob_oid,
-                pygit2.GIT_FILEMODE_BLOB,
-            )
+        self._insert_sidecar_blobs(
+            repo,
+            artifacts_tree_builder,
+            path_obj,
+            c2pa_sidecar_payload,
+            process_narrative_payload,
+        )
         return artifacts_tree_builder.write()
 
     @staticmethod

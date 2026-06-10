@@ -244,3 +244,7 @@ bin/*.exe
 
 # local test files
 artifact_zero.txt
+example_text_llm_provenance.json
+example_text_llm.txt
+example_text_human.txt
+spec_doc_and_vision.md

@@ -154,6 +154,45 @@ def test_author_attestation_unattended_accepts_empty_qa() -> None:
     assert att.attestations == []
 
 
+def test_author_attestation_orchestration_declaration_nature() -> None:
+    """Orchestration declaration nature is accepted for interactive attestations."""
+    att = AuthorAttestation.model_validate(
+        {
+            "attestationNature": "orchestration-declaration",
+            "attestationMode": "interactive",
+            "classification": "fiction",
+            "attestations": _attestations_dict(),
+        }
+    )
+    assert att.attestation_nature == "orchestration-declaration"
+
+
+def test_provenance_accepts_grade_models_and_narrative_hash() -> None:
+    """Provenance accepts optional grade, modelsUsed, and processNarrativeHash."""
+    prov = Provenance.model_validate(
+        {
+            **_valid_provenance_base(),
+            "provenanceGrade": "declared",
+            "modelsUsed": ["gemini-3.1-pro", "composer-2.5"],
+            "processNarrativeHash": "a" * 64,
+        }
+    )
+    assert prov.provenance_grade == "declared"
+    assert prov.models_used == ["gemini-3.1-pro", "composer-2.5"]
+    assert prov.process_narrative_hash == "a" * 64
+
+
+def test_provenance_rejects_invalid_narrative_hash() -> None:
+    """processNarrativeHash must be a 64-char hex digest."""
+    with pytest.raises(ValidationError):
+        Provenance.model_validate(
+            {
+                **_valid_provenance_base(),
+                "processNarrativeHash": "not-a-hash",
+            }
+        )
+
+
 @pytest.mark.parametrize(
     "payload,match",
     [

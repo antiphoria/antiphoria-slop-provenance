@@ -22,11 +22,14 @@ PolicyLicenseId: TypeAlias = Literal["ARR", "CC-BY-4.0", "CC0-1.0"]
 ArtisticClassification: TypeAlias = Literal["fact", "opinion", "fiction", "satire"]
 """Artistic classification for human-authored content."""
 
-AttestationNature: TypeAlias = Literal["self-declaration"]
-"""What kind of author statement is recorded (not a legal certification)."""
+AttestationNature: TypeAlias = Literal["self-declaration", "orchestration-declaration"]
+"""What kind of operator statement is recorded (not a legal certification)."""
 
 AttestationMode: TypeAlias = Literal["interactive", "unattended"]
-"""How the self-declaration was captured."""
+"""How the operator statement was captured."""
+
+ProvenanceGrade: TypeAlias = Literal["recorded", "declared", "unattended"]
+"""Epistemic grade: recorded at creation, declared at seal, or unattended automation."""
 
 
 class StrictModel(BaseModel):
@@ -174,6 +177,22 @@ class Provenance(StrictModel):
     registration_ceremony: RegistrationCeremony | None = Field(
         alias="registrationCeremony",
         default=None,
+    )
+    provenance_grade: ProvenanceGrade | None = Field(
+        alias="provenanceGrade",
+        default=None,
+    )
+    models_used: list[str] | None = Field(
+        alias="modelsUsed",
+        default=None,
+        max_length=64,
+    )
+    process_narrative_hash: str | None = Field(
+        alias="processNarrativeHash",
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[a-fA-F0-9]{64}$",
     )
 
 

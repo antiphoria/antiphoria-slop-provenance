@@ -44,6 +44,39 @@ _DEFAULT_C2PA_MODE = "mvp"
 _DEFAULT_C2PA_ALGORITHM = "ES256"
 _SDK_CARRIER_FORMAT = "image/jpeg"
 _SDK_MARKDOWN_ASSERTION_LABEL = "org.antiphoria.markdown"
+_DIGITAL_SOURCE_TYPE_SYNTHETIC = (
+    "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"
+)
+_DIGITAL_SOURCE_TYPE_HYBRID = (
+    "http://cv.iptc.org/newscodes/digitalsourcetype/compositeWithTrainedAlgorithmicMedia"
+)
+_DIGITAL_SOURCE_TYPE_HUMAN = (
+    "http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture"
+)
+
+
+def _digital_source_type_for_source(source: str) -> str:
+    """Map provenance source to IPTC digitalSourceType NewsCode."""
+    if source == "human":
+        return _DIGITAL_SOURCE_TYPE_HUMAN
+    if source == "hybrid":
+        return _DIGITAL_SOURCE_TYPE_HYBRID
+    return _DIGITAL_SOURCE_TYPE_SYNTHETIC
+
+
+def _build_slop_orchestrator_context(envelope: Artifact) -> dict[str, Any]:
+    """Build slopOrchestrator.context assertion payload."""
+    context: dict[str, Any] = {
+        "schemaVersion": envelope.schema_version,
+        "source": envelope.provenance.source,
+        "modelId": envelope.provenance.model_id,
+        "generatedAt": envelope.timestamp.isoformat(),
+    }
+    if envelope.provenance.provenance_grade is not None:
+        context["provenanceGrade"] = envelope.provenance.provenance_grade
+    if envelope.provenance.process_narrative_hash is not None:
+        context["processNarrativeHash"] = envelope.provenance.process_narrative_hash
+    return context
 _SDK_MINIMAL_JPEG_BYTES = bytes.fromhex(
     "FFD8FFDB004300030202020202030202020303030304060404040404080606050609080A0A090809090A0C0F0C0A0B0E0B09090D110D0E0F101011100A0C12131210130F101010FFC9000B080001000101011100FFCC000600101005FFDA0008010100003F00D2CF20FFD9"
 )
@@ -113,8 +146,8 @@ class MvpC2PAManifestProvider:
                 "c2pa.actions": [
                     {
                         "action": "c2pa.created",
-                        "digitalSourceType": (
-                            "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"
+                        "digitalSourceType": _digital_source_type_for_source(
+                            envelope.provenance.source
                         ),
                         "when": envelope.timestamp.astimezone(UTC).isoformat(),
                     }
@@ -124,12 +157,7 @@ class MvpC2PAManifestProvider:
                     "contentType": envelope.content_type,
                     "payloadHash": payload_hash,
                 },
-                "slopOrchestrator.context": {
-                    "schemaVersion": envelope.schema_version,
-                    "source": envelope.provenance.source,
-                    "modelId": envelope.provenance.model_id,
-                    "generatedAt": envelope.timestamp.isoformat(),
-                },
+                "slopOrchestrator.context": _build_slop_orchestrator_context(envelope),
             },
         }
         manifest_bytes = canonical_json_bytes(payload)
@@ -199,10 +227,8 @@ class SdkC2PAManifestProvider:
                         "actions": [
                             {
                                 "action": "c2pa.created",
-                                "digitalSourceType": (
-                                    "http://cv.iptc.org/newscodes/"
-                                    "digitalsourcetype/"
-                                    "trainedAlgorithmicMedia"
+                                "digitalSourceType": _digital_source_type_for_source(
+                                    envelope.provenance.source
                                 ),
                                 "when": (envelope.timestamp.astimezone(UTC).isoformat()),
                             }
@@ -228,12 +254,7 @@ class SdkC2PAManifestProvider:
                 },
                 {
                     "label": "org.antiphoria.context",
-                    "data": {
-                        "schemaVersion": envelope.schema_version,
-                        "source": envelope.provenance.source,
-                        "modelId": envelope.provenance.model_id,
-                        "generatedAt": envelope.timestamp.isoformat(),
-                    },
+                    "data": _build_slop_orchestrator_context(envelope),
                 },
             ],
         }

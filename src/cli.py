@@ -31,6 +31,7 @@ from src.commands.pipeline import (
     _run_curate_command,
     _run_generate_command,
     _run_register_command,
+    _run_seal_command,
 )
 from src.commands.verification import (
     _run_anchor_command,
@@ -132,6 +133,7 @@ _ASYNC_COMMAND_HANDLERS: dict[str, AsyncCommandHandler] = {
     "generate": _run_generate_command,
     "curate": _run_curate_command,
     "register": _run_register_command,
+    "seal": _run_seal_command,
     "verify": _run_verify_command,
     "anchor": _run_anchor_command,
     "timestamp": _run_timestamp_command,

@@ -108,6 +108,28 @@ slop-cli register --file ../my-ledger/human-story.md --repo-path ../my-ledger --
 
 Skip WebAuthn only: add `--no-webauthn`.
 
+### Seal LLM-only content
+
+Seal externally produced machine text with an orchestration declaration (human orchestrator, not author). Default license is CC0-1.0. Use a separate ledger repo from human-only `register` artifacts when publishing to an LLM research journal.
+
+```bash
+# Seal with interactive orchestration declaration wizard
+slop-cli seal --file ../my-ledger/llm-research.md --repo-path ../my-ledger-llm
+
+# Optional: attach unverified process narrative (stored as {request_id}.process.json)
+slop-cli seal \
+  --file ../my-ledger/llm-research.md \
+  --process-file ./run-narrative.json \
+  --models gemini-3.1-pro,composer-2.5 \
+  --repo-path ../my-ledger-llm
+```
+
+CI / automation (skips wizard; `provenanceGrade: unattended`):
+
+```bash
+slop-cli seal --file ../my-ledger/llm-research.md --repo-path ../my-ledger-llm --non-interactive
+```
+
 ### Strict attestation (RFC3161)
 
 ```bash

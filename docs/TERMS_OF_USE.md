@@ -24,7 +24,7 @@ You are solely responsible for private key custody, backup, rotation, and revoca
 
 ## 5. Provenance claims
 
-You are solely responsible for the truthfulness and legal consequences of any provenance claims you publish using outputs from this software. Self-declaration prompts in `register` record your statements at signing time; they are not notarization, copyright registration, or legal proof of authorship.
+You are solely responsible for the truthfulness and legal consequences of any provenance claims you publish using outputs from this software. Self-declaration prompts in `register` and orchestration declaration prompts in `seal` record your statements at signing time; they are not notarization, copyright registration, or legal proof of authorship. Process narrative sidecars attached via `seal --process-file` are operator accounts marked `verified: false` and are not verified lineage.
 
 ## 6. Content licensing
 

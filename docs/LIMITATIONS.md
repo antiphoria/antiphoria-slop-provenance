@@ -39,6 +39,24 @@ Git ledger commits use **process-local** file locks. Multiple processes or hosts
 - **Operator pseudonym** (`operatorPseudonymHash`): HMAC-derived from a secret salt you control. Proves continuity across artifacts registered with the same salt; reveals no device data. Losing the salt breaks continuity; leaking it lets others impersonate that pseudonym. Prefer this over `CAPTURE_MACHINE_ID` (MAC hash), which remains opt-in and off by default.
 - **`--non-interactive` / `--no-webauthn`:** unattended or self-declaration-only paths; suitable for CI, not maximum personhood metadata.
 
+## Provenance grades
+
+| Grade | Meaning | Typical path |
+|-------|---------|--------------|
+| `recorded` | Process captured at creation time in the pipeline | `generate`, `curate` |
+| `declared` | Operator declaration at seal time; process narrative optional and unverified | `register`, `seal` (interactive) |
+| `unattended` | No operator ceremony captured | `--non-interactive` on `register` or `seal` |
+
+Grades are stored as `provenanceGrade` in artifact frontmatter. They describe epistemic strength, not legal certification.
+
+## LLM-only sealing (`seal`)
+
+- **Orchestration declaration** (wizard Q&A when run interactively) records that the operator disclaims authorship of the text body and acted as orchestrator only; it is not proof of process lineage.
+- **`attestationNature: orchestration-declaration`** distinguishes LLM sealing from human `self-declaration`.
+- Default license is **CC0-1.0** (`source: synthetic`). Use `--models` to list models used; a single model becomes `modelId`, multiple become `composite` with full list in `modelsUsed`.
+- **`--process-file`:** optional JSON wrapped in a mandatory sidecar envelope (`verified: false`, `kind: operator-narrative`) and committed as `{request_id}.process.json`. The hash is sealed in frontmatter as `processNarrativeHash`; the narrative is a good-faith account, never verified lineage.
+- **`--non-interactive`:** skips the wizard and records `attestationMode: unattended`, `classification: null`, `provenanceGrade: unattended`.
+
 ## Operational
 
 - **BYOV / vault** workflows are required for production-grade private key handling; dev keys on disk are explicitly discouraged for production (see [SECURITY.md](../SECURITY.md)).
