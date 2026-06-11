@@ -1,4 +1,4 @@
-# Caller for org quality-gate: tests + Ruff (separate status check / badge).
+# README badge: Python unit tests.
 name: CI Tests
 
 on:
@@ -11,16 +11,7 @@ permissions:
   contents: read
 
 jobs:
-  tests:
-    uses: antiphoria/.github/.github/workflows/quality-gate.yml@main
+  test:
+    uses: antiphoria/.github/.github/workflows/qg-python-test.yml@main
     with:
-      policy-ref: main
-      # CodeAudit 1.6.1 raises SyntaxError on Python 3.11 when importing reporting.py
-      # (f-string expression contains backslashes). 3.12+ accepts that syntax (PEP 701).
       python-version: "3.12"
-      run-trivy: false
-      run-python-ruff: true
-      run-python-test: true
-      run-python-codeaudit: false
-      run-node-quality: false
-      run-ci-handoff: true

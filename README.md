@@ -1,8 +1,8 @@
 # Antiphoria Slop Provenance
 
+[![CI Lint](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/ci-lint.yml/badge.svg)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/ci-lint.yml)
 [![CI Tests](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/ci-tests.yml/badge.svg)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/ci-tests.yml)
 [![CI Trivy](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/ci-trivy.yml/badge.svg)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/ci-trivy.yml)
-[![CI CodeAudit](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/ci-codeaudit.yml/badge.svg)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/ci-codeaudit.yml)
 [![Gitleaks](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/antiphoria/antiphoria-slop-provenance/actions/workflows/gitleaks.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/antiphoria/antiphoria-slop-provenance/badge)](https://securityscorecards.dev/viewer/?uri=github.com/antiphoria/antiphoria-slop-provenance)
 
@@ -18,7 +18,7 @@ Use of this software is subject to [docs/TERMS_OF_USE.md](docs/TERMS_OF_USE.md) 
 
 ## Quick path for new users
 
-**Start here:** [docs/QUICKSTART.md](docs/QUICKSTART.md) — clone, `pip install -e ".[dev]"`, `.env` (including a **dummy-mode** track with no Gemini/Supabase), `pytest`, and `slop-cli`.
+**Start here:** [docs/QUICKSTART.md](docs/QUICKSTART.md) — clone, `uv sync --extra dev` (or `pip install -e ".[dev]"`), `.env` (including a **dummy-mode** track with no Gemini/Supabase), `pytest`, and `slop-cli`.
 
 **Windows:** Prefer **WSL2**; see [docs/WSL2_SETUP.md](docs/WSL2_SETUP.md).
 
@@ -35,12 +35,20 @@ Use of this software is subject to [docs/TERMS_OF_USE.md](docs/TERMS_OF_USE.md) 
 
 Use **Python 3.12** in a **repo-local venv** (see [docs/QUICKSTART.md](docs/QUICKSTART.md)); that matches CI and avoids relying on a global `python` that may be the wrong version or missing wheels (e.g. `pygit2`).
 
+Dependencies are locked in **`uv.lock`**. Recommended install ([uv](https://docs.astral.sh/uv/)):
+
+```bash
+uv sync --extra dev
+```
+
+Alternative (editable install from `pyproject.toml`, e.g. org CI):
+
 ```bash
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
 ```
 
-Runtime-only (no test extras): `pip install -e .`
+Runtime-only (no test extras): `uv sync` or `pip install -e .`
 
 Optional OpenTimestamps: `pip install -e ".[ots]"`
 
@@ -179,11 +187,11 @@ slop-cli attest --repo-path ../my-ledger --request-id <request_id> --strict-c2pa
 ## Developer shortcuts
 
 ```bash
-make install    # pip install -e ".[dev]"
+make install    # uv sync --extra dev
 make lint       # ruff check + format --check
 make test       # pytest -v
 make compile    # python -m compileall src
-make requirements   # regenerate requirements.txt from requirements.in
+make lock       # uv lock (after changing pyproject.toml deps)
 ```
 
 Optional: `ruff check .` and `ruff format .` if Ruff is installed.

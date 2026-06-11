@@ -1,23 +1,20 @@
-.PHONY: install lint test compile migrate requirements
+.PHONY: install lint test compile migrate lock
 
 install:
-	pip install -e ".[dev]"
+	uv sync --extra dev
 
 lint:
-	ruff check .
-	ruff format --check .
+	uv run ruff check .
+	uv run ruff format --check .
 
-# Regenerate requirements.txt from requirements.in (CI / reproducible installs)
-requirements:
-	pip install pip-tools
-	pip-compile requirements.in -o requirements.txt
+lock:
+	uv lock
 
 test:
-	pytest -v
+	uv run pytest -v
 
 compile:
-	python -m compileall src
+	uv run python -m compileall src
 
 migrate:
-	python scripts/migrate_state_v2.py --db-path state.db
-
+	uv run python scripts/migrate_state_v2.py --db-path state.db

@@ -27,6 +27,14 @@ source .venv/bin/activate          # Linux / macOS / WSL
 
 ## 3. Install (app + test tooling)
 
+Recommended ([uv](https://docs.astral.sh/uv/)):
+
+```bash
+uv sync --extra dev
+```
+
+Alternative:
+
 ```bash
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
