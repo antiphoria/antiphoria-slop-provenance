@@ -1,4 +1,4 @@
-# Caller for org quality-gate: Trivy only (separate status check / badge).
+# README badge: Trivy filesystem scan.
 name: CI Trivy
 
 on:
@@ -12,13 +12,6 @@ permissions:
 
 jobs:
   trivy:
-    uses: antiphoria/.github/.github/workflows/quality-gate.yml@main
+    uses: antiphoria/.github/.github/workflows/qg-trivy.yml@main
     with:
       policy-ref: main
-      python-version: "3.12"
-      run-trivy: true
-      run-python-ruff: false
-      run-python-test: false
-      run-python-codeaudit: false
-      run-node-quality: false
-      run-ci-handoff: false

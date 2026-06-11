@@ -1,8 +1,9 @@
+# README badge: OpenSSF Scorecard (API badge uses this workflow indirectly).
 name: Org Quality (OpenSSF Scorecard)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
   schedule:
     - cron: "30 1 * * 1"
   workflow_dispatch:

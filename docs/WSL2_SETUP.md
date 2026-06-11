@@ -41,9 +41,10 @@ git clone <repository-url>
 cd antiphoria-slop-provenance
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install --upgrade pip
-pip install -e ".[dev]"
+uv sync --extra dev
 ```
+
+Or with pip: `pip install --upgrade pip && pip install -e ".[dev]"`.
 
 ## 5. Git and the ledger
 
