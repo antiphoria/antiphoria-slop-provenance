@@ -7,7 +7,6 @@ import contextlib
 import json
 import logging
 import re
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,13 +21,13 @@ from src.adapters.ots_adapter import OTSAdapter
 from src.adapters.ots_queue import OtsQueueAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter, TimestampVerification
 from src.adapters.transparency_log import TransparencyLogAdapter, TransparencyLogEntry
+from src.canonicalization import canonicalize_body_for_hash, compute_payload_hash
+from src.env_config import read_env_bool, read_env_optional
 from src.envelope_v2 import (
     EnvelopeSidecars,
     detect_wire_version_from_markdown,
     render_artifact_markdown_wire,
 )
-from src.canonicalization import canonicalize_body_for_hash, compute_payload_hash
-from src.env_config import read_env_bool, read_env_optional
 from src.git_tree_utils import tree_get_blob
 from src.lock_paths import build_repo_ref_lock_path
 from src.logging_config import bind_log_context, get_log_extra, should_log_route

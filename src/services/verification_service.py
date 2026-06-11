@@ -12,11 +12,11 @@ from uuid import UUID
 
 import pygit2
 
-from src.adapters.catalog import CatalogAdapter
 from src.adapters.c2pa_manifest import (
     build_c2pa_validation_payload,
     validate_c2pa_sidecar,
 )
+from src.adapters.catalog import CatalogAdapter
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.ots_adapter import OTSAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
@@ -450,13 +450,9 @@ class VerificationService:
                 envelope_source=envelope.provenance.source,
             )
             sidecars = parse_sidecars_from_markdown(markdown_text)
-            unattended_ceremony = (
-                envelope.provenance.provenance_grade == "unattended"
-                or (
-                    envelope.provenance.author_attestation is not None
-                    and envelope.provenance.author_attestation.attestation_mode
-                    == "unattended"
-                )
+            unattended_ceremony = envelope.provenance.provenance_grade == "unattended" or (
+                envelope.provenance.author_attestation is not None
+                and envelope.provenance.author_attestation.attestation_mode == "unattended"
             )
             webauthn_present = envelope.provenance.webauthn_attestation is not None
             ots_sidecar_declared = sidecars.ots is not None
@@ -571,10 +567,7 @@ class VerificationService:
             return []
         catalog_source = row.get("source")
         if catalog_source != envelope_source:
-            return [
-                "Catalog source "
-                f"'{catalog_source}' != envelope source '{envelope_source}'."
-            ]
+            return [f"Catalog source '{catalog_source}' != envelope source '{envelope_source}'."]
         return []
 
     def _build_audit_report(

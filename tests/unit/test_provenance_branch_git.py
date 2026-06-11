@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pygit2
 
-from src.adapters.catalog import CatalogAdapter, _CATALOG_RELATIVE_PATH
-from src.adapters.ots_queue import OtsQueueAdapter, _QUEUE_RELATIVE_PATH
+from src.adapters.catalog import _CATALOG_RELATIVE_PATH, CatalogAdapter
+from src.adapters.ots_queue import _QUEUE_RELATIVE_PATH, OtsQueueAdapter
 from src.git_tree_utils import ensure_branch_exists, resolve_branch_init_parent, tree_get_blob
 
 
@@ -61,7 +61,9 @@ class ProvenanceBranchGitTest(unittest.TestCase):
             repo_path = Path(temp_dir)
             repo = pygit2.init_repository(str(repo_path), initial_head="main")
             sig = pygit2.Signature("Test", "test@example.com")
-            repo.create_commit("refs/heads/main", sig, sig, "empty main", repo.TreeBuilder().write(), [])
+            repo.create_commit(
+                "refs/heads/main", sig, sig, "empty main", repo.TreeBuilder().write(), []
+            )
 
             catalog_path = repo_path / ".provenance" / "catalog.jsonl"
             catalog_path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,7 +92,9 @@ class ProvenanceBranchGitTest(unittest.TestCase):
             repo_path = Path(temp_dir)
             repo = pygit2.init_repository(str(repo_path), initial_head="main")
             sig = pygit2.Signature("Test", "test@example.com")
-            repo.create_commit("refs/heads/main", sig, sig, "empty main", repo.TreeBuilder().write(), [])
+            repo.create_commit(
+                "refs/heads/main", sig, sig, "empty main", repo.TreeBuilder().write(), []
+            )
 
             adapter = OtsQueueAdapter(repository_path=repo_path)
             adapter.append_pending(
@@ -134,9 +138,7 @@ class ProvenanceBranchGitTest(unittest.TestCase):
 
             repo = pygit2.Repository(str(repo_path))
             main_commit = repo.lookup_reference("refs/heads/main").peel(pygit2.Commit)
-            self.assertIsNotNone(
-                tree_get_blob(repo, main_commit.tree, _CATALOG_RELATIVE_PATH)
-            )
+            self.assertIsNotNone(tree_get_blob(repo, main_commit.tree, _CATALOG_RELATIVE_PATH))
             ots_blob = tree_get_blob(repo, main_commit.tree, _QUEUE_RELATIVE_PATH)
             self.assertIsNotNone(ots_blob)
             self.assertIn("pending", bytes(ots_blob.data).decode("utf-8"))
@@ -171,9 +173,7 @@ class ProvenanceBranchGitTest(unittest.TestCase):
             catalog_blob = tree_get_blob(repo, main_commit.tree, _CATALOG_RELATIVE_PATH)
             self.assertIsNotNone(catalog_blob)
             self.assertIn("Keep me", bytes(catalog_blob.data).decode("utf-8"))
-            self.assertIsNotNone(
-                tree_get_blob(repo, main_commit.tree, _QUEUE_RELATIVE_PATH)
-            )
+            self.assertIsNotNone(tree_get_blob(repo, main_commit.tree, _QUEUE_RELATIVE_PATH))
 
     def test_init_main_from_artifact_branch_uses_empty_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -241,9 +241,7 @@ class ProvenanceBranchGitTest(unittest.TestCase):
 
             repo = pygit2.Repository(str(repo_path))
             main_commit = repo.lookup_reference("refs/heads/main").peel(pygit2.Commit)
-            self.assertIsNotNone(
-                tree_get_blob(repo, main_commit.tree, _CATALOG_RELATIVE_PATH)
-            )
+            self.assertIsNotNone(tree_get_blob(repo, main_commit.tree, _CATALOG_RELATIVE_PATH))
             self.assertIsNone(tree_get_blob(repo, main_commit.tree, f"{request_id}.md"))
 
 

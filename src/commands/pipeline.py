@@ -708,9 +708,7 @@ def _load_process_narrative(process_file: Path) -> tuple[bytes, str]:
     try:
         loaded = json.loads(raw_text)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"Process narrative file is not valid JSON: '{process_file}'."
-        ) from exc
+        raise RuntimeError(f"Process narrative file is not valid JSON: '{process_file}'.") from exc
     if not isinstance(loaded, dict):
         raise RuntimeError("Process narrative must be a JSON object.")
     wrapped = {

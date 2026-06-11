@@ -6,6 +6,7 @@ pygit2 Tree[key] only accepts direct child names. Paths with slashes
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import pygit2
@@ -204,10 +205,8 @@ def sync_default_branch_worktree(
             if rel in expected:
                 continue
             disk_path.unlink()
-            try:
+            with contextlib.suppress(KeyError):
                 index.remove(rel)
-            except KeyError:
-                pass
 
     index.write()
 

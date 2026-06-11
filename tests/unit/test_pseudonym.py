@@ -81,11 +81,10 @@ class PseudonymModuleTest(unittest.TestCase):
             derive_pseudonym_hash(_WEAK_SALT.encode("utf-8"))
 
     def test_unset_returns_none(self) -> None:
-        with patch.dict(os.environ, {}, clear=True):
-            with tempfile.TemporaryDirectory() as temp_dir:
-                env_file = Path(temp_dir) / ".env"
-                env_file.write_text("WEBAUTHN_RP_ID=localhost\n", encoding="utf-8")
-                self.assertIsNone(get_pseudonym_hash(env_path=env_file))
+        with patch.dict(os.environ, {}, clear=True), tempfile.TemporaryDirectory() as temp_dir:
+            env_file = Path(temp_dir) / ".env"
+            env_file.write_text("WEBAUTHN_RP_ID=localhost\n", encoding="utf-8")
+            self.assertIsNone(get_pseudonym_hash(env_path=env_file))
 
     def test_env_var_produces_hash(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

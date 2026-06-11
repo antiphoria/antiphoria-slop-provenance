@@ -15,9 +15,12 @@ from pathlib import Path
 import pygit2
 from filelock import FileLock
 
-from src.envelope_v2 import EnvelopeSidecars, generation_context_for_source, render_artifact_markdown_wire
 from src.domain.events import EventBusPort, StoryCommitted, StorySigned
 from src.env_config import read_env_bool, read_env_optional
+from src.envelope_v2 import (
+    EnvelopeSidecars,
+    render_artifact_markdown_wire,
+)
 from src.lock_paths import build_repo_ref_lock_path
 from src.logging_config import bind_log_context, should_log_route
 from src.models import sha256_hex
@@ -146,9 +149,7 @@ class GitLedgerAdapter:
             except binascii.Error as exc:
                 raise RuntimeError("Invalid base64 process narrative sidecar payload.") from exc
             if narrative_hash is not None and sha256_hex(sidecar_payload) != narrative_hash:
-                raise RuntimeError(
-                    "Process narrative hash mismatch while writing sidecar bytes."
-                )
+                raise RuntimeError("Process narrative hash mismatch while writing sidecar bytes.")
             return sidecar_payload
         if narrative_hash is not None:
             raise RuntimeError(
@@ -202,9 +203,7 @@ class GitLedgerAdapter:
         sidecars = EnvelopeSidecars(
             c2pa=f"{event.request_id}.c2pa" if event.c2pa_manifest_bytes_b64 else None,
             process_narrative=(
-                f"{event.request_id}.process.json"
-                if event.process_narrative_bytes_b64
-                else None
+                f"{event.request_id}.process.json" if event.process_narrative_bytes_b64 else None
             ),
         )
         return render_artifact_markdown_wire(

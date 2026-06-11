@@ -45,8 +45,8 @@ from src.domain.events import (
     StorySigned,
     StorySyntheticSealed,
 )
-from src.logging_config import bind_log_context, should_log_route
 from src.envelope_v2 import generation_context_for_source
+from src.logging_config import bind_log_context, should_log_route
 from src.models import (
     CRYPTO_ALGORITHM_ED25519,
     CRYPTO_ALGORITHM_ML_DSA_44,
@@ -401,9 +401,7 @@ class CryptoNotaryAdapter:
             webauthn_attestation=event.webauthn_attestation,
             registration_ceremony=event.registration_ceremony,
             provenance_grade=(
-                "unattended"
-                if event.attestation.attestation_mode == "unattended"
-                else "declared"
+                "unattended" if event.attestation.attestation_mode == "unattended" else "declared"
             ),
         )
         await self._emit_signed(
@@ -438,9 +436,7 @@ class CryptoNotaryAdapter:
             webauthn_attestation=event.webauthn_attestation,
             registration_ceremony=event.registration_ceremony,
             provenance_grade=(
-                "unattended"
-                if event.attestation.attestation_mode == "unattended"
-                else "declared"
+                "unattended" if event.attestation.attestation_mode == "unattended" else "declared"
             ),
             models_used=models_used,
             process_narrative_hash=event.process_narrative_hash,

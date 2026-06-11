@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -19,7 +20,6 @@ from src.envelope_v2 import (
     render_artifact_markdown_v2,
     render_artifact_markdown_wire,
 )
-from src.policies.license_text import resolve_license_text
 from src.models import (
     Artifact,
     Provenance,
@@ -31,8 +31,7 @@ from src.models import (
     sha256_hex,
 )
 from src.parsing import parse_artifact_markdown_text
-from unittest.mock import MagicMock, patch
-
+from src.policies.license_text import resolve_license_text
 from src.services.verification_service import VerificationService
 from tests.support.v2_envelope_fixtures import (
     enrich_provenance_for_v2_wire,
@@ -212,9 +211,7 @@ def test_unattended_register_omits_classification_on_wire() -> None:
             verificationAnchor=VerificationAnchor(signerFingerprint="test-fingerprint"),
         ),
     )
-    markdown = render_artifact_markdown_v2(
-        artifact, body, ledger_request_id=_LEDGER_ID
-    )
+    markdown = render_artifact_markdown_v2(artifact, body, ledger_request_id=_LEDGER_ID)
     assert "classification:" not in markdown
     parsed, _ = parse_artifact_markdown_text_v2(markdown)
     assert parsed.provenance.author_attestation is not None
@@ -230,13 +227,7 @@ def test_parse_rejects_register_with_synthesis() -> None:
     delimiter = markdown.find("\n---\n", 4)
     loaded = yaml.safe_load(markdown[4:delimiter])
     loaded["synthesis"] = {"modelId": "human"}
-    tampered = (
-        "---\n"
-        + yaml.safe_dump(loaded, sort_keys=False)
-        + "---\n"
-        + body
-        + "\n"
-    )
+    tampered = "---\n" + yaml.safe_dump(loaded, sort_keys=False) + "---\n" + body + "\n"
     with pytest.raises(RuntimeError, match="register profile MUST NOT contain synthesis"):
         parse_artifact_markdown_text_v2(tampered)
 
@@ -252,13 +243,7 @@ def test_parse_rejects_unknown_profile() -> None:
     delimiter = markdown.find("\n---\n", 4)
     loaded = yaml.safe_load(markdown[4:delimiter])
     loaded["antiphoria"]["profile"] = "unknown.profile"
-    tampered = (
-        "---\n"
-        + yaml.safe_dump(loaded, sort_keys=False)
-        + "---\n"
-        + body
-        + "\n"
-    )
+    tampered = "---\n" + yaml.safe_dump(loaded, sort_keys=False) + "---\n" + body + "\n"
     with pytest.raises(RuntimeError, match="Unknown or unsupported v2 profile"):
         parse_artifact_markdown_text_v2(tampered)
 
@@ -274,13 +259,7 @@ def test_parse_rejects_seal_without_synthesis() -> None:
     delimiter = markdown.find("\n---\n", 4)
     loaded = yaml.safe_load(markdown[4:delimiter])
     loaded.pop("synthesis", None)
-    tampered = (
-        "---\n"
-        + yaml.safe_dump(loaded, sort_keys=False)
-        + "---\n"
-        + body
-        + "\n"
-    )
+    tampered = "---\n" + yaml.safe_dump(loaded, sort_keys=False) + "---\n" + body + "\n"
     with pytest.raises(RuntimeError, match="seal profile MUST contain synthesis"):
         parse_artifact_markdown_text_v2(tampered)
 
@@ -296,13 +275,7 @@ def test_parse_rejects_unknown_top_level_section() -> None:
     delimiter = markdown.find("\n---\n", 4)
     loaded = yaml.safe_load(markdown[4:delimiter])
     loaded["unexpectedSection"] = 1
-    tampered = (
-        "---\n"
-        + yaml.safe_dump(loaded, sort_keys=False)
-        + "---\n"
-        + body
-        + "\n"
-    )
+    tampered = "---\n" + yaml.safe_dump(loaded, sort_keys=False) + "---\n" + body + "\n"
     with pytest.raises(RuntimeError, match="Unknown top-level v2 section"):
         parse_artifact_markdown_text_v2(tampered)
 
@@ -397,9 +370,7 @@ def test_legacy_generate_uses_v1_wire_when_ceremony_missing() -> None:
             verificationAnchor=VerificationAnchor(signerFingerprint="fp"),
         ),
     )
-    markdown = render_artifact_markdown_wire(
-        artifact, body, ledger_request_id=str(uuid4())
-    )
+    markdown = render_artifact_markdown_wire(artifact, body, ledger_request_id=str(uuid4()))
     assert 'schemaVersion: "eternity.v1"' in markdown
     envelope, parsed_body = parse_artifact_markdown_text(markdown)
     assert envelope.schema_version == "eternity.v1"

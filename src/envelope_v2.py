@@ -17,7 +17,6 @@ import yaml
 from src.artifact_serialization import _wrap_signature_lines, _yaml_literal_block, _yaml_quoted
 from src.canonicalization import CANONICALIZATION_VERSION, canonicalize_body
 from src.env_config import read_env_optional
-from src.policies.license_text import resolve_license_text
 from src.models import (
     Artifact,
     AttestationQa,
@@ -30,6 +29,7 @@ from src.models import (
     VerificationAnchor,
     WebAuthnAttestation,
 )
+from src.policies.license_text import resolve_license_text
 
 SCHEMA_VERSION_V2 = "eternity.v2"
 PROFILE_REGISTER = "antiphoria.register.v1"
@@ -39,12 +39,12 @@ _ALLOWED_TOP_LEVEL = frozenset(
     {"antiphoria", "document", "rights", "operator", "claim", "synthesis", "integrity"}
 )
 
-_PROCESS_NARRATIVE_DISCLAIMER = (
-    "Operator-supplied narrative. Not machine-verified lineage."
-)
+_PROCESS_NARRATIVE_DISCLAIMER = "Operator-supplied narrative. Not machine-verified lineage."
 
 
-def generation_context_for_source(source: Literal["human", "synthetic", "hybrid"]) -> GenerationContext:
+def generation_context_for_source(
+    source: Literal["human", "synthetic", "hybrid"],
+) -> GenerationContext:
     """Return fixed sentinel generation context for v2 register/seal signing."""
 
     if source == "human":
@@ -82,9 +82,7 @@ def resolve_envelope_wire_version(env_path: Any = None) -> str:
         return "v2"
     version = raw.strip().lower()
     if version not in ("v1", "v2"):
-        raise RuntimeError(
-            f"Invalid ENVELOPE_WIRE_VERSION '{raw}'. Expected 'v1' or 'v2'."
-        )
+        raise RuntimeError(f"Invalid ENVELOPE_WIRE_VERSION '{raw}'. Expected 'v1' or 'v2'.")
     return version
 
 
@@ -120,7 +118,10 @@ def is_v2_wire_format(text: str) -> bool:
     if delimiter_index == -1:
         return False
     frontmatter = text[4:delimiter_index]
-    if 'schemaVersion: "eternity.v2"' in frontmatter or "schemaVersion: 'eternity.v2'" in frontmatter:
+    if (
+        'schemaVersion: "eternity.v2"' in frontmatter
+        or "schemaVersion: 'eternity.v2'" in frontmatter
+    ):
         return True
     return frontmatter.startswith("antiphoria:")
 
@@ -207,9 +208,7 @@ def _validate_v2_invariants(loaded: dict[str, Any]) -> None:
         raise RuntimeError(str(exc)) from exc
 
     if source != expected_source:
-        raise RuntimeError(
-            f"Profile/source mismatch: profile={profile} claim.source={source}."
-        )
+        raise RuntimeError(f"Profile/source mismatch: profile={profile} claim.source={source}.")
 
     expected_speech = (
         "self-declaration" if profile == PROFILE_REGISTER else "orchestration-declaration"
@@ -252,9 +251,7 @@ def render_artifact_markdown_v2(
     profile = profile_for_source(artifact.provenance.source)
     sig = artifact.signature
     sidecars = sidecars or EnvelopeSidecars()
-    tsa_provider = sidecars.tsa_provider or read_env_optional(
-        "RFC3161_TSA_URL", env_path=env_path
-    )
+    tsa_provider = sidecars.tsa_provider or read_env_optional("RFC3161_TSA_URL", env_path=env_path)
 
     att = artifact.provenance.author_attestation
     if att is None:
@@ -282,9 +279,7 @@ def render_artifact_markdown_v2(
 
     classification_line = ""
     if att.attestation_mode == "interactive":
-        classification_line = (
-            f"  classification: {_yaml_quoted(att.classification or 'fiction')}\n"
-        )
+        classification_line = f"  classification: {_yaml_quoted(att.classification or 'fiction')}\n"
     claim_block = (
         "claim:\n"
         f"  speechAct: {_yaml_quoted(att.attestation_nature)}\n"
@@ -361,9 +356,7 @@ def render_artifact_markdown_v2(
     c2pa_name = sidecars.c2pa or f"{ledger_request_id}.c2pa"
     sidecars_yaml += f"    c2pa: {_yaml_quoted(c2pa_name)}\n"
     if sidecars.process_narrative:
-        sidecars_yaml += (
-            f"    processNarrative: {_yaml_quoted(sidecars.process_narrative)}\n"
-        )
+        sidecars_yaml += f"    processNarrative: {_yaml_quoted(sidecars.process_narrative)}\n"
     if sidecars.ots:
         sidecars_yaml += f"    ots: {_yaml_quoted(sidecars.ots)}\n"
 
@@ -492,9 +485,7 @@ def _artifact_from_v2_loaded(loaded: dict[str, Any]) -> Artifact:
                 qa_list.append(AttestationQa(question=question, answer=answer))
 
     attestation_mode = claim.get("mode", "interactive")
-    classification = (
-        claim.get("classification") if attestation_mode == "interactive" else None
-    )
+    classification = claim.get("classification") if attestation_mode == "interactive" else None
     author_attestation = AuthorAttestation(
         attestationNature=claim["speechAct"],
         attestationMode=attestation_mode,

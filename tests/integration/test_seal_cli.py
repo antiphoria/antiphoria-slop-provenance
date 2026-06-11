@@ -31,7 +31,6 @@ from src.envelope_v2 import render_artifact_markdown_wire
 from src.infrastructure.event_bus import InMemoryEventBus
 from src.models import (
     Artifact,
-    AttestationQa,
     AuthorAttestation,
     GenerationContext,
     Hyperparameters,

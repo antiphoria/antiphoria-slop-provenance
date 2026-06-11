@@ -117,9 +117,7 @@ def render_artifact_markdown(artifact: Artifact, body: str) -> str:
         if att.classification is None:
             attestation_lines.append("    classification: null\n")
         else:
-            attestation_lines.append(
-                f"    classification: {_yaml_quoted(att.classification)}\n"
-            )
+            attestation_lines.append(f"    classification: {_yaml_quoted(att.classification)}\n")
         if att.attestations:
             attestation_lines.append("    attestations:\n")
             for qa in att.attestations:
@@ -209,8 +207,7 @@ def render_artifact_markdown(artifact: Artifact, body: str) -> str:
 
     if artifact.provenance.process_narrative_hash is not None:
         process_narrative_hash_line = (
-            "  processNarrativeHash: "
-            f"{_yaml_quoted(artifact.provenance.process_narrative_hash)}\n"
+            f"  processNarrativeHash: {_yaml_quoted(artifact.provenance.process_narrative_hash)}\n"
         )
     else:
         process_narrative_hash_line = "  processNarrativeHash: null\n"

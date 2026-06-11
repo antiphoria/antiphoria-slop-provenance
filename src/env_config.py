@@ -100,10 +100,7 @@ def resolve_orchestrator_state_dir(
     state_dir = read_env_optional("ORCHESTRATOR_STATE_DIR", env_path=resolved_env)
     if state_dir:
         path = Path(state_dir.strip())
-        if not path.is_absolute():
-            path = (resolved_env.parent / path).resolve()
-        else:
-            path = path.resolve()
+        path = (resolved_env.parent / path).resolve() if not path.is_absolute() else path.resolve()
         return path
     if project_root is not None:
         return (project_root / ".orchestrator-state").resolve()

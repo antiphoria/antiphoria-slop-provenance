@@ -50,9 +50,7 @@ _DIGITAL_SOURCE_TYPE_SYNTHETIC = (
 _DIGITAL_SOURCE_TYPE_HYBRID = (
     "http://cv.iptc.org/newscodes/digitalsourcetype/compositeWithTrainedAlgorithmicMedia"
 )
-_DIGITAL_SOURCE_TYPE_HUMAN = (
-    "http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture"
-)
+_DIGITAL_SOURCE_TYPE_HUMAN = "http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture"
 
 
 def _digital_source_type_for_source(source: str) -> str:
@@ -77,6 +75,8 @@ def _build_slop_orchestrator_context(envelope: Artifact) -> dict[str, Any]:
     if envelope.provenance.process_narrative_hash is not None:
         context["processNarrativeHash"] = envelope.provenance.process_narrative_hash
     return context
+
+
 _SDK_MINIMAL_JPEG_BYTES = bytes.fromhex(
     "FFD8FFDB004300030202020202030202020303030304060404040404080606050609080A0A090809090A0C0F0C0A0B0E0B09090D110D0E0F101011100A0C12131210130F101010FFC9000B080001000101011100FFCC000600101005FFDA0008010100003F00D2CF20FFD9"
 )

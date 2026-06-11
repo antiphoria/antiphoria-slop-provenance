@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from src.models import (
-    AttestationQa,
     AuthorAttestation,
     Provenance,
     RegistrationCeremony,

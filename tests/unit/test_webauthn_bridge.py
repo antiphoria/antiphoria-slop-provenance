@@ -28,9 +28,31 @@ _KNOWN_ATTESTATION_B64 = (
     "AAAAAPv8MAcVTk7MjAtuAgVX170AFAnOQfdLgD-YuSPVVVg56d26qPOppQECAyYgASFYILIOF4A_ys-l14jxmZVN"
     "xGiYZzSAMF4wGXVB_-dAncquIlggHiCn1cJt_nz3QCpUYh-HL6xRMHWEhSO3On9ppTZCtfI"
 )
+_TEST_BRIDGE_HEADER = "bridge-secret"
 
 
-def _start_test_server(token: str = "bridge-secret") -> tuple[object, int, threading.Thread]:
+def _bridge_request(
+    url: str,
+    *,
+    data: bytes | None = None,
+    method: str | None = None,
+    headers: dict[str, str] | None = None,
+) -> urllib.request.Request:
+    return urllib.request.Request(  # noqa: S310
+        url,
+        data=data,
+        method=method,
+        headers=headers or {},
+    )
+
+
+def _urlopen(req: urllib.request.Request) -> object:
+    return urllib.request.urlopen(req)  # noqa: S310
+
+
+def _start_test_server(
+    bridge_header: str = _TEST_BRIDGE_HEADER,
+) -> tuple[object, int, threading.Thread]:
     state = _CeremonyState(
         mode="get",
         rp_id="localhost",
@@ -38,7 +60,7 @@ def _start_test_server(token: str = "bridge-secret") -> tuple[object, int, threa
         allow_credentials=[],
         user_id_b64url="dXNlcg",
         timeout_sec=5.0,
-        token=token,
+        token=bridge_header,
     )
     server, port = _bind_server(None)
     server.ceremony_state = state  # type: ignore[attr-defined]
@@ -75,12 +97,12 @@ class WebAuthnBridgeSecurityTest(unittest.TestCase):
     def test_options_rejects_missing_token(self) -> None:
         server, port, thread = _start_test_server()
         try:
-            req = urllib.request.Request(
+            req = _bridge_request(
                 f"http://127.0.0.1:{port}/options",
                 headers={"Host": f"localhost:{port}"},
             )
             with self.assertRaises(urllib.error.HTTPError) as ctx:
-                urllib.request.urlopen(req)
+                _urlopen(req)
             self.assertEqual(ctx.exception.code, 403)
         finally:
             _stop_test_server(server, thread)
@@ -88,15 +110,15 @@ class WebAuthnBridgeSecurityTest(unittest.TestCase):
     def test_options_rejects_bad_host(self) -> None:
         server, port, thread = _start_test_server()
         try:
-            req = urllib.request.Request(
+            req = _bridge_request(
                 f"http://127.0.0.1:{port}/options",
                 headers={
                     "Host": f"evil.example:{port}",
-                    _BRIDGE_TOKEN_HEADER: "bridge-secret",
+                    _BRIDGE_TOKEN_HEADER: _TEST_BRIDGE_HEADER,
                 },
             )
             with self.assertRaises(urllib.error.HTTPError) as ctx:
-                urllib.request.urlopen(req)
+                _urlopen(req)
             self.assertEqual(ctx.exception.code, 403)
         finally:
             _stop_test_server(server, thread)
@@ -104,14 +126,14 @@ class WebAuthnBridgeSecurityTest(unittest.TestCase):
     def test_options_accepts_valid_token_and_host(self) -> None:
         server, port, thread = _start_test_server()
         try:
-            req = urllib.request.Request(
+            req = _bridge_request(
                 f"http://127.0.0.1:{port}/options",
                 headers={
                     "Host": f"localhost:{port}",
-                    _BRIDGE_TOKEN_HEADER: "bridge-secret",
+                    _BRIDGE_TOKEN_HEADER: _TEST_BRIDGE_HEADER,
                 },
             )
-            with urllib.request.urlopen(req) as response:
+            with _urlopen(req) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             self.assertEqual(payload["mode"], "get")
             self.assertEqual(payload["rpId"], "localhost")
@@ -123,7 +145,7 @@ class WebAuthnBridgeSecurityTest(unittest.TestCase):
     def test_result_rejects_missing_token(self) -> None:
         server, port, thread = _start_test_server()
         try:
-            req = urllib.request.Request(
+            req = _bridge_request(
                 f"http://127.0.0.1:{port}/result",
                 data=b"{}",
                 method="POST",
@@ -133,7 +155,7 @@ class WebAuthnBridgeSecurityTest(unittest.TestCase):
                 },
             )
             with self.assertRaises(urllib.error.HTTPError) as ctx:
-                urllib.request.urlopen(req)
+                _urlopen(req)
             self.assertEqual(ctx.exception.code, 403)
         finally:
             _stop_test_server(server, thread)
@@ -151,17 +173,17 @@ class WebAuthnBridgeSecurityTest(unittest.TestCase):
                     "signature": "c2ln",
                 },
             }
-            req = urllib.request.Request(
+            req = _bridge_request(
                 f"http://127.0.0.1:{port}/result",
                 data=json.dumps(payload).encode("utf-8"),
                 method="POST",
                 headers={
                     "Host": f"localhost:{port}",
                     "Content-Type": "application/json",
-                    _BRIDGE_TOKEN_HEADER: "bridge-secret",
+                    _BRIDGE_TOKEN_HEADER: _TEST_BRIDGE_HEADER,
                 },
             )
-            with urllib.request.urlopen(req) as response:
+            with _urlopen(req) as response:
                 body = json.loads(response.read().decode("utf-8"))
             self.assertEqual(body, {"ok": True})
             self.assertTrue(server.ceremony_state.done.is_set())  # type: ignore[attr-defined]
@@ -171,15 +193,15 @@ class WebAuthnBridgeSecurityTest(unittest.TestCase):
     def test_root_serves_html_without_token_but_requires_valid_host(self) -> None:
         server, port, thread = _start_test_server()
         try:
-            req = urllib.request.Request(
+            req = _bridge_request(
                 f"http://127.0.0.1:{port}/",
                 headers={"Host": f"localhost:{port}"},
             )
-            with urllib.request.urlopen(req) as response:
+            with _urlopen(req) as response:
                 html = response.read().decode("utf-8")
             self.assertIn("Antiphoria - Local WebAuthn Bridge", html)
             self.assertIn("X-Bridge-Token", html)
-            self.assertIn("attestation: \"none\"", html)
+            self.assertIn('attestation: "none"', html)
             self.assertIn("Content-Security-Policy", response.headers)
             self.assertIn("connect-src 'self'", response.headers["Content-Security-Policy"])
         finally:
@@ -216,8 +238,8 @@ class WebAuthnBridgeSecurityTest(unittest.TestCase):
             base = f"http://127.0.0.1:{port}"
 
             with self.assertRaises(urllib.error.HTTPError) as missing:
-                urllib.request.urlopen(
-                    urllib.request.Request(
+                _urlopen(
+                    _bridge_request(
                         f"{base}/options",
                         headers={"Host": f"localhost:{port}"},
                     )
@@ -234,8 +256,8 @@ class WebAuthnBridgeSecurityTest(unittest.TestCase):
                     "signature": "c2ln",
                 },
             }
-            urllib.request.urlopen(
-                urllib.request.Request(
+            _urlopen(
+                _bridge_request(
                     f"{base}/result",
                     data=json.dumps(payload).encode("utf-8"),
                     method="POST",

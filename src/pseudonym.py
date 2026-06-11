@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import hashlib
 import hmac
 from pathlib import Path
@@ -90,10 +91,8 @@ def salt_appears_in_text(env_path: Path | None, text: str) -> bool:
     try:
         salt_bytes = _decode_salt_material(raw_text)
         candidates.add(base64.urlsafe_b64encode(salt_bytes).decode("ascii").rstrip("="))
-        try:
+        with contextlib.suppress(UnicodeDecodeError):
             candidates.add(salt_bytes.decode("utf-8"))
-        except UnicodeDecodeError:
-            pass
     except RuntimeError:
         pass
 
