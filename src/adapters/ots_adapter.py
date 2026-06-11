@@ -1,7 +1,8 @@
 """OpenTimestamps CLI adapter for Bitcoin anchoring.
 
-Uses the `ots` CLI exclusively (no Python opentimestamps API) to avoid
-bit-rotted dependencies. All operations run via subprocess with 60s timeout.
+Supports both the Go ``opentimestamps-client`` binary and the Python
+``opentimestamps-client`` (``otsclient``) CLI shipped as ``.venv/bin/ots``.
+Stamp/upgrade use the same subcommand shape; ``verify`` differs by dialect.
 
 Trust: ``OTS_BIN`` (or the bundled ``bin/ots`` / PATH ``ots``) names the
 executable used as argv[0]; arguments are fixed (``stamp``, ``upgrade``,
@@ -20,10 +21,22 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Literal
 
 from src.env_config import read_env_optional
 
 _logger = logging.getLogger(__name__)
+
+OtsCliDialect = Literal["go", "python"]
+_OTS_PENDING_RE = re.compile(
+    r"Pending confirmation in Bitcoin blockchain",
+    flags=re.IGNORECASE,
+)
+
+
+def _ots_output_indicates_pending(out: str) -> bool:
+    """True when calendar output means the proof is not forged yet."""
+    return bool(_OTS_PENDING_RE.search(out))
 
 
 def _ots_cli_path_must_be_file(path: Path) -> str:
@@ -45,7 +58,7 @@ def build_ots_adapter(env_path: Path | None = None) -> OTSAdapter | None:
     """
     from src.env_config import read_env_bool
 
-    if not read_env_bool("ENABLE_OTS_FORGE", default=False, env_path=env_path):
+    if not read_env_bool("ENABLE_OTS_FORGE", default=True, env_path=env_path):
         return None
     ots_bin = resolve_ots_binary(env_path=env_path)
     return OTSAdapter(ots_bin=ots_bin)
@@ -95,6 +108,25 @@ def resolve_ots_binary(env_path: Path | None = None) -> str:
     )
 
 
+def detect_ots_cli_dialect(ots_bin: str) -> OtsCliDialect:
+    """Detect Go vs Python OpenTimestamps CLI from ``--help`` output."""
+
+    try:
+        result = subprocess.run(  # noqa: S603
+            [ots_bin, "--help"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "go"
+    help_text = (result.stdout or "") + (result.stderr or "")
+    if "--whitelist" in help_text or "OpenTimestamps client." in help_text:
+        return "python"
+    return "go"
+
+
 def _sanitize_for_log(raw: str, max_len: int = 200) -> str:
     """Truncate and redact secret-like substrings before logging."""
     if not raw:
@@ -113,6 +145,7 @@ class OTSAdapter:
 
     def __init__(self, ots_bin: str = "ots") -> None:
         self._ots_bin = ots_bin
+        self._dialect = detect_ots_cli_dialect(ots_bin)
 
     def request_ots_stamp(
         self,
@@ -190,6 +223,13 @@ class OTSAdapter:
             except subprocess.CalledProcessError as e:
                 stderr_s = (e.stderr or b"").decode("utf-8", errors="replace")
                 stdout_s = (e.stdout or b"").decode("utf-8", errors="replace")
+                out = stderr_s + stdout_s
+                if _ots_output_indicates_pending(out):
+                    _logger.info(
+                        "ots upgrade still pending Bitcoin confirmation (exit %d)",
+                        e.returncode,
+                    )
+                    return True, pending_bytes, None
                 _logger.warning(
                     "ots upgrade failed (exit %d): stderr=%s stdout=%s",
                     e.returncode,
@@ -215,6 +255,7 @@ class OTSAdapter:
                     payload_bytes=payload_bytes,
                     ots_bytes=final_bytes,
                     ots_bin=bin_,
+                    dialect=self._dialect,
                     timeout=timeout,
                 )
                 # Upgrade succeeded; if verify fails, block not mined yet (soft failure).
@@ -236,6 +277,7 @@ class OTSAdapter:
             payload_bytes=payload_bytes,
             ots_bytes=ots_bytes,
             ots_bin=ots_bin or self._ots_bin,
+            dialect=self._dialect,
             timeout=timeout,
         )
 
@@ -244,18 +286,29 @@ class OTSAdapter:
         payload_bytes: bytes,
         ots_bytes: bytes,
         ots_bin: str,
+        dialect: OtsCliDialect,
         timeout: int,
     ) -> tuple[bool, int | None]:
-        """Run ots verify using Go CLI dialect (proof then payload, no -f)."""
+        """Run ``ots verify`` using Go or Python CLI dialect."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             payload_path = temp_path / "payload.md"
             proof_path = temp_path / "payload.md.ots"
             payload_path.write_bytes(payload_bytes)
             proof_path.write_bytes(ots_bytes)
+            if dialect == "python":
+                verify_cmd = [
+                    ots_bin,
+                    "verify",
+                    "-f",
+                    "payload.md",
+                    "payload.md.ots",
+                ]
+            else:
+                verify_cmd = [ots_bin, "verify", "payload.md.ots", "payload.md"]
             try:
                 result = subprocess.run(  # noqa: S603
-                    [ots_bin, "verify", "payload.md.ots", "payload.md"],
+                    verify_cmd,
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
@@ -268,16 +321,26 @@ class OTSAdapter:
             except OSError as exc:
                 _logger.warning("ots verify could not run %s: %s", ots_bin, exc)
                 return False, None
-            if result.returncode != 0:
-                _logger.warning(
-                    "ots verify failed: returncode=%s stdout=%s stderr=%s "
-                    "(expected Go ots dialect args: verify <proof> <payload>)",
-                    result.returncode,
-                    _sanitize_for_log(result.stdout or ""),
-                    _sanitize_for_log(result.stderr or ""),
-                )
-                return False, None
+
             out = (result.stdout or "") + (result.stderr or "")
+            if _ots_output_indicates_pending(out):
+                return False, None
+
+            if result.returncode != 0:
+                if dialect == "python" and "usage:" in out:
+                    _logger.warning(
+                        "ots verify failed: Python CLI rejected args stdout=%s stderr=%s",
+                        _sanitize_for_log(result.stdout or ""),
+                        _sanitize_for_log(result.stderr or ""),
+                    )
+                else:
+                    _logger.warning(
+                        "ots verify failed: returncode=%s stdout=%s stderr=%s",
+                        result.returncode,
+                        _sanitize_for_log(result.stdout or ""),
+                        _sanitize_for_log(result.stderr or ""),
+                    )
+                return False, None
             if re.search(r"\binvalid\b", out, flags=re.IGNORECASE) or re.search(
                 r"\bnot\s+valid\b", out, flags=re.IGNORECASE
             ):

@@ -22,7 +22,11 @@ from src.adapters.ots_adapter import OTSAdapter
 from src.adapters.ots_queue import OtsQueueAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter, TimestampVerification
 from src.adapters.transparency_log import TransparencyLogAdapter, TransparencyLogEntry
-from src.artifact_serialization import render_artifact_markdown
+from src.envelope_v2 import (
+    EnvelopeSidecars,
+    detect_wire_version_from_markdown,
+    render_artifact_markdown_wire,
+)
 from src.canonicalization import canonicalize_body_for_hash, compute_payload_hash
 from src.env_config import read_env_bool, read_env_optional
 from src.git_tree_utils import tree_get_blob
@@ -447,7 +451,6 @@ class ProvenanceService:
         if outcome.token_base64 is not None and request_id is not None:
             ref_name = f"refs/heads/artifact/{request_id}"
 
-            # Bake RFC3161 token into frontmatter (pure frontmatter format)
             current_md = self._read_markdown_from_commit(
                 repository_path=repository_path,
                 commit_oid=commit_oid,
@@ -459,55 +462,69 @@ class ProvenanceService:
                     update={"rfc3161_token": outcome.token_base64}
                 )
                 updated_envelope = envelope.model_copy(update={"signature": updated_sig})
-                monolithic_md = render_artifact_markdown(updated_envelope, payload)
-                self._commit_branch_file(
+                wire_version = detect_wire_version_from_markdown(current_md)
+                self._bake_artifact_markdown_on_branch(
                     repository_path=repository_path,
                     ref_name=ref_name,
-                    relative_path=ledger_path,
-                    payload_text=monolithic_md,
-                    commit_message=f"provenance: bake RFC3161 token into artifact ({request_id})",
+                    ledger_path=ledger_path,
+                    commit_oid=commit_oid,
+                    request_id=request_id,
+                    envelope=updated_envelope,
+                    payload=payload,
+                    wire_version=wire_version,
                 )
 
-            # OTS stamp (gated by ENABLE_OTS_FORGE)
-            if (
-                request_id is not None
-                and self._ots_adapter is not None
-                and read_env_bool("ENABLE_OTS_FORGE", default=False, env_path=self._env_path)
-            ):
-                try:
-                    payload_bytes = canonicalize_body_for_hash(payload)
-                    artifact_hash = sha256_hex(payload_bytes)
-                    ots_bytes = self._ots_adapter.request_ots_stamp(payload_bytes)
-                except (
-                    OSError,
-                    ValueError,
-                    subprocess.SubprocessError,
-                    RuntimeError,
-                ) as exc:
-                    _logger.warning(
-                        "OTS stamp skipped for request_id=%s: %s",
-                        request_id,
-                        _sanitize_for_log(str(exc)),
-                    )
-                else:
-                    pending_b64 = base64.b64encode(ots_bytes).decode("ascii")
-                    ots_queue = OtsQueueAdapter(
-                        repository_path=repository_path,
-                        env_path=self._env_path,
-                    )
-                    ots_queue.append_pending(
-                        request_id=request_id,
-                        artifact_hash=artifact_hash,
-                        pending_ots_b64=pending_b64,
-                    )
-                    ots_path = f".provenance/ots-{request_id}.ots"
-                    self._commit_branch_file_bytes(
-                        repository_path=repository_path,
-                        ref_name=ref_name,
-                        relative_path=ots_path,
-                        payload_bytes=ots_bytes,
-                        commit_message=f"provenance: add OTS pending proof ({request_id})",
-                    )
+        if request_id is not None and read_env_bool(
+            "ENABLE_OTS_FORGE", default=True, env_path=self._env_path
+        ):
+            ref_name = f"refs/heads/artifact/{request_id}"
+            ots_adapter = self._require_ots_adapter()
+            head_oid = self._branch_head_oid(repository_path, ref_name)
+            current_md = self._read_markdown_from_commit(
+                repository_path=repository_path,
+                commit_oid=head_oid,
+                ledger_path=ledger_path,
+            )
+            envelope, payload = parse_artifact_markdown_text(current_md)
+            payload_bytes = canonicalize_body_for_hash(payload)
+            artifact_hash = sha256_hex(payload_bytes)
+            ots_bytes = ots_adapter.request_ots_stamp(payload_bytes)
+            pending_b64 = base64.b64encode(ots_bytes).decode("ascii")
+            ots_queue = OtsQueueAdapter(
+                repository_path=repository_path,
+                env_path=self._env_path,
+            )
+            ots_queue.append_pending(
+                request_id=request_id,
+                artifact_hash=artifact_hash,
+                pending_ots_b64=pending_b64,
+            )
+            ots_path = f".provenance/ots-{request_id}.ots"
+            self._commit_branch_file_bytes(
+                repository_path=repository_path,
+                ref_name=ref_name,
+                relative_path=ots_path,
+                payload_bytes=ots_bytes,
+                commit_message=f"provenance: add OTS pending proof ({request_id})",
+            )
+            head_oid = self._branch_head_oid(repository_path, ref_name)
+            current_md = self._read_markdown_from_commit(
+                repository_path=repository_path,
+                commit_oid=head_oid,
+                ledger_path=ledger_path,
+            )
+            envelope, payload = parse_artifact_markdown_text(current_md)
+            wire_version = detect_wire_version_from_markdown(current_md)
+            self._bake_artifact_markdown_on_branch(
+                repository_path=repository_path,
+                ref_name=ref_name,
+                ledger_path=ledger_path,
+                commit_oid=head_oid,
+                request_id=request_id,
+                envelope=envelope,
+                payload=payload,
+                wire_version=wire_version,
+            )
         return outcome
 
     def _timestamp_parsed_artifact(
@@ -634,6 +651,95 @@ class ProvenanceService:
         markdown_text = bytes(blob_obj.data).decode("utf-8")
         _, payload = parse_artifact_markdown_text(markdown_text)
         return canonicalize_body_for_hash(payload)
+
+    def _require_ots_adapter(self) -> OTSAdapter:
+        if self._ots_adapter is None:
+            raise RuntimeError(
+                "OTS forging is required but not configured. "
+                "Set ENABLE_OTS_FORGE=true and ensure the ots binary is available."
+            )
+        return self._ots_adapter
+
+    @staticmethod
+    def _branch_head_oid(repository_path: Path, ref_name: str) -> str:
+        repo = pygit2.Repository(str(repository_path))
+        reference = repo.lookup_reference(ref_name)
+        commit_obj = repo[reference.target]
+        if not isinstance(commit_obj, pygit2.Commit):
+            raise RuntimeError(f"Branch ref '{ref_name}' does not point to a commit.")
+        return str(commit_obj.id)
+
+    def _resolve_sidecars_for_commit(
+        self,
+        repository_path: Path,
+        commit_oid: str,
+        request_id: UUID,
+        envelope: Artifact,
+    ) -> EnvelopeSidecars:
+        rid = str(request_id)
+        ots_path = f".provenance/ots-{rid}.ots"
+        return EnvelopeSidecars(
+            c2pa=f"{rid}.c2pa"
+            if self._blob_exists_on_commit(repository_path, commit_oid, f"{rid}.c2pa")
+            else None,
+            process_narrative=(
+                f"{rid}.process.json"
+                if envelope.provenance.process_narrative_hash is not None
+                else None
+            ),
+            ots=ots_path
+            if self._blob_exists_on_commit(repository_path, commit_oid, ots_path)
+            else None,
+        )
+
+    def _bake_artifact_markdown_on_branch(
+        self,
+        *,
+        repository_path: Path,
+        ref_name: str,
+        ledger_path: str,
+        commit_oid: str,
+        request_id: UUID,
+        envelope: Artifact,
+        payload: str,
+        wire_version: str,
+    ) -> None:
+        sidecars = self._resolve_sidecars_for_commit(
+            repository_path,
+            commit_oid,
+            request_id,
+            envelope,
+        )
+        monolithic_md = render_artifact_markdown_wire(
+            envelope,
+            payload,
+            ledger_request_id=str(request_id),
+            sidecars=sidecars,
+            env_path=self._env_path,
+            wire_version=wire_version,
+        )
+        self._commit_branch_file(
+            repository_path=repository_path,
+            ref_name=ref_name,
+            relative_path=ledger_path,
+            payload_text=monolithic_md,
+            commit_message=f"provenance: bake envelope metadata ({request_id})",
+        )
+
+    @staticmethod
+    def _blob_exists_on_commit(
+        repository_path: Path,
+        commit_oid: str,
+        relative_path: str,
+    ) -> bool:
+        try:
+            repo = pygit2.Repository(str(repository_path))
+            commit_obj = repo.revparse_single(commit_oid)
+        except (KeyError, pygit2.GitError):
+            return False
+        if not isinstance(commit_obj, pygit2.Commit):
+            return False
+        return tree_get_blob(repo, commit_obj.tree, relative_path) is not None
 
     @staticmethod
     def _read_markdown_from_commit(

@@ -12,6 +12,11 @@ from pathlib import Path
 import src.runtime.cli_command_runtime as command_runtime
 from src.commands import verification as verification_commands
 from src.commands.admin import _run_admin_revoke_key_command
+from src.commands.catalog import (
+    _run_catalog_index_command,
+    _run_catalog_list_command,
+    _run_catalog_show_command,
+)
 from src.commands.maintenance import (
     _run_anchor_merkle_root_command,
     _run_build_inclusion_proof_command,
@@ -162,6 +167,12 @@ _ADMIN_COMMAND_HANDLERS: dict[str, SyncCommandHandler] = {
     "revoke-key": _run_admin_revoke_key_command,
 }
 
+_CATALOG_COMMAND_HANDLERS: dict[str, SyncCommandHandler] = {
+    "index": _run_catalog_index_command,
+    "list": _run_catalog_list_command,
+    "show": _run_catalog_show_command,
+}
+
 
 async def _dispatch(args: argparse.Namespace) -> int:
     """Dispatch parsed CLI args to command handlers."""
@@ -179,6 +190,7 @@ async def _dispatch_impl(args: argparse.Namespace) -> int:
         async_handlers=_ASYNC_COMMAND_HANDLERS,
         sync_handlers=_SYNC_COMMAND_HANDLERS,
         admin_handlers=_ADMIN_COMMAND_HANDLERS,
+        catalog_handlers=_CATALOG_COMMAND_HANDLERS,
     )
 
 
@@ -215,6 +227,7 @@ def main() -> int:
         "verify-transparency-log",
         "build-inclusion-proof",
         "webauthn-register",
+        "catalog",
     }:
         lock_base = _require_repo_path(parsed_args)
     lock_path = lock_base / ".antiphoria-slop-provenance.lock"

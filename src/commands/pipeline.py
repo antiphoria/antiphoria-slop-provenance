@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 from uuid import UUID
 
+from src.adapters.catalog import CatalogAdapter, build_catalog_row
 from src.adapters.crypto_notary import CryptoNotaryAdapter
 from src.adapters.gemini_engine import GeminiEngineAdapter
 from src.adapters.git_ledger import GitLedgerAdapter
@@ -118,6 +119,58 @@ async def _anchor_and_timestamp_committed_artifact(
         print(f"Timestamp skipped: {exc}")
 
 
+async def _upsert_catalog_entry(
+    repository_path: Path,
+    env_path: Path,
+    committed_event: StoryCommitted,
+    signed_event: StorySigned,
+) -> None:
+    """Upsert one catalog row after commit; non-fatal on failure."""
+
+    try:
+        has_c2pa = signed_event.c2pa_manifest_bytes_b64 is not None
+        has_process = (
+            signed_event.process_narrative_bytes_b64 is not None
+            or signed_event.process_narrative_hash is not None
+            or signed_event.artifact.provenance.process_narrative_hash is not None
+        )
+        row = build_catalog_row(
+            signed_event.artifact,
+            committed_event.request_id,
+            f"artifact/{committed_event.request_id}",
+            committed_event.commit_oid,
+            has_c2pa=has_c2pa,
+            has_process_narrative=has_process,
+        )
+        adapter = CatalogAdapter(repository_path=repository_path, env_path=env_path)
+        await asyncio.to_thread(adapter.upsert_entry, row)
+    except Exception as exc:
+        _cli_logger.warning(
+            "Catalog upsert skipped for request_id=%s: %s",
+            committed_event.request_id,
+            exc,
+        )
+
+
+async def _maybe_upsert_catalog_after_commit(
+    repository_path: Path,
+    env_path: Path,
+    committed_event: StoryCommitted,
+    signed_by_request: dict[UUID, StorySigned],
+) -> None:
+    """Upsert catalog row when the signed artifact is available."""
+
+    signed_event = signed_by_request.get(committed_event.request_id)
+    if signed_event is None:
+        return
+    await _upsert_catalog_entry(
+        repository_path,
+        env_path,
+        committed_event,
+        signed_event,
+    )
+
+
 async def _run_generate_command(args: argparse.Namespace) -> int:
     """Run full async pipeline for `generate`."""
     if should_log_route("coarse"):
@@ -138,6 +191,7 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
     repository_path = runtime.repository_path
     provenance_service = runtime.provenance_service
     completion_future = create_story_committed_future()
+    signed_by_request: dict[UUID, StorySigned] = {}
 
     gemini_adapter = GeminiEngineAdapter(
         event_bus=event_bus,
@@ -152,6 +206,7 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
     )
 
     async def _record_signed(event: StorySigned) -> None:
+        signed_by_request[event.request_id] = event
         if event.artifact.signature is None:
             raise RuntimeError("Signed artifact is missing signature block.")
         await asyncio.to_thread(
@@ -203,6 +258,12 @@ async def _run_generate_command(args: argparse.Namespace) -> int:
     bind_log_context(request_id=request_event.request_id)
     await event_bus.emit(request_event)
     committed_event = await asyncio.wait_for(completion_future, timeout=300.0)
+    await _maybe_upsert_catalog_after_commit(
+        repository_path,
+        runtime.env_path,
+        committed_event,
+        signed_by_request,
+    )
     await _anchor_and_timestamp_committed_artifact(
         event_bus=event_bus,
         provenance_service=provenance_service,
@@ -237,6 +298,7 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
     repository_path = runtime.repository_path
     provenance_service = runtime.provenance_service
     completion_future = create_story_committed_future()
+    signed_by_request: dict[UUID, StorySigned] = {}
 
     notary_adapter = CryptoNotaryAdapter(event_bus=event_bus, env_path=runtime.env_path)
     ledger_adapter = GitLedgerAdapter(
@@ -270,6 +332,7 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
     curation_metadata = build_curation_metadata(record.body, curated_body)
 
     async def _record_signed(event: StorySigned) -> None:
+        signed_by_request[event.request_id] = event
         if event.artifact.signature is None:
             raise RuntimeError("Signed artifact is missing signature block.")
         await asyncio.to_thread(
@@ -325,6 +388,12 @@ async def _run_curate_command(args: argparse.Namespace) -> int:
         )
     )
     committed_event = await asyncio.wait_for(completion_future, timeout=300.0)
+    await _maybe_upsert_catalog_after_commit(
+        repository_path,
+        runtime.env_path,
+        committed_event,
+        signed_by_request,
+    )
     await _anchor_and_timestamp_committed_artifact(
         event_bus=event_bus,
         provenance_service=provenance_service,
@@ -384,6 +453,7 @@ async def _run_register_command(args: argparse.Namespace) -> int:
     repository_path = runtime.repository_path
     provenance_service = runtime.provenance_service
     completion_future = create_story_committed_future()
+    signed_by_request: dict[UUID, StorySigned] = {}
 
     notary_adapter = CryptoNotaryAdapter(event_bus=event_bus, env_path=runtime.env_path)
     ledger_adapter = GitLedgerAdapter(
@@ -416,6 +486,17 @@ async def _run_register_command(args: argparse.Namespace) -> int:
     if salt_appears_in_text(runtime.env_path, body):
         raise RuntimeError("Pseudonym salt detected in artifact body; publication blocked.")
     title = args.title or _derive_register_title(body, artifact_path.name)
+
+    from src.runtime.stack_readiness import assert_ceremony_stack_ready
+
+    require_webauthn = not getattr(args, "no_webauthn", False) and not getattr(
+        args, "non_interactive", False
+    )
+    assert_ceremony_stack_ready(
+        env_path=runtime.env_path,
+        repository_path=repository_path,
+        require_webauthn=require_webauthn,
+    )
 
     # --- Self-declaration wizard ---
     if getattr(args, "non_interactive", False):
@@ -475,7 +556,7 @@ async def _run_register_command(args: argparse.Namespace) -> int:
             return 1
 
     webauthn_attestation = None
-    if not getattr(args, "no_webauthn", False):
+    if not getattr(args, "no_webauthn", False) and not getattr(args, "non_interactive", False):
         from src.canonicalization import canonicalize_body_for_hash
         from src.webauthn_attestation import get_webauthn_assertion, get_webauthn_provider
 
@@ -491,20 +572,16 @@ async def _run_register_command(args: argparse.Namespace) -> int:
             env_path=runtime.env_path,
         )
         if webauthn_attestation is None:
-            if get_webauthn_provider(env_path=runtime.env_path) == "platform":
-                print(
-                    "WebAuthn skipped (set WEBAUTHN_RP_ID, run webauthn-register first, "
-                    "or approve Touch ID in the browser). Using legacy."
-                )
-            else:
-                print(
-                    "WebAuthn skipped (set WEBAUTHN_RP_ID to your production domain, "
-                    "or no device/fido2). Using legacy."
-                )
-        else:
-            print("WebAuthn attestation captured.")
+            raise RuntimeError(
+                "WebAuthn attestation required but not captured. Run "
+                "'slop-cli webauthn-register', set "
+                "WEBAUTHN_RP_ID, approve Touch ID in the browser, or pass "
+                "--no-webauthn for CI-only unattended paths."
+            )
+        print("WebAuthn attestation captured.")
 
     async def _record_signed(event: StorySigned) -> None:
+        signed_by_request[event.request_id] = event
         if event.artifact.signature is None:
             raise RuntimeError("Signed artifact is missing signature block.")
         await asyncio.to_thread(
@@ -571,6 +648,12 @@ async def _run_register_command(args: argparse.Namespace) -> int:
     bind_log_context(request_id=human_event.request_id)
     await event_bus.emit(human_event)
     committed_event = await asyncio.wait_for(completion_future, timeout=300.0)
+    await _maybe_upsert_catalog_after_commit(
+        repository_path,
+        runtime.env_path,
+        committed_event,
+        signed_by_request,
+    )
     await _anchor_and_timestamp_committed_artifact(
         event_bus=event_bus,
         provenance_service=provenance_service,
@@ -649,6 +732,7 @@ async def _run_seal_command(args: argparse.Namespace) -> int:
     repository_path = runtime.repository_path
     provenance_service = runtime.provenance_service
     completion_future = create_story_committed_future()
+    signed_by_request: dict[UUID, StorySigned] = {}
 
     notary_adapter = CryptoNotaryAdapter(event_bus=event_bus, env_path=runtime.env_path)
     ledger_adapter = GitLedgerAdapter(
@@ -691,6 +775,17 @@ async def _run_seal_command(args: argparse.Namespace) -> int:
         if not process_path.exists():
             raise RuntimeError(f"Process narrative file not found: '{process_path}'.")
         process_narrative_bytes, process_narrative_hash = _load_process_narrative(process_path)
+
+    from src.runtime.stack_readiness import assert_ceremony_stack_ready
+
+    require_webauthn = not getattr(args, "no_webauthn", False) and not getattr(
+        args, "non_interactive", False
+    )
+    assert_ceremony_stack_ready(
+        env_path=runtime.env_path,
+        repository_path=repository_path,
+        require_webauthn=require_webauthn,
+    )
 
     if getattr(args, "non_interactive", False):
         attestation = AuthorAttestation(
@@ -751,7 +846,7 @@ async def _run_seal_command(args: argparse.Namespace) -> int:
             return 1
 
     webauthn_attestation = None
-    if not getattr(args, "no_webauthn", False):
+    if not getattr(args, "no_webauthn", False) and not getattr(args, "non_interactive", False):
         from src.canonicalization import canonicalize_body_for_hash
         from src.webauthn_attestation import get_webauthn_assertion, get_webauthn_provider
 
@@ -767,20 +862,16 @@ async def _run_seal_command(args: argparse.Namespace) -> int:
             env_path=runtime.env_path,
         )
         if webauthn_attestation is None:
-            if get_webauthn_provider(env_path=runtime.env_path) == "platform":
-                print(
-                    "WebAuthn skipped (set WEBAUTHN_RP_ID, run webauthn-register first, "
-                    "or approve Touch ID in the browser). Using legacy."
-                )
-            else:
-                print(
-                    "WebAuthn skipped (set WEBAUTHN_RP_ID to your production domain, "
-                    "or no device/fido2). Using legacy."
-                )
-        else:
-            print("WebAuthn attestation captured.")
+            raise RuntimeError(
+                "WebAuthn attestation required but not captured. Run "
+                "'slop-cli webauthn-register', set "
+                "WEBAUTHN_RP_ID, approve Touch ID in the browser, or pass "
+                "--no-webauthn for CI-only unattended paths."
+            )
+        print("WebAuthn attestation captured.")
 
     async def _record_signed(event: StorySigned) -> None:
+        signed_by_request[event.request_id] = event
         if event.artifact.signature is None:
             raise RuntimeError("Signed artifact is missing signature block.")
         await asyncio.to_thread(
@@ -850,6 +941,12 @@ async def _run_seal_command(args: argparse.Namespace) -> int:
     bind_log_context(request_id=sealed_event.request_id)
     await event_bus.emit(sealed_event)
     committed_event = await asyncio.wait_for(completion_future, timeout=300.0)
+    await _maybe_upsert_catalog_after_commit(
+        repository_path,
+        runtime.env_path,
+        committed_event,
+        signed_by_request,
+    )
     await _anchor_and_timestamp_committed_artifact(
         event_bus=event_bus,
         provenance_service=provenance_service,

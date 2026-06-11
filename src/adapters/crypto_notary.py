@@ -46,6 +46,7 @@ from src.domain.events import (
     StorySyntheticSealed,
 )
 from src.logging_config import bind_log_context, should_log_route
+from src.envelope_v2 import generation_context_for_source
 from src.models import (
     CRYPTO_ALGORITHM_ED25519,
     CRYPTO_ALGORITHM_ML_DSA_44,
@@ -187,7 +188,7 @@ class CryptoNotaryAdapter:
         self._signer_fingerprint = self._resolve_signer_fingerprint()
         self._enable_c2pa = read_env_bool(
             "ENABLE_C2PA",
-            default=False,
+            default=True,
             env_path=self._env_path,
         )
 
@@ -528,6 +529,18 @@ class CryptoNotaryAdapter:
         if self._ed25519_private_key is None:
             raise RuntimeError("Ed25519 private key is required for signing operations.")
         payload_hash = compute_payload_hash(body)
+        if source in ("human", "synthetic"):
+            gen_ctx = generation_context_for_source(source)
+        else:
+            gen_ctx = GenerationContext(
+                systemInstruction=system_instruction,
+                prompt=prompt,
+                hyperparameters=Hyperparameters(
+                    temperature=temperature,
+                    topP=top_p,
+                    topK=top_k,
+                ),
+            )
         unsigned_envelope = Artifact(
             title=title,
             timestamp=datetime.now(UTC),
@@ -537,15 +550,7 @@ class CryptoNotaryAdapter:
                 source=source,
                 engineVersion=_DEFAULT_ENGINE_VERSION,
                 modelId=model_id,
-                generationContext=GenerationContext(
-                    systemInstruction=system_instruction,
-                    prompt=prompt,
-                    hyperparameters=Hyperparameters(
-                        temperature=temperature,
-                        topP=top_p,
-                        topK=top_k,
-                    ),
-                ),
+                generationContext=gen_ctx,
                 usageMetrics=usage_metrics,
                 embeddedWatermark=embedded_watermark,
                 authorAttestation=author_attestation,
@@ -557,7 +562,7 @@ class CryptoNotaryAdapter:
                         "unattended"
                         if author_attestation
                         and author_attestation.attestation_mode == "unattended"
-                        else ("legacy" if author_attestation else None)
+                        else ("none" if author_attestation else None)
                     )
                 ),
                 registrationCeremony=registration_ceremony,

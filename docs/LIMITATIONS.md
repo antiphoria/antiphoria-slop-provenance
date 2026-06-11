@@ -30,14 +30,15 @@ Git ledger commits use **process-local** file locks. Multiple processes or hosts
 
 ## Human registration and personhood metadata
 
-- **Self-declaration** (wizard Q&A when run interactively) records what the operator stated at signing time; it is not independent proof of authorship, notarization, or copyright registration.
-- **`attestationNature: self-declaration`** and **`attestationMode`** (`interactive` vs `unattended`) are embedded in artifact frontmatter so third parties can see how the record was captured.
+- **Self-declaration** (wizard Q&A in `claim.statements`) records what the operator stated at signing time; it is not independent proof of authorship, notarization, or copyright registration.
+- **`attestationStrength`** describes the **hardware trust layer only**: `webauthn` (assertion captured), `none` (explicit `--no-webauthn`), or `unattended` (`--non-interactive`). It does not measure declaration quality — use `claim.provenanceGrade` for that.
+- **`operator.webauthn`** (v2 wire) carries the FIDO assertion metadata separately from the public declaration in `claim`.
 - **`--non-interactive`:** skips the wizard and records `attestationMode: unattended` with no Q&A pairs and `classification: null`. Suitable for CI, not operator self-declaration.
-- **WebAuthn** (`attestationStrength: webauthn`) binds a platform or roaming authenticator assertion to the artifact body hash. The engine **embeds** assertion metadata; it does not currently **verify** WebAuthn assertions in `verify` / `attest` (treat as experimental provenance, not a legal identity guarantee).
+- **WebAuthn** binds a platform or roaming authenticator assertion to the artifact body hash. The engine **embeds** assertion metadata in `operator.webauthn`; it does not currently **verify** WebAuthn assertions in `verify` / `attest` (treat as experimental provenance, not a legal identity guarantee). `--strict` attest requires the block to be **present** on interactive artifacts.
 - **Platform provider (macOS Touch ID):** uses a short-lived `127.0.0.1` browser bridge with per-ceremony token auth. Credentials are bound to `localhost` RP ID—not a production web domain.
 - **HID provider (USB FIDO2):** requires `pip install -e ".[webauthn]"` and a connected security key.
 - **Operator pseudonym** (`operatorPseudonymHash`): HMAC-derived from a secret salt you control. Proves continuity across artifacts registered with the same salt; reveals no device data. Losing the salt breaks continuity; leaking it lets others impersonate that pseudonym. Prefer this over `CAPTURE_MACHINE_ID` (MAC hash), which remains opt-in and off by default.
-- **`--non-interactive` / `--no-webauthn`:** unattended or self-declaration-only paths; suitable for CI, not maximum personhood metadata.
+- **`--non-interactive` / `--no-webauthn`:** explicit CI escape hatches only; default interactive register/seal requires the full stack and aborts on missing layers.
 
 ## Provenance grades
 
@@ -59,5 +60,6 @@ Grades are stored as `provenanceGrade` in artifact frontmatter. They describe ep
 
 ## Operational
 
+- **Archive catalog** (`.provenance/catalog.jsonl` on `main`) is a derived human lookup index, not part of the signed evidence chain. Rebuild with `slop-cli catalog index` from `artifact/*` branches if it drifts.
 - **BYOV / vault** workflows are required for production-grade private key handling; dev keys on disk are explicitly discouraged for production (see [SECURITY.md](../SECURITY.md)).
 - **Windows native** development is best-effort; **WSL2** is the supported Windows path ([WSL2_SETUP.md](WSL2_SETUP.md)).

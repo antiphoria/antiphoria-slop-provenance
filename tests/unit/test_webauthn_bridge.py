@@ -181,6 +181,7 @@ class WebAuthnBridgeSecurityTest(unittest.TestCase):
             self.assertIn("X-Bridge-Token", html)
             self.assertIn("attestation: \"none\"", html)
             self.assertIn("Content-Security-Policy", response.headers)
+            self.assertIn("connect-src 'self'", response.headers["Content-Security-Policy"])
         finally:
             _stop_test_server(server, thread)
 

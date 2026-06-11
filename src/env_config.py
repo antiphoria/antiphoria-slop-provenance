@@ -91,6 +91,25 @@ def get_project_env_path() -> Path:
     return candidates[0]  # caller may use for project_root even if .env missing
 
 
+def resolve_orchestrator_state_dir(
+    env_path: Path | None = None,
+    project_root: Path | None = None,
+) -> Path:
+    """Resolve orchestrator local state directory (WebAuthn creds, artifact DB, etc.)."""
+    resolved_env = env_path if env_path is not None else get_project_env_path()
+    state_dir = read_env_optional("ORCHESTRATOR_STATE_DIR", env_path=resolved_env)
+    if state_dir:
+        path = Path(state_dir.strip())
+        if not path.is_absolute():
+            path = (resolved_env.parent / path).resolve()
+        else:
+            path = path.resolve()
+        return path
+    if project_root is not None:
+        return (project_root / ".orchestrator-state").resolve()
+    return (resolved_env.parent / ".orchestrator-state").resolve()
+
+
 def resolve_artifact_db_path(
     env_path: Path | None = None,
     project_root: Path | None = None,

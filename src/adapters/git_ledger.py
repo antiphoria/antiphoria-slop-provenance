@@ -15,7 +15,7 @@ from pathlib import Path
 import pygit2
 from filelock import FileLock
 
-from src.artifact_serialization import render_artifact_markdown
+from src.envelope_v2 import EnvelopeSidecars, generation_context_for_source, render_artifact_markdown_wire
 from src.domain.events import EventBusPort, StoryCommitted, StorySigned
 from src.env_config import read_env_bool, read_env_optional
 from src.lock_paths import build_repo_ref_lock_path
@@ -59,7 +59,7 @@ class GitLedgerAdapter:
         self._open_repository(self._repository_path)
         self._enable_c2pa = read_env_bool(
             "ENABLE_C2PA",
-            default=False,
+            default=True,
             env_path=self._env_path,
         )
 
@@ -199,7 +199,21 @@ class GitLedgerAdapter:
 
     def _render_markdown(self, event: StorySigned) -> str:
         """Render artifact markdown with strict frontmatter schema. No PEM footers."""
-        return render_artifact_markdown(event.artifact, event.body)
+        sidecars = EnvelopeSidecars(
+            c2pa=f"{event.request_id}.c2pa" if event.c2pa_manifest_bytes_b64 else None,
+            process_narrative=(
+                f"{event.request_id}.process.json"
+                if event.process_narrative_bytes_b64
+                else None
+            ),
+        )
+        return render_artifact_markdown_wire(
+            event.artifact,
+            event.body,
+            ledger_request_id=str(event.request_id),
+            sidecars=sidecars,
+            env_path=self._env_path,
+        )
 
     def _resolve_commit_signature(self, repo: pygit2.Repository) -> pygit2.Signature:
         """Resolve git author/committer signature.

@@ -33,8 +33,8 @@ CeremonyMode = Literal["create", "get"]
 PLATFORM_RP_ID = "localhost"
 _BRIDGE_TOKEN_HEADER = "X-Bridge-Token"  # noqa: S105
 _BRIDGE_CSP = (
-    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
-    "base-uri 'none'; form-action 'none'"
+    "default-src 'none'; connect-src 'self'; script-src 'unsafe-inline'; "
+    "style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
 )
 _DEFAULT_TIMEOUT_SEC = 60.0
 _MAX_PORT_TRIES = 10
@@ -431,7 +431,7 @@ def register_credential_platform(
     if not _resolve_rp_id(env_path):
         return False
 
-    cred_path = _get_credentials_path(repo_path)
+    cred_path = _get_credentials_path(env_path=env_path, repo_path=repo_path)
     if cred_path.exists():
         stored = _load_credentials(cred_path)
         if stored.get("credential_id"):
@@ -480,7 +480,7 @@ def get_assertion_platform(
     if not _resolve_rp_id(env_path):
         return None
 
-    credentials_path = _get_credentials_path(repo_path)
+    credentials_path = _get_credentials_path(env_path=env_path, repo_path=repo_path)
     stored = _load_credentials(credentials_path)
     cred_id = stored.get("credential_id")
     if not cred_id:

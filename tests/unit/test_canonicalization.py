@@ -63,3 +63,11 @@ def test_canonicalize_body_roundtrip() -> None:
 
 def test_version_constant() -> None:
     assert CANONICALIZATION_VERSION == "eternity.canonicalization.v1"
+
+
+def test_parsed_payload_strip_differs_from_raw_utf8_for_ots() -> None:
+    """parse_artifact_markdown_text strips payload; OTS must use canonical bytes."""
+    body = "hello world\n"
+    parsed_payload = body.strip()
+    assert parsed_payload.encode("utf-8") != canonicalize_body_for_hash(parsed_payload)
+    assert canonicalize_body_for_hash(parsed_payload) == canonicalize_body_for_hash(body)

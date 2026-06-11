@@ -156,6 +156,17 @@ slop-cli timestamp --file ../my-ledger/<request_id>.md --repo-path ../my-ledger 
 slop-cli audit --file ../my-ledger/<request_id>.md --repo-path ../my-ledger --tsa-ca-cert-path ./keys/tsa-ca.pem --report-file ./audit_report.json
 ```
 
+### Catalog (human lookup index)
+
+The archive stores a derived catalog at `.provenance/catalog.jsonl` on `main`. It is updated automatically after each commit and can be rebuilt from artifact branches.
+
+```bash
+slop-cli catalog list --repo-path ../my-ledger
+slop-cli catalog list --repo-path ../my-ledger --source human --limit 20
+slop-cli catalog show --repo-path ../my-ledger --request-id <request_id>
+slop-cli catalog index --repo-path ../my-ledger
+```
+
 ## C2PA
 
 When `ENABLE_C2PA=true`, the pipeline emits `.c2pa` sidecars and binds their hash into the ML-DSA signing target. See [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for MVP vs SDK mode and design caveats.

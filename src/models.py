@@ -127,7 +127,7 @@ class WebAuthnAttestation(StrictModel):
     fmt: str = Field(min_length=1)
 
 
-AttestationStrength: TypeAlias = Literal["webauthn", "legacy", "unattended"]
+AttestationStrength: TypeAlias = Literal["webauthn", "none", "unattended"]
 
 
 class VerificationAnchor(StrictModel):

@@ -24,10 +24,10 @@ from cryptography.hazmat.primitives.serialization import (
 
 from src import cli
 from src.adapters.git_ledger import GitLedgerAdapter
-from src.artifact_serialization import render_artifact_markdown
 from src.canonicalization import compute_payload_hash
 from src.commands.pipeline import _load_process_narrative
 from src.domain.events import StorySigned, StorySyntheticSealed
+from src.envelope_v2 import render_artifact_markdown_wire
 from src.infrastructure.event_bus import InMemoryEventBus
 from src.models import (
     Artifact,
@@ -36,12 +36,19 @@ from src.models import (
     GenerationContext,
     Hyperparameters,
     Provenance,
+    RegistrationCeremony,
     SignatureBlock,
     VerificationAnchor,
     canonical_json_bytes,
     sha256_hex,
 )
 from src.parsing import parse_artifact_markdown_text
+from tests.support.stack_test_env import configure_minimal_ceremony_stack_env
+from tests.support.v2_envelope_fixtures import (
+    enrich_provenance_for_v2_wire,
+    sample_registration_ceremony,
+    sample_synthetic_attestation,
+)
 
 
 def _build_synthetic_story_signed_event(
@@ -52,6 +59,8 @@ def _build_synthetic_story_signed_event(
     models_used: list[str] | None = None,
     process_narrative_hash: str | None = None,
     process_narrative_bytes_b64: str | None = None,
+    attestation: AuthorAttestation | None = None,
+    registration_ceremony: RegistrationCeremony | None = None,
 ) -> StorySigned:
     """Build StorySigned with source=synthetic and seal metadata."""
 
@@ -64,33 +73,26 @@ def _build_synthetic_story_signed_event(
         timestamp=datetime.now(UTC),
         contentType="text/markdown",
         license="CC0-1.0",
-        provenance=Provenance(
-            source="synthetic",
-            engineVersion="antiphoria-slop-provenance-v1.0.0",
-            modelId=model_id,
-            provenanceGrade="declared",
-            modelsUsed=models_used,
-            processNarrativeHash=process_narrative_hash,
-            generationContext=GenerationContext(
-                systemInstruction="Machine-generated. Orchestrator declaration only.",
-                prompt="N/A",
-                hyperparameters=Hyperparameters(
-                    temperature=0.0,
-                    topP=1.0,
-                    topK=0,
+        provenance=enrich_provenance_for_v2_wire(
+            Provenance(
+                source="synthetic",
+                engineVersion="antiphoria-slop-provenance-v1.0.0",
+                modelId=model_id,
+                provenanceGrade="declared",
+                modelsUsed=models_used,
+                processNarrativeHash=process_narrative_hash,
+                generationContext=GenerationContext(
+                    systemInstruction="Machine-generated. Orchestrator declaration only.",
+                    prompt="N/A",
+                    hyperparameters=Hyperparameters(
+                        temperature=0.0,
+                        topP=1.0,
+                        topK=0,
+                    ),
                 ),
-            ),
-            authorAttestation=AuthorAttestation(
-                attestationNature="orchestration-declaration",
-                attestationMode="interactive",
-                classification="fiction",
-                attestations=[
-                    AttestationQa(question="Q1?", answer="y"),
-                    AttestationQa(question="Q2?", answer="y"),
-                    AttestationQa(question="Q3?", answer="y"),
-                    AttestationQa(question="Q4?", answer="y"),
-                ],
-            ),
+                authorAttestation=attestation or sample_synthetic_attestation(),
+                registrationCeremony=registration_ceremony or sample_registration_ceremony(),
+            )
         ),
         signature=SignatureBlock(
             artifactHash=artifact_hash,
@@ -130,9 +132,9 @@ class SealCliTest(unittest.IsolatedAsyncioTestCase):
                 encryption_algorithm=NoEncryption(),
             )
         )
-        os.environ["ENABLE_OTS_FORGE"] = "false"
         os.environ["PQC_PRIVATE_KEY_PATH"] = str(pqc_private_key_path)
         os.environ["ED25519_PRIVATE_KEY_PATH"] = str(ed25519_private_key_path)
+        configure_minimal_ceremony_stack_env(key_dir)
 
     def tearDown(self) -> None:
         if self._old_enable_ots is None:
@@ -191,6 +193,8 @@ class SealCliTest(unittest.IsolatedAsyncioTestCase):
                         body=event.body,
                         title=event.title,
                         models_used=event.models_used,
+                        attestation=event.attestation,
+                        registration_ceremony=event.registration_ceremony,
                     )
                     await self._event_bus.emit(signed)
 
@@ -267,10 +271,11 @@ class SealCliTest(unittest.IsolatedAsyncioTestCase):
         sidecar_text = bytes(sidecar_blob.data).decode("utf-8")
 
         self.assertIn('source: "synthetic"', markdown_text)
-        self.assertIn('license: "CC0-1.0"', markdown_text)
+        self.assertIn('profile: "antiphoria.seal.v1"', markdown_text)
+        self.assertIn('policyId: "CC0-1.0"', markdown_text)
         self.assertIn('provenanceGrade: "declared"', markdown_text)
-        self.assertIn('attestationNature: "orchestration-declaration"', markdown_text)
-        self.assertIn(f'processNarrativeHash: "{narrative_hash}"', markdown_text)
+        self.assertIn('speechAct: "orchestration-declaration"', markdown_text)
+        self.assertIn(f'contentHash: "{narrative_hash}"', markdown_text)
         self.assertIn('"verified":false', sidecar_text)
 
         envelope, payload = parse_artifact_markdown_text(markdown_text)
@@ -289,22 +294,26 @@ class SealCliTest(unittest.IsolatedAsyncioTestCase):
             timestamp=datetime.now(UTC),
             contentType="text/markdown",
             license="CC0-1.0",
-            provenance=Provenance(
-                source="synthetic",
-                engineVersion="antiphoria-slop-provenance-v1.0.0",
-                modelId="composite",
-                provenanceGrade="declared",
-                modelsUsed=["gemini-3.1-pro", "composer-2.5"],
-                processNarrativeHash=narrative_hash,
-                generationContext=GenerationContext(
-                    systemInstruction="Machine-generated. Orchestrator declaration only.",
-                    prompt="N/A",
-                    hyperparameters=Hyperparameters(
-                        temperature=0.0,
-                        topP=1.0,
-                        topK=0,
+            provenance=enrich_provenance_for_v2_wire(
+                Provenance(
+                    source="synthetic",
+                    engineVersion="antiphoria-slop-provenance-v1.0.0",
+                    modelId="composite",
+                    provenanceGrade="declared",
+                    modelsUsed=["gemini-3.1-pro", "composer-2.5"],
+                    processNarrativeHash=narrative_hash,
+                    generationContext=GenerationContext(
+                        systemInstruction="Machine-generated. Orchestrator declaration only.",
+                        prompt="N/A",
+                        hyperparameters=Hyperparameters(
+                            temperature=0.0,
+                            topP=1.0,
+                            topK=0,
+                        ),
                     ),
-                ),
+                    authorAttestation=sample_synthetic_attestation(),
+                    registrationCeremony=sample_registration_ceremony(),
+                )
             ),
             signature=SignatureBlock(
                 artifactHash=artifact_hash,
@@ -312,7 +321,11 @@ class SealCliTest(unittest.IsolatedAsyncioTestCase):
                 verificationAnchor=VerificationAnchor(signerFingerprint="test-fingerprint"),
             ),
         )
-        markdown_text = render_artifact_markdown(artifact, body)
+        markdown_text = render_artifact_markdown_wire(
+            artifact,
+            body,
+            ledger_request_id=str(uuid4()),
+        )
         envelope, payload = parse_artifact_markdown_text(markdown_text)
         self.assertEqual(envelope.provenance.provenance_grade, "declared")
         self.assertEqual(

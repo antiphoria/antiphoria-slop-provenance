@@ -88,7 +88,7 @@ def build_provenance_services(
     )
     key_registry = KeyRegistryAdapter(store=repository.keys)
     ots_adapter: OTSAdapter | None = None
-    if read_env_bool("ENABLE_OTS_FORGE", default=False, env_path=resolved_env):
+    if read_env_bool("ENABLE_OTS_FORGE", default=True, env_path=resolved_env):
         ots_adapter = OTSAdapter(ots_bin=resolve_ots_binary(env_path=resolved_env))
     provenance_service = ProvenanceService(
         transparency_store=repository.transparency,

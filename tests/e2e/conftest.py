@@ -82,6 +82,8 @@ def isolated_env(tmp_path: Path):
     )
 
     artifact_db = state_dir / "artifacts.db"
+    tsa_ca = tmp_path / "tsa-ca.pem"
+    tsa_ca.write_bytes(b"-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n")
     env = os.environ.copy()
     if os.getenv(_OQS_STUB_DISABLE_ENV) != "1":
         oqs_stub_path = Path(__file__).resolve().parents[1] / "stubs"
@@ -96,7 +98,8 @@ def isolated_env(tmp_path: Path):
             "ENABLE_OTS_FORGE": "false",
             "ENABLE_C2PA": "false",
             "TRANSPARENCY_LOG_PUBLISH_URL": "",
-            "RFC3161_TSA_URL": "",
+            "RFC3161_TSA_URL": "http://timestamp.digicert.com",
+            "RFC3161_CA_CERT_PATH": str(tsa_ca),
             "PQC_PRIVATE_KEY_PATH": (str(priv_path) if priv_path.exists() else ""),
             "OQS_PUBLIC_KEY_PATH": str(pub_path) if pub_path.exists() else "",
             "C2PA_PRIVATE_KEY_PATH": "",
