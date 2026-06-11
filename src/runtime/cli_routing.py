@@ -14,6 +14,7 @@ async def dispatch_command(
     async_handlers: dict[str, AsyncCommandHandler],
     sync_handlers: dict[str, SyncCommandHandler],
     admin_handlers: dict[str, SyncCommandHandler],
+    catalog_handlers: dict[str, SyncCommandHandler],
 ) -> int:
     """Dispatch one parsed command using handler maps."""
 
@@ -28,4 +29,9 @@ async def dispatch_command(
         if admin_handler is None:
             raise RuntimeError(f"Unsupported admin command: {args.admin_command}")
         return admin_handler(args)
+    if args.command == "catalog":
+        catalog_handler = catalog_handlers.get(args.catalog_command)
+        if catalog_handler is None:
+            raise RuntimeError(f"Unsupported catalog command: {args.catalog_command}")
+        return catalog_handler(args)
     raise RuntimeError(f"Unsupported command: {args.command}")

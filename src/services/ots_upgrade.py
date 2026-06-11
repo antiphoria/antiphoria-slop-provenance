@@ -159,11 +159,6 @@ async def process_single_ots_record(
                     final_ots_bytes,
                     commit_message,
                 )
-            # 1b. Sync working directory so pygit2 commit is visible on disk
-            ots_full_path = repository_path / ots_path
-            ots_full_path.parent.mkdir(parents=True, exist_ok=True)
-            ots_full_path.write_bytes(final_ots_bytes)
-
             # 2. Append-Only Merkle Chain + mirror to SQLite (skip if already done)
             if not transparency_store.has_transparency_log_record(record.artifact_hash):
                 entry = await asyncio.to_thread(

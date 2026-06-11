@@ -27,27 +27,36 @@ from src.domain.events import StoryHumanRegistered, StorySigned
 from src.infrastructure.event_bus import InMemoryEventBus
 from src.models import (
     Artifact,
+    AuthorAttestation,
     GenerationContext,
     Hyperparameters,
     Provenance,
+    RegistrationCeremony,
     SignatureBlock,
     VerificationAnchor,
 )
 from src.parsing import parse_artifact_markdown_text
+from tests.support.stack_test_env import configure_minimal_ceremony_stack_env
+from tests.support.v2_envelope_fixtures import (
+    enrich_provenance_for_v2_wire,
+    sample_human_attestation,
+    sample_registration_ceremony,
+)
 
 
 def _build_human_story_signed_event(
-    request_id: UUID, body: str, title: str = "Human Authored Story"
+    request_id: UUID,
+    body: str,
+    title: str = "Human Authored Story",
+    *,
+    attestation: AuthorAttestation | None = None,
+    registration_ceremony: RegistrationCeremony | None = None,
 ) -> StorySigned:
     """Build StorySigned with source=human and sentinel provenance."""
 
     artifact_hash = compute_payload_hash(body)
-    artifact = Artifact(
-        title=title,
-        timestamp=datetime.now(UTC),
-        contentType="text/markdown",
-        license="ARR",
-        provenance=Provenance(
+    provenance = enrich_provenance_for_v2_wire(
+        Provenance(
             source="human",
             engineVersion="antiphoria-slop-provenance-v1.0.0",
             modelId="human",
@@ -60,7 +69,16 @@ def _build_human_story_signed_event(
                     topK=0,
                 ),
             ),
-        ),
+            authorAttestation=attestation or sample_human_attestation(),
+            registrationCeremony=registration_ceremony or sample_registration_ceremony(),
+        )
+    )
+    artifact = Artifact(
+        title=title,
+        timestamp=datetime.now(UTC),
+        contentType="text/markdown",
+        license="ARR",
+        provenance=provenance,
         signature=SignatureBlock(
             artifactHash=artifact_hash,
             cryptographicSignature="ZmFrZS1zaWduYXR1cmU=",
@@ -97,9 +115,9 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
                 encryption_algorithm=NoEncryption(),
             )
         )
-        os.environ["ENABLE_OTS_FORGE"] = "false"
         os.environ["PQC_PRIVATE_KEY_PATH"] = str(pqc_private_key_path)
         os.environ["ED25519_PRIVATE_KEY_PATH"] = str(ed25519_private_key_path)
+        configure_minimal_ceremony_stack_env(key_dir)
 
     def tearDown(self) -> None:
         if self._old_enable_ots is None:
@@ -137,12 +155,12 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
         markdown_text = bytes(blob.data).decode("utf-8")
 
         self.assertIn('source: "human"', markdown_text)
-        self.assertIn('modelId: "human"', markdown_text)
-        self.assertIn("Human-authored. No AI generation.", markdown_text)
-        self.assertIn("usageMetrics: null", markdown_text)
-        self.assertIn("embeddedWatermark: null", markdown_text)
-        self.assertIn("authorAttestation: null", markdown_text)
-        self.assertIn("registrationCeremony: null", markdown_text)
+        self.assertIn('profile: "antiphoria.register.v1"', markdown_text)
+        self.assertIn('schemaVersion: "eternity.v2"', markdown_text)
+        self.assertIn("antiphoria:", markdown_text)
+        self.assertNotIn("synthesis:", markdown_text)
+        self.assertNotIn(": null", markdown_text)
+        self.assertNotIn("generationContext:", markdown_text)
 
         envelope, payload = parse_artifact_markdown_text(markdown_text)
         self.assertEqual(envelope.provenance.source, "human")
@@ -168,6 +186,8 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
                     request_id=event.request_id,
                     body=event.body,
                     title=event.title,
+                    attestation=event.attestation,
+                    registration_ceremony=event.registration_ceremony,
                 )
                 await self._event_bus.emit(signed)
 
@@ -208,7 +228,7 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
             markdown_text = bytes(blob.data).decode("utf-8")
 
             self.assertIn('source: "human"', markdown_text)
-            self.assertIn('modelId: "human"', markdown_text)
+            self.assertIn('profile: "antiphoria.register.v1"', markdown_text)
             self.assertIn("My Human Story", markdown_text)
 
             # Attest passes (patch verifier to accept fake signature; skip remote anchor
@@ -254,7 +274,7 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
             artifact_path.unlink(missing_ok=True)
 
     async def test_register_non_interactive_skips_wizard(self) -> None:
-        """With --non-interactive, input() is never called."""
+        """With --non-interactive, input() is never called and attestation is unattended."""
 
         markdown_content = "Human-only content."
         with tempfile.NamedTemporaryFile(
@@ -263,16 +283,21 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
             f.write(markdown_content)
             artifact_path = Path(f.name)
 
+        captured: list[StoryHumanRegistered] = []
+
         try:
             with patch("builtins.input") as mock_input:
 
                 async def _fake_on_story_human_registered(
                     self: object, event: StoryHumanRegistered
                 ) -> None:
+                    captured.append(event)
                     signed = _build_human_story_signed_event(
                         request_id=event.request_id,
                         body=event.body,
                         title=event.title,
+                        attestation=event.attestation,
+                        registration_ceremony=event.registration_ceremony,
                     )
                     await self._event_bus.emit(signed)
 
@@ -298,5 +323,11 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(exit_code, 0)
                 mock_input.assert_not_called()
+                self.assertEqual(len(captured), 1)
+                att = captured[0].attestation
+                self.assertEqual(att.attestation_mode, "unattended")
+                self.assertEqual(att.attestation_nature, "self-declaration")
+                self.assertIsNone(att.classification)
+                self.assertEqual(att.attestations, [])
         finally:
             artifact_path.unlink(missing_ok=True)

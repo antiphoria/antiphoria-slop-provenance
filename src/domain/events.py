@@ -75,6 +75,8 @@ class StorySigned(BaseModel):
     c2pa_manifest_hash: str | None = None
     c2pa_manifest_bytes_b64: str | None = None
     c2pa_manifest_bytes_ref: str | None = None
+    process_narrative_hash: str | None = None
+    process_narrative_bytes_b64: str | None = None
     signed_at: datetime = Field(default_factory=_utc_now)
 
 
@@ -163,6 +165,29 @@ class StoryHumanRegistered(BaseModel):
     registration_ceremony: RegistrationCeremony | None = None
 
 
+class StorySyntheticSealed(BaseModel):
+    """Event emitted when externally produced LLM content is sealed."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    request_id: UUID = Field(default_factory=uuid4)
+    event_version: str = Field(default="v1")
+    body: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    license: str = Field(min_length=1, default="CC0-1.0")
+    models_used: list[str] = Field(default_factory=list, max_length=64)
+    attestation: AuthorAttestation
+    webauthn_attestation: WebAuthnAttestation | None = None
+    registration_ceremony: RegistrationCeremony | None = None
+    process_narrative_bytes: bytes | None = None
+    process_narrative_hash: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[a-fA-F0-9]{64}$",
+    )
+
+
 class EventHandlerError(BaseModel):
     """Structured payload emitted when an event handler fails."""
 
@@ -208,5 +233,6 @@ __all__ = [
     "StoryHumanRegistered",
     "StoryRequested",
     "StorySigned",
+    "StorySyntheticSealed",
     "StoryTimestamped",
 ]

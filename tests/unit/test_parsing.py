@@ -139,6 +139,16 @@ def test_parse_artifact_markdown_file_not_found(tmp_path: Path) -> None:
         parse_artifact_markdown(missing)
 
 
+def test_parse_v1_fixture_regression() -> None:
+    """Legacy eternity.v1 fixtures still parse through dispatch."""
+    fixture_path = Path(__file__).resolve().parents[1] / "fixtures" / "valid_artifact.md"
+    text = fixture_path.read_text(encoding="utf-8")
+    envelope, payload = parse_artifact_markdown_text(text)
+    assert envelope.schema_version == "eternity.v1"
+    assert envelope.provenance.source == "synthetic"
+    assert "DUMMY INCIDENT" in payload
+
+
 def test_parse_artifact_markdown_from_file(tmp_path: Path) -> None:
     """parse_artifact_markdown reads from file and returns envelope and body."""
     body = "File content."

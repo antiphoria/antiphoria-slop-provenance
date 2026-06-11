@@ -22,6 +22,8 @@ import pygit2
 from filelock import FileLock
 
 from src.env_config import read_env_optional
+from src.git_tree_utils import commit_tree_file, ensure_branch_exists
+from src.lock_paths import build_repo_ref_lock_path
 from src.repository.types import OtsForgeRecord, OtsForgeStatus
 
 _logger = logging.getLogger(__name__)
@@ -74,8 +76,8 @@ class OtsQueueAdapter:
         """Read current queue content from the branch, or empty if branch/file missing."""
         try:
             ref = repo.lookup_reference(self._queue_ref)
-            commit = repo[ref.target]
-        except (KeyError, pygit2.GitError):
+            commit = ref.peel(pygit2.Commit)
+        except (KeyError, pygit2.GitError, ValueError):
             return ""
         if not isinstance(commit, pygit2.Commit):
             return ""
@@ -93,24 +95,14 @@ class OtsQueueAdapter:
         return ""
 
     def _ensure_branch_exists(self, repo: pygit2.Repository) -> None:
-        """Create branch with empty commit if it does not exist."""
-        try:
-            repo.lookup_reference(self._queue_ref)
-            return
-        except (KeyError, pygit2.GitError):
-            pass
-        builder = repo.TreeBuilder()
-        tree_oid = builder.write()
         sig = self._resolve_commit_signature(repo)
-        repo.create_commit(
+        if ensure_branch_exists(
+            repo,
             self._queue_ref,
             sig,
-            sig,
-            "provenance: init ots-queue",
-            tree_oid,
-            [],
-        )
-        _logger.info("Created branch %s for OTS queue", self._queue_ref)
+            "provenance: init ots-queue branch",
+        ):
+            _logger.info("Created branch %s for OTS queue", self._queue_ref)
 
     @staticmethod
     def _validate_jsonl(content: str) -> None:
@@ -133,49 +125,20 @@ class OtsQueueAdapter:
         """Commit queue content to the branch."""
         self._validate_jsonl(content)
         self._ensure_branch_exists(repo)
-        ref = repo.lookup_reference(self._queue_ref)
-        parent = repo[ref.target]
-        if not isinstance(parent, pygit2.Commit):
-            raise RuntimeError(f"Branch {self._queue_ref} does not point to a commit.")
-        path_parts = Path(_QUEUE_RELATIVE_PATH).parts
-        blob_oid = repo.create_blob(content.encode("utf-8"))
-        current_tree: pygit2.Tree | None = parent.tree
-        tree_stack: list[pygit2.Tree | None] = [current_tree]
-        for part in path_parts[:-1]:
-            if current_tree is not None and part in current_tree:
-                entry = current_tree[part]
-                current_tree = repo[entry.id]
-                if not isinstance(current_tree, pygit2.Tree):
-                    raise RuntimeError(f"Path part '{part}' is not a directory.")
-            else:
-                current_tree = None
-            tree_stack.append(current_tree)
-        current_oid = blob_oid
-        current_mode = pygit2.GIT_FILEMODE_BLOB
-        for i, part in reversed(list(enumerate(path_parts))):
-            tb = (
-                repo.TreeBuilder(tree_stack[i]) if tree_stack[i] is not None else repo.TreeBuilder()
-            )
-            tb.insert(part, current_oid, current_mode)
-            current_oid = tb.write()
-            current_mode = pygit2.GIT_FILEMODE_TREE
-        if current_oid == parent.tree_id:
-            return
         sig = self._resolve_commit_signature(repo)
-        repo.create_commit(
+        commit_tree_file(
+            repo,
             self._queue_ref,
-            sig,
-            sig,
+            _QUEUE_RELATIVE_PATH,
+            content.encode("utf-8"),
             message,
-            current_oid,
-            [parent.id],
+            sig,
         )
 
     def _append_event(self, new_line: str, commit_message: str) -> None:
         """Append one JSONL event line under lock and commit it."""
 
-        lock_path = Path(str(self._queue_path) + ".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = build_repo_ref_lock_path(self._repository_path, self._queue_ref)
         with FileLock(lock_path):
             repo = self._open_repository()
             content = self._read_current_content(repo)

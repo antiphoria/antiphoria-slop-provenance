@@ -666,20 +666,36 @@ def _run_build_inclusion_proof_command(args: argparse.Namespace) -> int:
 
 def _run_webauthn_register_command(args: argparse.Namespace) -> int:
     """Register a WebAuthn credential for author attestation."""
-    from src.webauthn_attestation import register_webauthn_credential
+    from src.webauthn_attestation import get_webauthn_provider, register_webauthn_credential
+    from src.webauthn_bridge import WebAuthnAlreadyRegisteredError
 
     repository_path = _require_repo_path(args)
     env_path = get_project_env_path()
-    print("Insert your security key and touch it to register...")
-    if register_webauthn_credential(
-        repo_path=repository_path,
-        env_path=env_path,
-    ):
+    if get_webauthn_provider(env_path=env_path) == "platform":
+        print("Opening browser for Touch ID registration...")
+    else:
+        print("Insert your security key and touch it to register...")
+    try:
+        registered = register_webauthn_credential(
+            repo_path=repository_path,
+            env_path=env_path,
+        )
+    except WebAuthnAlreadyRegisteredError as exc:
+        print(str(exc))
+        return 1
+    if registered:
         print("WebAuthn credential registered successfully.")
         return 0
-    print(
-        "WebAuthn registration failed. Set WEBAUTHN_RP_ID to your production domain "
-        "(e.g. antiphoria-archive.com), ensure fido2 is installed (pip install fido2), "
-        "and a FIDO2 device is connected."
-    )
+    if get_webauthn_provider(env_path=env_path) == "platform":
+        print(
+            "WebAuthn registration failed. Set WEBAUTHN_RP_ID (any non-empty value), "
+            "WEBAUTHN_PROVIDER=platform, approve Touch ID in the browser, and serve "
+            "over http://localhost (not file://)."
+        )
+    else:
+        print(
+            "WebAuthn registration failed. Set WEBAUTHN_RP_ID to your production domain "
+            "(e.g. antiphoria-archive.com), ensure fido2 is installed (pip install fido2), "
+            "and a FIDO2 device is connected."
+        )
     return 1

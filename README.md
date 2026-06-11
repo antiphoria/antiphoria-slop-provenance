@@ -28,6 +28,7 @@ Use of this software is subject to [docs/TERMS_OF_USE.md](docs/TERMS_OF_USE.md) 
 - Signs artifacts with ML-DSA (`liboqs`) and Ed25519.
 - Commits signed markdown artifacts into a git ledger.
 - Optionally anchors artifact hashes into a transparency log and requests RFC3161 timestamps.
+- Supports human-only registration with optional WebAuthn (Touch ID / FIDO2) and operator pseudonym continuity.
 - Produces machine-readable provenance audit reports.
 
 ## Installation
@@ -42,6 +43,8 @@ pip install -e ".[dev]"
 Runtime-only (no test extras): `pip install -e .`
 
 Optional OpenTimestamps: `pip install -e ".[ots]"`
+
+Optional WebAuthn (USB FIDO2 or macOS Touch ID bridge): `pip install -e ".[webauthn]"`
 
 ## Environment
 
@@ -87,8 +90,44 @@ slop-cli curate --file ../my-ledger/<request_id>.md --repo-path ../my-ledger
 
 ### Human-only registration
 
+Register self-declared human markdown (no AI generation). Interactive mode runs a self-declaration wizard; optional Touch ID / FIDO2 WebAuthn and operator pseudonym continuity are configured in `.env`. See [docs/QUICKSTART.md](docs/QUICKSTART.md) Track C.
+
+```bash
+# One-time Touch ID / passkey enrollment (macOS platform provider)
+slop-cli webauthn-register --repo-path ../my-ledger
+
+# Register plain markdown (interactive wizard + optional WebAuthn)
+slop-cli register --file ../my-ledger/human-story.md --repo-path ../my-ledger
+```
+
+CI / automation (skips wizard; no Q&A captured, `attestationMode: unattended`):
+
 ```bash
 slop-cli register --file ../my-ledger/human-story.md --repo-path ../my-ledger --non-interactive
+```
+
+Skip WebAuthn only: add `--no-webauthn`.
+
+### Seal LLM-only content
+
+Seal externally produced machine text with an orchestration declaration (human orchestrator, not author). Default license is CC0-1.0. Use a separate ledger repo from human-only `register` artifacts when publishing to an LLM research journal.
+
+```bash
+# Seal with interactive orchestration declaration wizard
+slop-cli seal --file ../my-ledger/llm-research.md --repo-path ../my-ledger-llm
+
+# Optional: attach unverified process narrative (stored as {request_id}.process.json)
+slop-cli seal \
+  --file ../my-ledger/llm-research.md \
+  --process-file ./run-narrative.json \
+  --models gemini-3.1-pro,composer-2.5 \
+  --repo-path ../my-ledger-llm
+```
+
+CI / automation (skips wizard; `provenanceGrade: unattended`):
+
+```bash
+slop-cli seal --file ../my-ledger/llm-research.md --repo-path ../my-ledger-llm --non-interactive
 ```
 
 ### Strict attestation (RFC3161)
@@ -115,6 +154,17 @@ slop-cli verify --file ../my-ledger/<request_id>.md
 slop-cli anchor --file ../my-ledger/<request_id>.md --repo-path ../my-ledger
 slop-cli timestamp --file ../my-ledger/<request_id>.md --repo-path ../my-ledger --tsa-url https://freetsa.org/tsr --tsa-ca-cert-path ./keys/tsa-ca.pem
 slop-cli audit --file ../my-ledger/<request_id>.md --repo-path ../my-ledger --tsa-ca-cert-path ./keys/tsa-ca.pem --report-file ./audit_report.json
+```
+
+### Catalog (human lookup index)
+
+The archive stores a derived catalog at `.provenance/catalog.jsonl` on `main`. It is updated automatically after each commit and can be rebuilt from artifact branches.
+
+```bash
+slop-cli catalog list --repo-path ../my-ledger
+slop-cli catalog list --repo-path ../my-ledger --source human --limit 20
+slop-cli catalog show --repo-path ../my-ledger --request-id <request_id>
+slop-cli catalog index --repo-path ../my-ledger
 ```
 
 ## C2PA

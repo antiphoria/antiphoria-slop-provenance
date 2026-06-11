@@ -288,7 +288,13 @@ def _attestation_verdict(
     )
     timestamp_failure = not (report.timestamp_found and report.timestamp_valid)
     c2pa_failure = strict_c2pa and not (report.c2pa_present and report.c2pa_valid)
-    if critical_failure or c2pa_failure or (strict and timestamp_failure):
+    stack_failure = False
+    if strict:
+        if not report.unattended_ceremony and not report.webauthn_present:
+            stack_failure = True
+        if not report.ots_sidecar_declared or not report.ots_blob_present:
+            stack_failure = True
+    if critical_failure or c2pa_failure or (strict and timestamp_failure) or stack_failure:
         return "FAIL", 1
     if timestamp_failure:
         return "WARN", 0

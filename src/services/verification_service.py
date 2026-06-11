@@ -16,6 +16,7 @@ from src.adapters.c2pa_manifest import (
     build_c2pa_validation_payload,
     validate_c2pa_sidecar,
 )
+from src.adapters.catalog import CatalogAdapter
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.ots_adapter import OTSAdapter
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
@@ -23,7 +24,8 @@ from src.adapters.transparency_log import (
     TransparencyLogAdapter,
     TransparencyLogEntry,
 )
-from src.canonicalization import compute_payload_hash
+from src.canonicalization import canonicalize_body_for_hash, compute_payload_hash
+from src.envelope_v2 import parse_sidecars_from_markdown
 from src.git_tree_utils import tree_get_blob
 from src.logging_config import bind_log_context, get_log_extra, should_log_route
 from src.models import Artifact, sha256_hex
@@ -62,6 +64,10 @@ class AuditReport:
     ledger_path: str | None = None
     ots_forged: bool = False
     bitcoin_block_height: int | None = None
+    unattended_ceremony: bool = False
+    webauthn_present: bool = False
+    ots_sidecar_declared: bool = False
+    ots_blob_present: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Convert report dataclass to serializable dictionary."""
@@ -438,6 +444,22 @@ class VerificationService:
                 request_id=str(request_id),
                 payload=payload,
             )
+            catalog_errors = self._catalog_source_errors(
+                repository_path=repository_path,
+                request_id=str(request_id),
+                envelope_source=envelope.provenance.source,
+            )
+            sidecars = parse_sidecars_from_markdown(markdown_text)
+            unattended_ceremony = envelope.provenance.provenance_grade == "unattended" or (
+                envelope.provenance.author_attestation is not None
+                and envelope.provenance.author_attestation.attestation_mode == "unattended"
+            )
+            webauthn_present = envelope.provenance.webauthn_attestation is not None
+            ots_sidecar_declared = sidecars.ots is not None
+            ots_blob_present = (
+                sidecars.ots is not None
+                and tree_get_blob(repo, commit_obj.tree, sidecars.ots) is not None
+            )
             report = self._build_audit_report(
                 envelope=envelope,
                 payload=payload,
@@ -455,6 +477,11 @@ class VerificationService:
                 ledger_path=ledger_path,
                 ots_forged=ots_forged,
                 bitcoin_block_height=bitcoin_block_height,
+                extra_errors=catalog_errors,
+                unattended_ceremony=unattended_ceremony,
+                webauthn_present=webauthn_present,
+                ots_sidecar_declared=ots_sidecar_declared,
+                ots_blob_present=ots_blob_present,
             )
         except (RuntimeError, KeyError, ValueError, FileNotFoundError, OSError) as exc:
             report = self._build_error_report(
@@ -488,7 +515,7 @@ class VerificationService:
         if not ots_bytes:
             return False, None
         return self._ots_adapter.verify_ots_proof(
-            payload_bytes=payload.encode("utf-8"),
+            payload_bytes=canonicalize_body_for_hash(payload),
             ots_bytes=ots_bytes,
         )
 
@@ -509,9 +536,39 @@ class VerificationService:
         if not ots_bytes:
             return False, None
         return self._ots_adapter.verify_ots_proof(
-            payload_bytes=payload.encode("utf-8"),
+            payload_bytes=canonicalize_body_for_hash(payload),
             ots_bytes=ots_bytes,
         )
+
+    def _catalog_source_errors(
+        self,
+        repository_path: Path,
+        request_id: str,
+        envelope_source: str,
+    ) -> list[str]:
+        """Return errors when catalog row source disagrees with envelope claim."""
+
+        try:
+            adapter = CatalogAdapter(
+                repository_path=repository_path,
+                env_path=self._env_path,
+            )
+            row = next(
+                (
+                    entry
+                    for entry in adapter.read_entries()
+                    if str(entry.get("requestId")) == request_id
+                ),
+                None,
+            )
+        except (RuntimeError, OSError, KeyError):
+            return []
+        if row is None:
+            return []
+        catalog_source = row.get("source")
+        if catalog_source != envelope_source:
+            return [f"Catalog source '{catalog_source}' != envelope source '{envelope_source}'."]
+        return []
 
     def _build_audit_report(
         self,
@@ -531,8 +588,13 @@ class VerificationService:
         ledger_path: str | None = None,
         ots_forged: bool = False,
         bitcoin_block_height: int | None = None,
+        extra_errors: list[str] | None = None,
+        unattended_ceremony: bool = False,
+        webauthn_present: bool = False,
+        ots_sidecar_declared: bool = False,
+        ots_blob_present: bool = False,
     ) -> AuditReport:
-        errors: list[str] = []
+        errors: list[str] = list(extra_errors or [])
         signature_valid = False
         payload_hash_match = False
         timestamp_found = False
@@ -622,7 +684,7 @@ class VerificationService:
             artifact_id=str(envelope.id),
             request_id=request_id,
             source_file=source_file,
-            envelope_valid=True,
+            envelope_valid=not bool(extra_errors),
             signature_valid=signature_valid,
             payload_hash_match=payload_hash_match,
             transparency_anchor_found=transparency_anchor_found,
@@ -641,6 +703,10 @@ class VerificationService:
             ledger_path=ledger_path,
             ots_forged=ots_forged,
             bitcoin_block_height=bitcoin_block_height,
+            unattended_ceremony=unattended_ceremony,
+            webauthn_present=webauthn_present,
+            ots_sidecar_declared=ots_sidecar_declared,
+            ots_blob_present=ots_blob_present,
         )
 
     def _build_error_report(

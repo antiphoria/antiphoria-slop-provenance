@@ -59,6 +59,7 @@ class CryptoNotaryC2PATest(unittest.IsolatedAsyncioTestCase):
 
         attestation = AuthorAttestation(
             classification="satire",
+            attestation_mode="interactive",
             attestations=[
                 AttestationQa(question="Q1?", answer="y"),
                 AttestationQa(question="Q2?", answer="y"),

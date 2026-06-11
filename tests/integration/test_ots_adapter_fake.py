@@ -31,6 +31,8 @@ def test_upgrade_ots_proof_with_fake_binary(fake_ots_binary) -> None:
 
 def test_verify_ots_proof_rejects_invalid_output(monkeypatch) -> None:
     adapter = OTSAdapter(ots_bin="fake-ots")
+    adapter._dialect = "go"
+    adapter._dialect = "go"
 
     def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
         _ = (args, kwargs)

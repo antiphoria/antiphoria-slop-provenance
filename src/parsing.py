@@ -8,6 +8,7 @@ from typing import Any
 
 import yaml
 
+from src.envelope_v2 import is_v2_wire_format, parse_artifact_markdown_text_v2
 from src.models import Artifact
 
 
@@ -54,6 +55,9 @@ def parse_artifact_markdown_text(text: str) -> tuple[Artifact, str]:
     payload = payload_text.strip()
     if not payload:
         raise RuntimeError("Artifact payload is empty after metadata stripping.")
+    if is_v2_wire_format(text):
+        return parse_artifact_markdown_text_v2(text)
+
     loaded: Any = yaml.safe_load(frontmatter_text)
     if not isinstance(loaded, dict):
         raise RuntimeError("Frontmatter YAML did not decode to an object.")

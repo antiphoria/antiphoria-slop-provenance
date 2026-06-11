@@ -111,13 +111,21 @@ def render_artifact_markdown(artifact: Artifact, body: str) -> str:
         att = artifact.provenance.author_attestation
         attestation_lines = [
             "  authorAttestation:\n",
-            f"    classification: {_yaml_quoted(att.classification)}\n",
-            "    attestations:\n",
+            f"    attestationNature: {_yaml_quoted(att.attestation_nature)}\n",
+            f"    attestationMode: {_yaml_quoted(att.attestation_mode)}\n",
         ]
-        for qa in att.attestations:
-            q_block = _yaml_literal_block(qa.question, indent=10)
-            attestation_lines.append(f"      - question: |-\n{q_block}\n")
-            attestation_lines.append(f"        answer: {_yaml_quoted(qa.answer)}\n")
+        if att.classification is None:
+            attestation_lines.append("    classification: null\n")
+        else:
+            attestation_lines.append(f"    classification: {_yaml_quoted(att.classification)}\n")
+        if att.attestations:
+            attestation_lines.append("    attestations:\n")
+            for qa in att.attestations:
+                q_block = _yaml_literal_block(qa.question, indent=10)
+                attestation_lines.append(f"      - question: |-\n{q_block}\n")
+                attestation_lines.append(f"        answer: {_yaml_quoted(qa.answer)}\n")
+        else:
+            attestation_lines.append("    attestations: []\n")
         attestation_block = "".join(attestation_lines)
     else:
         attestation_block = "  authorAttestation: null\n"
@@ -149,11 +157,17 @@ def render_artifact_markdown(artifact: Artifact, body: str) -> str:
             if rc.machine_id_hash is not None
             else "    machineIdHash: null\n"
         )
+        pseudonym_line = (
+            f"    operatorPseudonymHash: {_yaml_quoted(rc.operator_pseudonym_hash)}\n"
+            if rc.operator_pseudonym_hash is not None
+            else "    operatorPseudonymHash: null\n"
+        )
         ceremony_block = (
             "  registrationCeremony:\n"
             f"    registrationUtcMs: {rc.registration_utc_ms}\n"
             f"    orchestratorGitCommit: {_yaml_quoted(rc.orchestrator_git_commit)}\n"
             f"{machine_line}"
+            f"{pseudonym_line}"
         )
     else:
         ceremony_block = "  registrationCeremony: null\n"
@@ -176,6 +190,28 @@ def render_artifact_markdown(artifact: Artifact, body: str) -> str:
         else body
     )
 
+    if artifact.provenance.provenance_grade is not None:
+        provenance_grade_line = (
+            f"  provenanceGrade: {_yaml_quoted(artifact.provenance.provenance_grade)}\n"
+        )
+    else:
+        provenance_grade_line = "  provenanceGrade: null\n"
+
+    if artifact.provenance.models_used:
+        models_used_lines = ["  modelsUsed:\n"]
+        for model_id in artifact.provenance.models_used:
+            models_used_lines.append(f"    - {_yaml_quoted(model_id)}\n")
+        models_used_block = "".join(models_used_lines)
+    else:
+        models_used_block = "  modelsUsed: null\n"
+
+    if artifact.provenance.process_narrative_hash is not None:
+        process_narrative_hash_line = (
+            f"  processNarrativeHash: {_yaml_quoted(artifact.provenance.process_narrative_hash)}\n"
+        )
+    else:
+        process_narrative_hash_line = "  processNarrativeHash: null\n"
+
     return (
         "---\n"
         f"schemaVersion: {_yaml_quoted(artifact.schema_version)}\n"
@@ -188,6 +224,9 @@ def render_artifact_markdown(artifact: Artifact, body: str) -> str:
         f"  source: {_yaml_quoted(artifact.provenance.source)}\n"
         f"  engineVersion: {_yaml_quoted(artifact.provenance.engine_version)}\n"
         f"  modelId: {_yaml_quoted(artifact.provenance.model_id)}\n"
+        f"{provenance_grade_line}"
+        f"{models_used_block}"
+        f"{process_narrative_hash_line}"
         "  generationContext:\n"
         "    systemInstruction: |-\n"
         f"{system_instruction_yaml}\n"

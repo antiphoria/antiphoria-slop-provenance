@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from src.commands.parser.admin import register_admin_parsers
+from src.commands.parser.catalog import register_catalog_parsers
 from src.commands.parser.maintenance import register_maintenance_parsers
 from src.commands.parser.pipeline import register_pipeline_parsers
 from src.commands.parser.verification import register_verification_parsers
@@ -41,4 +42,5 @@ def build_cli_parser(
     register_verification_parsers(subparsers, default_repo_path=default_repo_path)
     register_maintenance_parsers(subparsers, default_repo_path=default_repo_path)
     register_admin_parsers(subparsers)
+    register_catalog_parsers(subparsers, default_repo_path=default_repo_path)
     return parser

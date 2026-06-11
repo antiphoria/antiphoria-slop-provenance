@@ -28,6 +28,7 @@ class EventContractsTest(unittest.TestCase):
     def test_story_human_registered_includes_license_and_attestation(self) -> None:
         attestation = AuthorAttestation(
             classification="fiction",
+            attestation_mode="interactive",
             attestations=_sample_attestations(),
         )
         event = StoryHumanRegistered(
@@ -43,6 +44,7 @@ class EventContractsTest(unittest.TestCase):
     def test_story_human_registered_defaults_license_to_arr(self) -> None:
         attestation = AuthorAttestation(
             classification="fact",
+            attestation_mode="interactive",
             attestations=_sample_attestations(),
         )
         event = StoryHumanRegistered(

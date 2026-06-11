@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime
-from typing import Annotated, Any, Literal, TypeAlias
+from typing import Annotated, Any, Literal, Self, TypeAlias
 from uuid import UUID, uuid4
 
 import rfc8785
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 CRYPTO_ALGORITHM_ML_DSA_44 = "CRYSTALS-Dilithium (NIST ML-DSA-44)"
 """Canonical algorithm label required in frontmatter."""
@@ -21,6 +21,15 @@ PolicyLicenseId: TypeAlias = Literal["ARR", "CC-BY-4.0", "CC0-1.0"]
 
 ArtisticClassification: TypeAlias = Literal["fact", "opinion", "fiction", "satire"]
 """Artistic classification for human-authored content."""
+
+AttestationNature: TypeAlias = Literal["self-declaration", "orchestration-declaration"]
+"""What kind of operator statement is recorded (not a legal certification)."""
+
+AttestationMode: TypeAlias = Literal["interactive", "unattended"]
+"""How the operator statement was captured."""
+
+ProvenanceGrade: TypeAlias = Literal["recorded", "declared", "unattended"]
+"""Epistemic grade: recorded at creation, declared at seal, or unattended automation."""
 
 
 class StrictModel(BaseModel):
@@ -68,19 +77,39 @@ class Curation(StrictModel):
 
 
 class AttestationQa(StrictModel):
-    """Single Q&A pair stored verbatim for legal record. Questions and answers
-    must be preserved in full, unchanged length."""
+    """Single self-declaration prompt and operator response, stored verbatim."""
 
     question: str = Field(min_length=1)
     answer: str = Field(min_length=1)
 
 
 class AuthorAttestation(StrictModel):
-    """Explicit artistic declarations made by a human author. Stores the
-    actual questions and answers verbatim for legal importance."""
+    """Operator self-declaration captured at human registration time."""
 
-    classification: ArtisticClassification
-    attestations: list[AttestationQa] = Field(min_length=4, max_length=64)
+    attestation_nature: AttestationNature = Field(
+        alias="attestationNature",
+        default="self-declaration",
+    )
+    attestation_mode: AttestationMode = Field(
+        alias="attestationMode",
+        default="interactive",
+    )
+    classification: ArtisticClassification | None = Field(default=None)
+    attestations: list[AttestationQa] = Field(default_factory=list, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_attestations_for_mode(self) -> Self:
+        if self.attestation_mode == "interactive":
+            if self.classification is None:
+                raise ValueError("interactive attestation requires classification")
+            if len(self.attestations) < 4:
+                raise ValueError("interactive attestation requires at least 4 Q&A pairs")
+        elif self.attestation_mode == "unattended":
+            if self.classification is not None:
+                raise ValueError("unattended attestation must not include classification")
+            if self.attestations:
+                raise ValueError("unattended attestation must not include Q&A pairs")
+        return self
 
 
 class WebAuthnAttestation(StrictModel):
@@ -98,7 +127,7 @@ class WebAuthnAttestation(StrictModel):
     fmt: str = Field(min_length=1)
 
 
-AttestationStrength: TypeAlias = Literal["webauthn", "legacy"]
+AttestationStrength: TypeAlias = Literal["webauthn", "none", "unattended"]
 
 
 class VerificationAnchor(StrictModel):
@@ -114,6 +143,11 @@ class RegistrationCeremony(StrictModel):
     registration_utc_ms: int = Field(alias="registrationUtcMs")
     orchestrator_git_commit: str = Field(alias="orchestratorGitCommit", min_length=1)
     machine_id_hash: str | None = Field(alias="machineIdHash", default=None)
+    operator_pseudonym_hash: str | None = Field(
+        alias="operatorPseudonymHash",
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
 
 
 class Provenance(StrictModel):
@@ -143,6 +177,22 @@ class Provenance(StrictModel):
     registration_ceremony: RegistrationCeremony | None = Field(
         alias="registrationCeremony",
         default=None,
+    )
+    provenance_grade: ProvenanceGrade | None = Field(
+        alias="provenanceGrade",
+        default=None,
+    )
+    models_used: list[str] | None = Field(
+        alias="modelsUsed",
+        default=None,
+        max_length=64,
+    )
+    process_narrative_hash: str | None = Field(
+        alias="processNarrativeHash",
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[a-fA-F0-9]{64}$",
     )
 
 

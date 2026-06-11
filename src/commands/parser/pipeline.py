@@ -65,10 +65,60 @@ def register_pipeline_parsers(
     register_parser.add_argument(
         "--non-interactive",
         action="store_true",
-        help="Skip artistic attestation wizard; use defaults (for CI/automation).",
+        help=(
+            "Skip self-declaration wizard; record unattended registration only "
+            "(for CI/automation, no Q&A captured)."
+        ),
     )
     register_parser.add_argument(
         "--no-webauthn",
         action="store_true",
-        help="Skip WebAuthn/FIDO2 attestation; use legacy (y/N) only.",
+        help="Skip WebAuthn/FIDO2; use self-declaration prompts only.",
+    )
+
+    seal_parser = subparsers.add_parser(
+        "seal",
+        help=(
+            "Seal LLM-only content with orchestration declaration "
+            "(human orchestrator, machine-generated text)."
+        ),
+    )
+    seal_parser.add_argument("--file", required=True, help="Plain markdown file path.")
+    seal_parser.add_argument(
+        "--repo-path",
+        default=default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
+    )
+    seal_parser.add_argument(
+        "--title",
+        default=None,
+        help="Artifact title (default: first line or filename).",
+    )
+    seal_parser.add_argument(
+        "--license",
+        default="CC0-1.0",
+        help="Content license to apply (default: CC0-1.0).",
+    )
+    seal_parser.add_argument(
+        "--models",
+        default=None,
+        help="Comma-separated model identifiers used in production (e.g. gemini-3.1-pro,composer-2.5).",
+    )
+    seal_parser.add_argument(
+        "--process-file",
+        default=None,
+        help="Optional JSON file describing the generation process (stored unverified).",
+    )
+    seal_parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help=(
+            "Skip orchestration declaration wizard; record unattended sealing only "
+            "(for CI/automation, no Q&A captured)."
+        ),
+    )
+    seal_parser.add_argument(
+        "--no-webauthn",
+        action="store_true",
+        help="Skip WebAuthn/FIDO2; use orchestration declaration prompts only.",
     )

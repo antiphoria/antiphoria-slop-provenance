@@ -17,10 +17,27 @@ import os
 from pathlib import Path
 from typing import Any
 
-from src.env_config import read_env_optional
+from src.env_config import get_project_env_path, read_env_optional, resolve_orchestrator_state_dir
 from src.models import WebAuthnAttestation
 
 _CREDENTIALS_FILE = ".webauthn-credentials.json"
+_WEBAUTHN_PROVIDERS = frozenset({"hid", "platform"})
+
+
+def _resolve_provider(env_path: Path | None = None) -> str:
+    """Resolve WebAuthn provider: hid (USB key) or platform (Touch ID bridge)."""
+    raw = read_env_optional("WEBAUTHN_PROVIDER", env_path=env_path)
+    if not raw:
+        return "hid"
+    provider = raw.strip().lower()
+    if provider in _WEBAUTHN_PROVIDERS:
+        return provider
+    return "hid"
+
+
+def get_webauthn_provider(env_path: Path | None = None) -> str:
+    """Public accessor for the active WebAuthn provider."""
+    return _resolve_provider(env_path)
 
 
 def _resolve_rp_id(env_path: Path | None = None) -> str | None:
@@ -31,11 +48,21 @@ def _resolve_rp_id(env_path: Path | None = None) -> str | None:
     return rp_id.strip().lower()
 
 
-def _get_credentials_path(repo_path: Path | None = None) -> Path:
-    """Return path to stored WebAuthn credentials."""
-    if repo_path:
-        return repo_path / _CREDENTIALS_FILE
-    return Path.home() / ".config" / "antiphoria-slop-provenance" / _CREDENTIALS_FILE
+def _get_credentials_path(
+    *,
+    env_path: Path | None = None,
+    repo_path: Path | None = None,
+) -> Path:
+    """Return path to stored WebAuthn credentials (orchestrator state, not archive)."""
+    resolved_env = env_path if env_path is not None else get_project_env_path()
+    primary = resolve_orchestrator_state_dir(env_path=resolved_env) / _CREDENTIALS_FILE
+    if primary.is_file():
+        return primary
+    if repo_path is not None:
+        legacy = repo_path / _CREDENTIALS_FILE
+        if legacy.is_file():
+            return legacy
+    return primary
 
 
 def _load_credentials(path: Path) -> dict[str, Any]:
@@ -60,13 +87,17 @@ def get_webauthn_assertion(
     repo_path: Path | None = None,
     env_path: Path | None = None,
 ) -> WebAuthnAttestation | None:
-    """Get WebAuthn assertion from FIDO2 device.
+    """Get WebAuthn assertion from FIDO2 device or platform bridge.
 
     Returns None if WEBAUTHN_RP_ID is unset, fido2 is not installed, or no device.
     """
     rp_id = _resolve_rp_id(env_path)
     if not rp_id:
         return None
+    if _resolve_provider(env_path) == "platform":
+        from src.webauthn_bridge import get_assertion_platform
+
+        return get_assertion_platform(challenge, repo_path=repo_path, env_path=env_path)
     try:
         from fido2.hid import CtapHidDevice
         from fido2.webauthn import (
@@ -76,7 +107,7 @@ def get_webauthn_assertion(
     except ImportError:
         return None
 
-    credentials_path = _get_credentials_path(repo_path)
+    credentials_path = _get_credentials_path(env_path=env_path, repo_path=repo_path)
     stored = _load_credentials(credentials_path)
     allow_list = []
     if stored.get("credential_id"):
@@ -135,6 +166,10 @@ def register_webauthn_credential(
     rp_id = _resolve_rp_id(env_path)
     if not rp_id:
         return False
+    if _resolve_provider(env_path) == "platform":
+        from src.webauthn_bridge import register_credential_platform
+
+        return register_credential_platform(repo_path=repo_path, env_path=env_path)
     try:
         from fido2.hid import CtapHidDevice
         from fido2.webauthn import (
@@ -188,7 +223,7 @@ def register_webauthn_credential(
         pub_key_cose = json.dumps(pub_key).encode("utf-8")
     pub_key_b64 = base64.urlsafe_b64encode(pub_key_cose).decode("ascii").rstrip("=")
 
-    path = _get_credentials_path(repo_path)
+    path = _get_credentials_path(env_path=env_path, repo_path=repo_path)
     _save_credentials(
         path,
         {

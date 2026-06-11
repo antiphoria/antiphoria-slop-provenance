@@ -34,7 +34,14 @@ For production key handling with zero-disk-exposure at runtime, see the BYOV (Br
 - Periodically test restore procedures in a non-production environment.
 - Record backup and restore events in an operational log.
 
-## 6. C2PA certificate operations
+## 6. Operator pseudonym salt
+
+- Generate with `python scripts/gen-pseudonym-salt.py`; store on the encrypted vault alongside signing keys.
+- Reference via `OPERATOR_PSEUDONYM_SALT_PATH` in `.env`; never commit the salt file or embed it in artifact text (registration is blocked if detected).
+- Rotating the salt creates a new unlinkable pseudonymous identity; losing the salt breaks cross-artifact continuity but does not affect signature verification.
+- Do not use `CAPTURE_MACHINE_ID` for personhood workflows when pseudonym continuity is sufficient.
+
+## 7. C2PA certificate operations
 
 - For validator-grade C2PA, use a dedicated X.509 signing certificate chain and private key.
 - Keep C2PA cert-chain/key material separate from ML-DSA keys and rotate independently.

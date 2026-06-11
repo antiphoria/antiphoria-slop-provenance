@@ -28,7 +28,38 @@ In `sdk` mode, markdown is not always the direct signed C2PA “asset”; the pi
 
 Git ledger commits use **process-local** file locks. Multiple processes or hosts writing the same ledger repo without a **single-writer** or distributed lock strategy risk corruption. This repository focuses on local `slop-cli` execution; design multi-worker topologies accordingly.
 
+## Human registration and personhood metadata
+
+- **Self-declaration** (wizard Q&A in `claim.statements`) records what the operator stated at signing time; it is not independent proof of authorship, notarization, or copyright registration.
+- **`attestationStrength`** describes the **hardware trust layer only**: `webauthn` (assertion captured), `none` (explicit `--no-webauthn`), or `unattended` (`--non-interactive`). It does not measure declaration quality — use `claim.provenanceGrade` for that.
+- **`operator.webauthn`** (v2 wire) carries the FIDO assertion metadata separately from the public declaration in `claim`.
+- **`--non-interactive`:** skips the wizard and records `attestationMode: unattended` with no Q&A pairs and `classification: null`. Suitable for CI, not operator self-declaration.
+- **WebAuthn** binds a platform or roaming authenticator assertion to the artifact body hash. The engine **embeds** assertion metadata in `operator.webauthn`; it does not currently **verify** WebAuthn assertions in `verify` / `attest` (treat as experimental provenance, not a legal identity guarantee). `--strict` attest requires the block to be **present** on interactive artifacts.
+- **Platform provider (macOS Touch ID):** uses a short-lived `127.0.0.1` browser bridge with per-ceremony token auth. Credentials are bound to `localhost` RP ID—not a production web domain.
+- **HID provider (USB FIDO2):** requires `pip install -e ".[webauthn]"` and a connected security key.
+- **Operator pseudonym** (`operatorPseudonymHash`): HMAC-derived from a secret salt you control. Proves continuity across artifacts registered with the same salt; reveals no device data. Losing the salt breaks continuity; leaking it lets others impersonate that pseudonym. Prefer this over `CAPTURE_MACHINE_ID` (MAC hash), which remains opt-in and off by default.
+- **`--non-interactive` / `--no-webauthn`:** explicit CI escape hatches only; default interactive register/seal requires the full stack and aborts on missing layers.
+
+## Provenance grades
+
+| Grade | Meaning | Typical path |
+|-------|---------|--------------|
+| `recorded` | Process captured at creation time in the pipeline | `generate`, `curate` |
+| `declared` | Operator declaration at seal time; process narrative optional and unverified | `register`, `seal` (interactive) |
+| `unattended` | No operator ceremony captured | `--non-interactive` on `register` or `seal` |
+
+Grades are stored as `provenanceGrade` in artifact frontmatter. They describe epistemic strength, not legal certification.
+
+## LLM-only sealing (`seal`)
+
+- **Orchestration declaration** (wizard Q&A when run interactively) records that the operator disclaims authorship of the text body and acted as orchestrator only; it is not proof of process lineage.
+- **`attestationNature: orchestration-declaration`** distinguishes LLM sealing from human `self-declaration`.
+- Default license is **CC0-1.0** (`source: synthetic`). Use `--models` to list models used; a single model becomes `modelId`, multiple become `composite` with full list in `modelsUsed`.
+- **`--process-file`:** optional JSON wrapped in a mandatory sidecar envelope (`verified: false`, `kind: operator-narrative`) and committed as `{request_id}.process.json`. The hash is sealed in frontmatter as `processNarrativeHash`; the narrative is a good-faith account, never verified lineage.
+- **`--non-interactive`:** skips the wizard and records `attestationMode: unattended`, `classification: null`, `provenanceGrade: unattended`.
+
 ## Operational
 
+- **Archive catalog** (`.provenance/catalog.jsonl` on `main`) is a derived human lookup index, not part of the signed evidence chain. Rebuild with `slop-cli catalog index` from `artifact/*` branches if it drifts.
 - **BYOV / vault** workflows are required for production-grade private key handling; dev keys on disk are explicitly discouraged for production (see [SECURITY.md](../SECURITY.md)).
 - **Windows native** development is best-effort; **WSL2** is the supported Windows path ([WSL2_SETUP.md](WSL2_SETUP.md)).

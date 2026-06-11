@@ -26,7 +26,7 @@ Re-run static analysis after refactors; many findings are **false positives** (e
 
 ## Threat Model
 
-Private keys (ML-DSA `private.key`, C2PA `c2pa-private-key.pem`, and Ed25519 `ed25519_private.pem`) must never be written to disk at runtime. The BYOV (Bring Your Own Vault) architecture ensures **zero-disk-exposure**: keys are provided via secure, volatile mounts. The application receives paths to keys in RAM or on a temporarily mounted volume; when the process exits, the launcher unmounts or deletes the volatile storage.
+Private keys (ML-DSA `private.key`, C2PA `c2pa-private-key.pem`, and Ed25519 `ed25519_private.pem`) and the **operator pseudonym salt** (`pseudonym.salt`) must never be written to disk at runtime except on encrypted vault storage. The BYOV (Bring Your Own Vault) architecture ensures **zero-disk-exposure**: keys are provided via secure, volatile mounts. The application receives paths to keys in RAM or on a temporarily mounted volume; when the process exits, the launcher unmounts or deletes the volatile storage.
 
 ## Bootstrap Flow
 
@@ -35,8 +35,9 @@ Private keys (ML-DSA `private.key`, C2PA `c2pa-private-key.pem`, and Ed25519 `ed
 3. **Generate Ed25519 keys:** `python scripts/gen-ed25519-keys.py`
 4. **Move `c2pa-root-ca.key.pem` to offline USB** (never store on disk with other keys)
 5. **Create vault manually** (see below)
-6. **SECURE CLEANUP:** Delete `keys/private.key`, `keys/c2pa-private-key.pem`, and `keys/ed25519_private.pem` from disk after populating the vault.
-7. **Keep `public.key`, `c2pa-cert-chain.pem`, and `ed25519_public.pem` on disk**; reference via `.env` (`OQS_PUBLIC_KEY_PATH`, `C2PA_SIGN_CERT_CHAIN_PATH`, `ED25519_PUBLIC_KEY_PATH`)
+6. **Generate operator pseudonym salt (optional):** `python scripts/gen-pseudonym-salt.py --out /path/to/vault/pseudonym.salt`
+7. **SECURE CLEANUP:** Delete `keys/private.key`, `keys/c2pa-private-key.pem`, `keys/ed25519_private.pem`, and any repo-local `pseudonym.salt` from disk after populating the vault.
+8. **Keep `public.key`, `c2pa-cert-chain.pem`, and `ed25519_public.pem` on disk**; reference via `.env` (`OQS_PUBLIC_KEY_PATH`, `C2PA_SIGN_CERT_CHAIN_PATH`, `ED25519_PUBLIC_KEY_PATH`). Set `OPERATOR_PSEUDONYM_SALT_PATH` to the vault copy of `pseudonym.salt`.
 
 ## Manual Vault Creation
 
@@ -50,7 +51,7 @@ Scripting VeraCrypt container creation via CLI is brittle across Windows builds.
 4. Choose size (e.g. 10 MB)
 5. Set a strong password
 6. Format as **FAT32**
-7. Mount the new volume, copy `private.key`, `c2pa-private-key.pem`, and `ed25519_private.pem` from `keys/` into it
+7. Mount the new volume, copy `private.key`, `c2pa-private-key.pem`, `ed25519_private.pem`, and optionally `pseudonym.salt` from `keys/` or vault path into it
 8. Unmount
 9. **SECURE CLEANUP:** Delete `keys/private.key`, `keys/c2pa-private-key.pem`, and `keys/ed25519_private.pem` from your SSD.
 
@@ -60,6 +61,7 @@ From project root:
 
 ```bash
 tar cf keys_vault.tar -C keys private.key c2pa-private-key.pem ed25519_private.pem
+# Optional: add pseudonym.salt to the archive if generated
 gpg -c keys_vault.tar
 rm keys/private.key keys/c2pa-private-key.pem keys/ed25519_private.pem
 ```
@@ -83,6 +85,10 @@ Virtual volume mounting requires **Administrator privileges**. Run PowerShell as
 
 If the vault is already mounted (e.g. notary in one terminal), a second `scripts/run-secure.ps1` detects it, reuses the drive, injects env, runs the child, and does **not** unmount. The first session unmounts when done.
 
+## WebAuthn bridge (macOS Touch ID)
+
+When `WEBAUTHN_PROVIDER=platform`, `register` and `webauthn-register` start a **short-lived** HTTP server on `127.0.0.1` only. Each ceremony uses a random token (`X-Bridge-Token`), Host-header validation, and shuts down after completion. Do not expose this port beyond loopback. Platform credentials bind to `localhost` RP ID.
+
 ## Dev Mode
 
-For local development with keys on disk, set `PQC_PRIVATE_KEY_PATH`, `C2PA_PRIVATE_KEY_PATH`, and optionally `ED25519_PRIVATE_KEY_PATH` in `.env`. This is **not recommended for production**.
+For local development with keys on disk, set `PQC_PRIVATE_KEY_PATH`, `C2PA_PRIVATE_KEY_PATH`, and optionally `ED25519_PRIVATE_KEY_PATH` in `.env`. This is **not recommended for production**. Never commit `OPERATOR_PSEUDONYM_SALT` inline in `.env` for production; use `OPERATOR_PSEUDONYM_SALT_PATH` on the vault instead.

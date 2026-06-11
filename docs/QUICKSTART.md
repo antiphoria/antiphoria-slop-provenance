@@ -103,6 +103,59 @@ Do not rely on long-lived private keys on disk. Use the launchers and procedures
 
 Further reading: [KEY_MANAGEMENT_POLICY.md](KEY_MANAGEMENT_POLICY.md).
 
+### Track C — Human-only registration (Touch ID + pseudonym)
+
+Goal: register **your own** markdown with maximum personhood metadata—without device fingerprinting.
+
+1. Install WebAuthn support:
+
+   ```bash
+   pip install -e ".[webauthn]"
+   ```
+
+2. **Signing keys** — same as Track A or BYOV ([SECURITY.md](../SECURITY.md)): ML-DSA + Ed25519 paths in `.env`.
+
+3. **Operator pseudonym salt** (optional, recommended for cross-artifact author continuity):
+
+   ```bash
+   python scripts/gen-pseudonym-salt.py --out /path/to/vault/pseudonym.salt
+   ```
+
+   In `.env`:
+
+   ```bash
+   OPERATOR_PSEUDONYM_SALT_PATH=/path/to/vault/pseudonym.salt
+   ```
+
+   The salt is secret; only `operatorPseudonymHash` (HMAC-SHA256) is embedded in artifacts. Do **not** set `CAPTURE_MACHINE_ID=true` if you want privacy-preserving personhood (MAC hashing is opt-in and discouraged for this workflow).
+
+4. **macOS Touch ID** (platform provider):
+
+   ```bash
+   WEBAUTHN_PROVIDER=platform
+   WEBAUTHN_RP_ID=localhost
+   ```
+
+   Omit `WEBAUTHN_BRIDGE_PORT` to use an ephemeral OS-assigned port (recommended). The CLI opens a short-lived local browser bridge; approve Touch ID when prompted.
+
+   **USB security key** (default `hid` provider): set `WEBAUTHN_RP_ID` to your production domain, plug in a FIDO2 key, skip `WEBAUTHN_PROVIDER=platform`.
+
+5. **One-time passkey enrollment** (before first register with WebAuthn):
+
+   ```bash
+   slop-cli webauthn-register --repo-path ../my-ledger
+   ```
+
+   Re-running enrollment is blocked while `.webauthn-credentials.json` exists in the ledger (delete that file and remove the macOS passkey in System Settings → Passwords to re-register).
+
+6. **Register**:
+
+   ```bash
+   slop-cli register --file ./my-story.md --repo-path ../my-ledger
+   ```
+
+   Post-commit: transparency anchor and RFC3161 timestamp run automatically when configured (Track B). Follow with `slop-cli attest` for a full audit report.
+
 ## 6. Tests
 
 ```bash

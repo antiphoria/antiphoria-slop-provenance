@@ -43,7 +43,9 @@ from src.domain.events import (
     StoryGenerated,
     StoryHumanRegistered,
     StorySigned,
+    StorySyntheticSealed,
 )
+from src.envelope_v2 import generation_context_for_source
 from src.logging_config import bind_log_context, should_log_route
 from src.models import (
     CRYPTO_ALGORITHM_ED25519,
@@ -55,6 +57,7 @@ from src.models import (
     GenerationContext,
     Hyperparameters,
     Provenance,
+    ProvenanceGrade,
     RegistrationCeremony,
     SignatureBlock,
     UsageMetrics,
@@ -75,6 +78,15 @@ _ED25519_PRIVATE_KEY_ENV = "ED25519_PRIVATE_KEY_PATH"
 _ED25519_PUBLIC_KEY_ENV = "ED25519_PUBLIC_KEY_PATH"
 _DEFAULT_ENGINE_VERSION = "antiphoria-slop-provenance-v1.0.0"
 _DEFAULT_CONTENT_TYPE = "text/markdown"
+
+
+def _resolve_seal_model_id(models_used: list[str]) -> str:
+    """Summarize model identity for sealed synthetic artifacts."""
+    if not models_used:
+        return "undisclosed"
+    if len(models_used) == 1:
+        return models_used[0]
+    return "composite"
 
 
 def _load_key_bytes(key_path: Path) -> bytes:
@@ -176,7 +188,7 @@ class CryptoNotaryAdapter:
         self._signer_fingerprint = self._resolve_signer_fingerprint()
         self._enable_c2pa = read_env_bool(
             "ENABLE_C2PA",
-            default=False,
+            default=True,
             env_path=self._env_path,
         )
 
@@ -192,6 +204,7 @@ class CryptoNotaryAdapter:
         await self._event_bus.subscribe(StoryGenerated, self._on_story_generated)
         await self._event_bus.subscribe(StoryCurated, self._on_story_curated)
         await self._event_bus.subscribe(StoryHumanRegistered, self._on_story_human_registered)
+        await self._event_bus.subscribe(StorySyntheticSealed, self._on_story_synthetic_sealed)
 
     def _resolve_private_key(self) -> bytes:
         """Resolve and load private key bytes from configured path."""
@@ -325,6 +338,7 @@ class CryptoNotaryAdapter:
             license_id=event.license,
             curation=None,
             author_attestation=None,
+            provenance_grade="recorded",
         )
         await self._emit_signed(
             request_id=event.request_id,
@@ -355,6 +369,7 @@ class CryptoNotaryAdapter:
             license_id=get_license_id("hybrid"),
             curation=event.curation_metadata,
             author_attestation=None,
+            provenance_grade="recorded",
         )
         await self._emit_signed(
             request_id=event.request_id,
@@ -385,6 +400,9 @@ class CryptoNotaryAdapter:
             author_attestation=event.attestation,
             webauthn_attestation=event.webauthn_attestation,
             registration_ceremony=event.registration_ceremony,
+            provenance_grade=(
+                "unattended" if event.attestation.attestation_mode == "unattended" else "declared"
+            ),
         )
         await self._emit_signed(
             request_id=event.request_id,
@@ -393,14 +411,63 @@ class CryptoNotaryAdapter:
             c2pa_manifest=c2pa_manifest,
         )
 
+    async def _on_story_synthetic_sealed(self, event: StorySyntheticSealed) -> None:
+        """Sign externally produced LLM content and emit a signed envelope event."""
+        bind_log_context(request_id=event.request_id)
+
+        models_used = event.models_used or None
+        model_id = _resolve_seal_model_id(event.models_used)
+        artifact, c2pa_manifest = await self._build_signed_artifact(
+            title=event.title,
+            source="synthetic",
+            model_id=model_id,
+            body=event.body,
+            prompt="N/A",
+            system_instruction="Machine-generated. Orchestrator declaration only.",
+            temperature=0.0,
+            top_p=1.0,
+            top_k=0,
+            usage_metrics=None,
+            embedded_watermark=None,
+            content_type=_DEFAULT_CONTENT_TYPE,
+            license_id=event.license,
+            curation=None,
+            author_attestation=event.attestation,
+            webauthn_attestation=event.webauthn_attestation,
+            registration_ceremony=event.registration_ceremony,
+            provenance_grade=(
+                "unattended" if event.attestation.attestation_mode == "unattended" else "declared"
+            ),
+            models_used=models_used,
+            process_narrative_hash=event.process_narrative_hash,
+        )
+        await self._emit_signed(
+            request_id=event.request_id,
+            artifact=artifact,
+            body=event.body,
+            c2pa_manifest=c2pa_manifest,
+            process_narrative_hash=event.process_narrative_hash,
+            process_narrative_bytes=event.process_narrative_bytes,
+        )
+
     async def _emit_signed(
         self,
         request_id: UUID,
         artifact: Artifact,
         body: str,
         c2pa_manifest: C2PAManifestArtifact | None,
+        process_narrative_hash: str | None = None,
+        process_narrative_bytes: bytes | None = None,
     ) -> None:
         """Emit one StorySigned event from a signed artifact result."""
+
+        if process_narrative_hash is None and process_narrative_bytes is not None:
+            raise RuntimeError("Process narrative bytes supplied without narrative hash.")
+        if process_narrative_bytes is not None:
+            if process_narrative_hash is None:
+                raise RuntimeError("Process narrative hash required when bytes are supplied.")
+            if sha256_hex(process_narrative_bytes) != process_narrative_hash:
+                raise RuntimeError("Process narrative hash mismatch while emitting StorySigned.")
 
         if should_log_route("coarse"):
             _adapter_logger.info(
@@ -418,6 +485,12 @@ class CryptoNotaryAdapter:
                     None
                     if c2pa_manifest is None
                     else base64.b64encode(c2pa_manifest.manifest_bytes).decode("ascii")
+                ),
+                process_narrative_hash=process_narrative_hash,
+                process_narrative_bytes_b64=(
+                    None
+                    if process_narrative_bytes is None
+                    else base64.b64encode(process_narrative_bytes).decode("ascii")
                 ),
             )
         )
@@ -441,6 +514,9 @@ class CryptoNotaryAdapter:
         author_attestation: AuthorAttestation | None = None,
         webauthn_attestation: WebAuthnAttestation | None = None,
         registration_ceremony: RegistrationCeremony | None = None,
+        provenance_grade: ProvenanceGrade | None = None,
+        models_used: list[str] | None = None,
+        process_narrative_hash: str | None = None,
     ) -> tuple[Artifact, C2PAManifestArtifact | None]:
         """Construct unsigned envelope, sign canonical target, attach signature."""
 
@@ -449,6 +525,18 @@ class CryptoNotaryAdapter:
         if self._ed25519_private_key is None:
             raise RuntimeError("Ed25519 private key is required for signing operations.")
         payload_hash = compute_payload_hash(body)
+        if source in ("human", "synthetic"):
+            gen_ctx = generation_context_for_source(source)
+        else:
+            gen_ctx = GenerationContext(
+                systemInstruction=system_instruction,
+                prompt=prompt,
+                hyperparameters=Hyperparameters(
+                    temperature=temperature,
+                    topP=top_p,
+                    topK=top_k,
+                ),
+            )
         unsigned_envelope = Artifact(
             title=title,
             timestamp=datetime.now(UTC),
@@ -458,15 +546,7 @@ class CryptoNotaryAdapter:
                 source=source,
                 engineVersion=_DEFAULT_ENGINE_VERSION,
                 modelId=model_id,
-                generationContext=GenerationContext(
-                    systemInstruction=system_instruction,
-                    prompt=prompt,
-                    hyperparameters=Hyperparameters(
-                        temperature=temperature,
-                        topP=top_p,
-                        topK=top_k,
-                    ),
-                ),
+                generationContext=gen_ctx,
                 usageMetrics=usage_metrics,
                 embeddedWatermark=embedded_watermark,
                 authorAttestation=author_attestation,
@@ -474,9 +554,17 @@ class CryptoNotaryAdapter:
                 attestationStrength=(
                     "webauthn"
                     if webauthn_attestation
-                    else ("legacy" if author_attestation else None)
+                    else (
+                        "unattended"
+                        if author_attestation
+                        and author_attestation.attestation_mode == "unattended"
+                        else ("none" if author_attestation else None)
+                    )
                 ),
                 registrationCeremony=registration_ceremony,
+                provenanceGrade=provenance_grade,
+                modelsUsed=models_used,
+                processNarrativeHash=process_narrative_hash,
             ),
             curation=curation,
         )
