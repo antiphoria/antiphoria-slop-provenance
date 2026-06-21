@@ -20,6 +20,7 @@ from src.commands.catalog import (
 from src.commands.maintenance import (
     _run_anchor_merkle_root_command,
     _run_build_inclusion_proof_command,
+    _run_export_vector_command,
     _run_forge_status_command,
     _run_process_pending_command,
     _run_recover_failed_command,
@@ -161,6 +162,7 @@ _SYNC_COMMAND_HANDLERS: dict[str, SyncCommandHandler] = {
     "verify-inclusion": _run_verify_inclusion_command,
     "build-inclusion-proof": _run_build_inclusion_proof_command,
     "webauthn-register": _run_webauthn_register_command,
+    "export-vector": _run_export_vector_command,
 }
 
 _ADMIN_COMMAND_HANDLERS: dict[str, SyncCommandHandler] = {

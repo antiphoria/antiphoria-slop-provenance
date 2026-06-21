@@ -616,6 +616,241 @@ def _run_verify_inclusion_command(args: argparse.Namespace) -> int:
     return 1
 
 
+def _run_export_vector_command(args: argparse.Namespace) -> int:
+    """Export a cryptographic golden vector for one v2 artifact.
+
+    Dumps the byte-exact inputs and expected outputs an independent verifier
+    (e.g. the browser-side verifier at verify.antiphoria.org) must reproduce.
+    The output directory contains:
+
+      artifact.md            raw envelope (copied from --file)
+      body-canonical.txt     UTF-8 text of the canonicalized body
+      signing-target.json    the exact JCS-canonical signing-target dict
+      vector.json            structured vector (hashes, keys, expected verdicts)
+      public-mldsa.bin       raw ML-DSA-44 public key bytes (when --include-keys)
+      public-ed25519.bin     raw 32-byte Ed25519 public key (when --include-keys)
+
+    The command also verifies the artifact's signatures against the configured
+    public keys at export time, so a generated vector is provably self-consistent:
+    if `expectedSignatureValid` is false, the vector is not usable as a PASS case.
+
+    Output is deterministic in content (timestamps are taken from the artifact,
+    not wall-clock) so vectors are reproducible across runs.
+    """
+    import oqs
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    from src.adapters.crypto_notary import CryptoNotaryAdapter
+    from src.canonicalization import canonicalize_body_for_hash, compute_payload_hash
+    from src.envelope_v2 import parse_artifact_markdown_text_v2
+    from src.infrastructure.event_bus import EventBus
+    from src.models import build_envelope_signing_target, canonical_json_bytes, sha256_hex
+
+    artifact_path = Path(args.file).resolve()
+    if not artifact_path.exists():
+        print(f"File not found: {artifact_path}")
+        return 1
+    out_dir = Path(args.out).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    text = artifact_path.read_text(encoding="utf-8")
+    try:
+        artifact, body = parse_artifact_markdown_text_v2(text)
+    except RuntimeError as exc:
+        print(f"Parse error: {exc}")
+        return 1
+
+    if artifact.signature is None:
+        print("Artifact has no primary signature block; cannot export vector.")
+        return 1
+
+    payload_hash = compute_payload_hash(body)
+    canonical_body = canonicalize_body_for_hash(body)
+
+    c2pa_sibling = artifact_path.with_suffix(".c2pa")
+    manifest_hash = sha256_hex(c2pa_sibling.read_bytes()) if c2pa_sibling.exists() else None
+
+    target = build_envelope_signing_target(
+        envelope=artifact,
+        payload_sha256_hex=payload_hash,
+        manifest_sha256_hex=manifest_hash,
+        prev_hash=None,
+        canonicalization_version=artifact.signature.payload_canonicalization,
+    )
+    jcs_bytes = canonical_json_bytes(target)
+    signing_hash = sha256_hex(jcs_bytes)
+    signed_message = signing_hash.encode("utf-8")
+
+    # Verify against configured keys (proves vector self-consistency).
+    env_path = get_project_env_path()
+    adapter = CryptoNotaryAdapter(
+        event_bus=EventBus(),
+        env_path=env_path,
+        require_private_key=False,
+    )
+    primary_pub = adapter._resolve_public_key_for_verification(artifact)
+    primary_sig_bytes = base64.b64decode(
+        "".join(artifact.signature.cryptographic_signature.split()),
+        validate=True,
+    )
+    with oqs.Signature("ML-DSA-44") as verifier:
+        mldsa_valid = bool(verifier.verify(signed_message, primary_sig_bytes, primary_pub))
+
+    hybrid_pub_raw: bytes | None = None
+    ed25519_valid: bool | None = None
+    if artifact.hybrid_signature is not None:
+        hybrid_pub_raw = adapter._resolve_ed25519_public_key_for_verification(
+            artifact.hybrid_signature
+        )
+        hybrid_sig_bytes = base64.b64decode(
+            "".join(artifact.hybrid_signature.cryptographic_signature.split()),
+            validate=True,
+        )
+        try:
+            Ed25519PublicKey.from_public_bytes(hybrid_pub_raw).verify(
+                hybrid_sig_bytes, signed_message
+            )
+            ed25519_valid = True
+        except Exception:  # noqa: BLE001
+            ed25519_valid = False
+
+    declared_payload = artifact.signature.artifact_hash
+    vector = {
+        "schemaVersion": "antiphoria.export-vector.v1",
+        "exportedFrom": "slop-cli export-vector",
+        "artifactFile": artifact_path.name,
+        "artifact": {
+            "artifactId": str(artifact.id),
+            "title": artifact.title,
+            "ledgerRequestId": _ledger_request_id_from_text(text),
+            "schemaVersion": artifact.schema_version,
+            "profile": _profile_from_text(text),
+            "source": artifact.provenance.source,
+        },
+        "canonicalization": {
+            "version": artifact.signature.payload_canonicalization,
+            "bodyBytes": len(canonical_body),
+            "declaredPayloadHash": declared_payload,
+            "recomputedPayloadHash": payload_hash,
+            "payloadHashMatch": declared_payload == payload_hash,
+        },
+        "signingTarget": {
+            "schemaVersion": target["schemaVersion"],
+            "jcsByteLength": len(jcs_bytes),
+            "jcsSha256": sha256_hex(jcs_bytes),
+            "signingHash": signing_hash,
+            "signedMessageHex": signed_message.hex(),
+            "signedMessageUtf8": signing_hash,
+            "manifestHash": manifest_hash,
+            "prevHash": None,
+        },
+        "signatures": {
+            "primary": {
+                "algorithm": artifact.signature.crypto_algorithm,
+                "signerFingerprint": artifact.signature.verification_anchor.signer_fingerprint,
+                "signatureBase64": "".join(artifact.signature.cryptographic_signature.split()),
+                "signatureBytes": len(primary_sig_bytes),
+                "publicKeyBytes": len(primary_pub),
+                "publicKeySha256": sha256_hex(primary_pub),
+                "expectedValid": mldsa_valid,
+            },
+        },
+        "timestamps": [],
+        "sidecars": {
+            "c2paPresent": c2pa_sibling.exists(),
+            "manifestHash": manifest_hash,
+        },
+    }
+    if artifact.hybrid_signature is not None and hybrid_pub_raw is not None:
+        vector["signatures"]["hybrid"] = {
+            "algorithm": artifact.hybrid_signature.crypto_algorithm,
+            "signerFingerprint": artifact.hybrid_signature.verification_anchor.signer_fingerprint,
+            "signatureBase64": "".join(
+                artifact.hybrid_signature.cryptographic_signature.split()
+            ),
+            "signatureBytes": len(hybrid_sig_bytes),
+            "publicKeyBytes": len(hybrid_pub_raw),
+            "publicKeySha256": sha256_hex(hybrid_pub_raw),
+            "expectedValid": ed25519_valid,
+        }
+    # Surface RFC3161 tokens embedded in the v2 integrity block.
+    integrity = _raw_integrity_from_text(text)
+    for entry in integrity.get("timestamps", []) or []:
+        if entry.get("kind") == "rfc3161":
+            token = "".join(str(entry.get("token", "")).split())
+            if token:
+                vector["timestamps"].append(
+                    {
+                        "kind": "rfc3161",
+                        "provider": entry.get("provider"),
+                        "tokenBase64": token,
+                    }
+                )
+
+    # Write outputs.
+    (out_dir / "artifact.md").write_text(text, encoding="utf-8")
+    (out_dir / "body-canonical.txt").write_bytes(canonical_body)
+    (out_dir / "signing-target.json").write_bytes(jcs_bytes)
+    (out_dir / "vector.json").write_text(
+        json.dumps(vector, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    if args.include_keys:
+        (out_dir / "public-mldsa.bin").write_bytes(primary_pub)
+        if hybrid_pub_raw is not None:
+            (out_dir / "public-ed25519.bin").write_bytes(hybrid_pub_raw)
+
+    print(f"Exported vector for {artifact.id} -> {out_dir}")
+    print(f"  signingHash        : {signing_hash}")
+    print(f"  payloadHashMatch   : {declared_payload == payload_hash}")
+    print(f"  ML-DSA-44 valid    : {mldsa_valid}")
+    if ed25519_valid is not None:
+        print(f"  Ed25519 valid      : {ed25519_valid}")
+    if not (mldsa_valid and ed25519_valid is not False):
+        print(
+            "  WARNING: signature did not verify against configured keys; "
+            "this vector is a FAIL case, not a PASS case.",
+            file=sys.stderr,
+        )
+    return 0
+
+
+def _ledger_request_id_from_text(text: str) -> str | None:
+    """Pull ledgerRequestId from raw v2 frontmatter without re-parsing strictly."""
+    try:
+        import re
+
+        m = re.search(r'^\s*ledgerRequestId:\s*"?([0-9a-fA-F-]{36})"?', text, re.MULTILINE)
+        return m.group(1) if m else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _profile_from_text(text: str) -> str | None:
+    try:
+        import re
+
+        m = re.search(r'^\s*profile:\s*"([^"]+)"', text, re.MULTILINE)
+        return m.group(1) if m else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _raw_integrity_from_text(text: str) -> dict:
+    """Return the raw v2 `integrity` mapping for sidecar/timestamp inspection."""
+    import yaml
+
+    delimiter_index = text.find("\n---\n", 4)
+    if delimiter_index == -1:
+        return {}
+    frontmatter = yaml.safe_load(text[4:delimiter_index]) or {}
+    if not isinstance(frontmatter, dict):
+        return {}
+    integrity = frontmatter.get("integrity")
+    return integrity if isinstance(integrity, dict) else {}
+
+
 def _run_build_inclusion_proof_command(args: argparse.Namespace) -> int:
     """Build Merkle inclusion proof for an artifact hash."""
     from src.merkle import build_merkle_proof

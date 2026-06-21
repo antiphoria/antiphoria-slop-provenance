@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import logging
 import os
 import re
@@ -32,11 +33,36 @@ _OTS_PENDING_RE = re.compile(
     r"Pending confirmation in Bitcoin blockchain",
     flags=re.IGNORECASE,
 )
+_OTS_BITCOIN_NODE_ERROR_RE = re.compile(
+    r"Could not connect to (?:local )?Bitcoin node",
+    flags=re.IGNORECASE,
+)
+_OTS_INFO_SHA256_RE = re.compile(
+    r"File sha256 hash:\s*([0-9a-f]{64})",
+    flags=re.IGNORECASE,
+)
+_OTS_BITCOIN_ATTESTATION_RE = re.compile(
+    r"BitcoinBlockHeaderAttestation\((\d+)\)",
+)
 
 
 def _ots_output_indicates_pending(out: str) -> bool:
     """True when calendar output means the proof is not forged yet."""
     return bool(_OTS_PENDING_RE.search(out))
+
+
+def _ots_output_indicates_bitcoin_node_error(out: str) -> bool:
+    """True when verify failed because no Bitcoin node/RPC is reachable."""
+    return bool(_OTS_BITCOIN_NODE_ERROR_RE.search(out))
+
+
+def _ots_global_cli_args(env_path: Path | None = None) -> list[str]:
+    """Global ``ots`` flags inserted before the subcommand."""
+    args: list[str] = []
+    node = read_env_optional("OTS_BITCOIN_NODE", env_path=env_path)
+    if node:
+        args.extend(["--bitcoin-node", node])
+    return args
 
 
 def _ots_cli_path_must_be_file(path: Path) -> str:
@@ -61,7 +87,7 @@ def build_ots_adapter(env_path: Path | None = None) -> OTSAdapter | None:
     if not read_env_bool("ENABLE_OTS_FORGE", default=True, env_path=env_path):
         return None
     ots_bin = resolve_ots_binary(env_path=env_path)
-    return OTSAdapter(ots_bin=ots_bin)
+    return OTSAdapter(ots_bin=ots_bin, env_path=env_path)
 
 
 def resolve_ots_binary(env_path: Path | None = None) -> str:
@@ -143,9 +169,19 @@ def _sanitize_for_log(raw: str, max_len: int = 200) -> str:
 class OTSAdapter:
     """CLI-only OpenTimestamps adapter."""
 
-    def __init__(self, ots_bin: str = "ots") -> None:
+    def __init__(
+        self,
+        ots_bin: str = "ots",
+        *,
+        env_path: Path | None = None,
+    ) -> None:
         self._ots_bin = ots_bin
         self._dialect = detect_ots_cli_dialect(ots_bin)
+        self._env_path = env_path
+
+    def _ots_cmd(self, *subcommand_args: str) -> list[str]:
+        """Build argv: global flags, then subcommand args."""
+        return [self._ots_bin, *_ots_global_cli_args(self._env_path), *subcommand_args]
 
     def request_ots_stamp(
         self,
@@ -164,7 +200,7 @@ class OTSAdapter:
             temp_path.write_bytes(payload_bytes)
             try:
                 subprocess.run(  # noqa: S603
-                    [bin_, "stamp", str(temp_path)],
+                    self._ots_cmd("stamp", str(temp_path)),
                     check=True,
                     timeout=timeout,
                     capture_output=True,
@@ -214,7 +250,7 @@ class OTSAdapter:
             proof_path.write_bytes(pending_bytes)
             try:
                 subprocess.run(  # noqa: S603
-                    [bin_, "upgrade", "proof.ots"],
+                    self._ots_cmd("upgrade", "proof.ots"),
                     check=True,
                     timeout=timeout,
                     capture_output=True,
@@ -258,8 +294,7 @@ class OTSAdapter:
                     dialect=self._dialect,
                     timeout=timeout,
                 )
-                # Upgrade succeeded; if verify fails, block not mined yet (soft failure).
-                # Return (True, bytes, None) so caller leaves record PENDING instead of FAILED.
+                # Upgrade succeeded; if verify fails without block height, leave PENDING.
                 if not ok or block_height is None:
                     return True, final_bytes, None
 
@@ -281,8 +316,74 @@ class OTSAdapter:
             timeout=timeout,
         )
 
-    @staticmethod
+    def _verify_ots_proof_via_info(
+        self,
+        payload_bytes: bytes,
+        ots_bytes: bytes,
+        ots_bin: str,
+        timeout: int,
+    ) -> tuple[bool, int | None]:
+        """Extract forged block height from ``ots info`` when verify needs Bitcoin RPC."""
+        expected_digest = hashlib.sha256(payload_bytes).hexdigest()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            proof_path = temp_path / "proof.ots"
+            proof_path.write_bytes(ots_bytes)
+            try:
+                result = subprocess.run(  # noqa: S603
+                    self._ots_cmd("info", "proof.ots"),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=timeout,
+                    cwd=temp_path,
+                )
+            except subprocess.TimeoutExpired as exc:
+                _logger.warning("ots info timed out after %s seconds", exc.timeout)
+                return False, None
+            except OSError as exc:
+                _logger.warning("ots info could not run %s: %s", ots_bin, exc)
+                return False, None
+
+            out = (result.stdout or "") + (result.stderr or "")
+            if result.returncode != 0:
+                _logger.warning(
+                    "ots info failed (exit %d): stdout=%s stderr=%s",
+                    result.returncode,
+                    _sanitize_for_log(result.stdout or ""),
+                    _sanitize_for_log(result.stderr or ""),
+                )
+                return False, None
+
+            digest_match = _OTS_INFO_SHA256_RE.search(out)
+            if digest_match is None:
+                _logger.warning(
+                    "ots info: no file digest in output stdout=%s stderr=%s",
+                    _sanitize_for_log(result.stdout or ""),
+                    _sanitize_for_log(result.stderr or ""),
+                )
+                return False, None
+            if digest_match.group(1).lower() != expected_digest:
+                _logger.warning(
+                    "ots info digest mismatch: expected=%s got=%s",
+                    expected_digest,
+                    digest_match.group(1).lower(),
+                )
+                return False, None
+
+            heights = [int(m) for m in _OTS_BITCOIN_ATTESTATION_RE.findall(out)]
+            if not heights:
+                return False, None
+
+            block_height = max(heights)
+            _logger.info(
+                "ots verify via info fallback: bitcoin_block_height=%d (no local node)",
+                block_height,
+            )
+            return True, block_height
+
     def _verify_ots_proof(
+        self,
         payload_bytes: bytes,
         ots_bytes: bytes,
         ots_bin: str,
@@ -297,15 +398,14 @@ class OTSAdapter:
             payload_path.write_bytes(payload_bytes)
             proof_path.write_bytes(ots_bytes)
             if dialect == "python":
-                verify_cmd = [
-                    ots_bin,
+                verify_cmd = self._ots_cmd(
                     "verify",
                     "-f",
                     "payload.md",
                     "payload.md.ots",
-                ]
+                )
             else:
-                verify_cmd = [ots_bin, "verify", "payload.md.ots", "payload.md"]
+                verify_cmd = self._ots_cmd("verify", "payload.md.ots", "payload.md")
             try:
                 result = subprocess.run(  # noqa: S603
                     verify_cmd,
@@ -327,6 +427,13 @@ class OTSAdapter:
                 return False, None
 
             if result.returncode != 0:
+                if _ots_output_indicates_bitcoin_node_error(out):
+                    return self._verify_ots_proof_via_info(
+                        payload_bytes,
+                        ots_bytes,
+                        ots_bin,
+                        timeout,
+                    )
                 if dialect == "python" and "usage:" in out:
                     _logger.warning(
                         "ots verify failed: Python CLI rejected args stdout=%s stderr=%s",
