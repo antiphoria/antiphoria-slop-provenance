@@ -51,8 +51,9 @@ async def _run_verify_command(args: argparse.Namespace) -> int:
             return 1
         if allow_redacted:
             print(
-                "[OK] REDACTED: Metadata and signatures valid. "
-                "Reveal full body to complete verification."
+                "[INFO] REDACTED: metadata internally consistent. "
+                "Signature cannot be checked — body absent. "
+                "Reveal full body to verify."
             )
             return 0
         envelope, payload = parse_artifact_markdown(artifact_path)
@@ -300,6 +301,11 @@ def _attestation_verdict(
         return "WARN", 0
     if report.c2pa_present and not report.c2pa_valid:
         return "WARN", 0
+    # v3 (Gap 1): a superseded artifact is honest, just no longer current.
+    # Surface as WARN so operators/readers notice, but don't fail — the
+    # artifact's signatures and anchors are still valid for what it is.
+    if getattr(report, "superseded_by", None):
+        return "WARN", 0
     return "PASS", 0
 
 
@@ -387,6 +393,13 @@ async def _run_attest_command(args: argparse.Namespace) -> int:
             print("C2PA state:", report.c2pa_validation_state)
         for c2pa_error in report.c2pa_errors:
             print(f"- C2PA: {c2pa_error}")
+        # v3 (Gap 1): surface supersession state so readers notice the artifact
+        # is no longer the current version.
+        if getattr(report, "superseded_by", None):
+            print(
+                f"SUPERSEDED: this artifact has a newer version (requestId={report.superseded_by}). "
+                "Signatures and anchors remain valid for this version."
+            )
         for error in report.errors:
             print(f"- {error}")
 

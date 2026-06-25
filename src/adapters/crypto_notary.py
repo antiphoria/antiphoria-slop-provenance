@@ -39,8 +39,6 @@ from src.adapters.c2pa_manifest import (
 from src.canonicalization import CANONICALIZATION_VERSION, compute_payload_hash
 from src.domain.events import (
     EventBusPort,
-    StoryCurated,
-    StoryGenerated,
     StoryHumanRegistered,
     StorySigned,
     StorySyntheticSealed,
@@ -56,9 +54,11 @@ from src.models import (
     EmbeddedWatermark,
     GenerationContext,
     Hyperparameters,
+    OperatorSeal,
     Provenance,
     ProvenanceGrade,
     RegistrationCeremony,
+    Revision,
     SignatureBlock,
     UsageMetrics,
     VerificationAnchor,
@@ -193,7 +193,7 @@ class CryptoNotaryAdapter:
         )
 
     async def start(self) -> None:
-        """Subscribe to generation and curation events."""
+        """Subscribe to register/seal events (v3: generate/curate removed)."""
 
         if self._private_key is None or self._ed25519_private_key is None:
             _adapter_logger.debug(
@@ -201,8 +201,6 @@ class CryptoNotaryAdapter:
                 "skipping signing event subscriptions."
             )
             return
-        await self._event_bus.subscribe(StoryGenerated, self._on_story_generated)
-        await self._event_bus.subscribe(StoryCurated, self._on_story_curated)
         await self._event_bus.subscribe(StoryHumanRegistered, self._on_story_human_registered)
         await self._event_bus.subscribe(StorySyntheticSealed, self._on_story_synthetic_sealed)
 
@@ -230,7 +228,16 @@ class CryptoNotaryAdapter:
         return _load_key_bytes(key_path)
 
     def _resolve_signer_fingerprint(self) -> str:
-        """Resolve signer fingerprint from env or key hash fallback."""
+        """Resolve signer fingerprint from env or public-key hash fallback.
+
+        v3 (Flaw E, pre-release.md §3): the fallback now derives from the *public*
+        key, not the private key. Previously the fallback was
+        ``sha256(private_key)[:32]``, which (a) couldn't be recomputed by a
+        third-party verifier from published material, and (b) produced a
+        fingerprint that didn't match the registry's ``publicKeySha256``.
+        The new fallback is ``sha256(public_key_bytes)[:32]`` — the same value
+        any verifier can recompute from the published public key.
+        """
 
         try:
             return read_env_required(
@@ -238,9 +245,15 @@ class CryptoNotaryAdapter:
                 env_path=self._env_path,
             )
         except RuntimeError:
-            if self._private_key is None:
-                return "unknown"
-            return sha256_hex(self._private_key)[:32]
+            pass
+        # Try the public key first (works for both sign and verify-only adapters).
+        try:
+            public_key_bytes = self._resolve_public_key()
+            return sha256_hex(public_key_bytes)[:32]
+        except RuntimeError:
+            pass
+        # Last resort: no keys resolvable at all (e.g., misconfigured verify path).
+        return "unknown"
 
     def _resolve_ed25519_key(self) -> tuple[bytes, str, Ed25519PrivateKey]:
         """Resolve Ed25519 private key bytes, fingerprint, and parsed key object."""
@@ -318,66 +331,6 @@ class CryptoNotaryAdapter:
                 return _load_key_bytes(key_path)
         return self._resolve_public_key()
 
-    async def _on_story_generated(self, event: StoryGenerated) -> None:
-        """Sign generated content and emit a signed envelope event."""
-        bind_log_context(request_id=event.request_id)
-
-        artifact, c2pa_manifest = await self._build_signed_artifact(
-            title=event.title,
-            source="synthetic",
-            model_id=event.model_id,
-            body=event.body,
-            prompt=event.prompt,
-            system_instruction=event.system_instruction,
-            temperature=event.temperature,
-            top_p=event.top_p,
-            top_k=event.top_k,
-            usage_metrics=event.usage_metrics,
-            embedded_watermark=event.embedded_watermark,
-            content_type=event.content_type,
-            license_id=event.license,
-            curation=None,
-            author_attestation=None,
-            provenance_grade="recorded",
-        )
-        await self._emit_signed(
-            request_id=event.request_id,
-            artifact=artifact,
-            body=event.body,
-            c2pa_manifest=c2pa_manifest,
-        )
-
-    async def _on_story_curated(self, event: StoryCurated) -> None:
-        """Sign curated content and emit a signed envelope event."""
-        bind_log_context(request_id=event.request_id)
-
-        artifact, c2pa_manifest = await self._build_signed_artifact(
-            title=(
-                event.title if event.title is not None else self._derive_title(event.curated_body)
-            ),
-            source="hybrid",
-            model_id=event.model_id,
-            body=event.curated_body,
-            prompt=event.prompt,
-            system_instruction="Human curation pass.",
-            temperature=0.0,
-            top_p=1.0,
-            top_k=1,
-            usage_metrics=None,
-            embedded_watermark=None,
-            content_type=_DEFAULT_CONTENT_TYPE,
-            license_id=get_license_id("hybrid"),
-            curation=event.curation_metadata,
-            author_attestation=None,
-            provenance_grade="recorded",
-        )
-        await self._emit_signed(
-            request_id=event.request_id,
-            artifact=artifact,
-            body=event.curated_body,
-            c2pa_manifest=c2pa_manifest,
-        )
-
     async def _on_story_human_registered(self, event: StoryHumanRegistered) -> None:
         """Sign human-only content and emit a signed envelope event."""
         bind_log_context(request_id=event.request_id)
@@ -397,6 +350,8 @@ class CryptoNotaryAdapter:
             content_type=_DEFAULT_CONTENT_TYPE,
             license_id=event.license,
             curation=None,
+            rights_holder=event.rights_holder,
+            revision=event.revision,
             author_attestation=event.attestation,
             webauthn_attestation=event.webauthn_attestation,
             registration_ceremony=event.registration_ceremony,
@@ -432,6 +387,8 @@ class CryptoNotaryAdapter:
             content_type=_DEFAULT_CONTENT_TYPE,
             license_id=event.license,
             curation=None,
+            rights_holder=event.rights_holder,
+            revision=event.revision,
             author_attestation=event.attestation,
             webauthn_attestation=event.webauthn_attestation,
             registration_ceremony=event.registration_ceremony,
@@ -511,6 +468,8 @@ class CryptoNotaryAdapter:
         content_type: str,
         license_id: str,
         curation: Curation | None,
+        rights_holder: str | None = None,
+        revision: Revision | None = None,
         author_attestation: AuthorAttestation | None = None,
         webauthn_attestation: WebAuthnAttestation | None = None,
         registration_ceremony: RegistrationCeremony | None = None,
@@ -542,6 +501,8 @@ class CryptoNotaryAdapter:
             timestamp=datetime.now(UTC),
             contentType=content_type,
             license=license_id,
+            rights_holder=rights_holder,
+            revision=revision,
             provenance=Provenance(
                 source=source,
                 engineVersion=_DEFAULT_ENGINE_VERSION,
@@ -550,18 +511,6 @@ class CryptoNotaryAdapter:
                 usageMetrics=usage_metrics,
                 embeddedWatermark=embedded_watermark,
                 authorAttestation=author_attestation,
-                webauthnAttestation=webauthn_attestation,
-                attestationStrength=(
-                    "webauthn"
-                    if webauthn_attestation
-                    else (
-                        "unattended"
-                        if author_attestation
-                        and author_attestation.attestation_mode == "unattended"
-                        else ("none" if author_attestation else None)
-                    )
-                ),
-                registrationCeremony=registration_ceremony,
                 provenanceGrade=provenance_grade,
                 modelsUsed=models_used,
                 processNarrativeHash=process_narrative_hash,
@@ -582,13 +531,16 @@ class CryptoNotaryAdapter:
                     "Aborting notarization (fail-closed). "
                     f"Underlying error: {exc!r}"
                 ) from exc
+
+        # v3 (Gap 2): the signing target excludes ``operatorSeals`` entirely —
+        # each operator signs the envelope (the work), not the list of seals.
+        # So we sign over the unsigned envelope directly, then build the sealer
+        # seal afterward with the real signatures. Witnesses can later append
+        # their seals without affecting the sealer's signed bytes.
         signing_target = build_envelope_signing_target(
             envelope=unsigned_envelope,
             payload_sha256_hex=payload_hash,
             manifest_sha256_hex=(None if c2pa_manifest is None else c2pa_manifest.manifest_hash),
-            # NOTE: Non-chain mode intentionally signs with prev_hash=None.
-            # TODO: Thread ledger hash-linking into notary signatures when available.
-            prev_hash=None,
             canonicalization_version=CANONICALIZATION_VERSION,
         )
         signing_hash = sha256_hex(canonical_json_bytes(signing_target))
@@ -597,7 +549,7 @@ class CryptoNotaryAdapter:
             self._private_key,
             signing_hash.encode("utf-8"),
         )
-        signature = SignatureBlock(
+        primary_sig = SignatureBlock(
             cryptoAlgorithm=CRYPTO_ALGORITHM_ML_DSA_44,
             artifactHash=payload_hash,
             cryptographicSignature=base64.b64encode(signature_bytes).decode("ascii"),
@@ -618,7 +570,7 @@ class CryptoNotaryAdapter:
                 self._ed25519_private_key,
                 signing_hash.encode("utf-8"),
             )
-        hybrid_signature = SignatureBlock(
+        hybrid_sig = SignatureBlock(
             cryptoAlgorithm=CRYPTO_ALGORITHM_ED25519,
             artifactHash=payload_hash,
             cryptographicSignature=base64.b64encode(hybrid_sig_bytes).decode("ascii"),
@@ -627,12 +579,130 @@ class CryptoNotaryAdapter:
             ),
             payloadCanonicalization=CANONICALIZATION_VERSION,
         )
+        attestation_strength = (
+            "webauthn"
+            if webauthn_attestation
+            else (
+                "unattended"
+                if author_attestation
+                and author_attestation.attestation_mode == "unattended"
+                else ("none" if author_attestation else None)
+            )
+        )
+        sealer_pseudonym = (
+            registration_ceremony.operator_pseudonym_hash if registration_ceremony else None
+        )
+        sealer_seal = OperatorSeal(
+            operatorPseudonymHash=sealer_pseudonym,
+            role="sealer",
+            sealedAt=datetime.now(UTC).isoformat(),
+            ceremony=registration_ceremony,
+            webauthn=webauthn_attestation,
+            attestationStrength=attestation_strength,
+            primary=primary_sig,
+            hybrid=hybrid_sig,
+        )
         return unsigned_envelope.model_copy(
-            update={
-                "signature": signature,
-                "hybrid_signature": hybrid_signature,
-            }
+            update={"operator_seals": [sealer_seal]}
         ), c2pa_manifest
+
+    def build_witness_seal(
+        self,
+        envelope: Artifact,
+        body: str,  # noqa: ARG002 — kept for API symmetry with _build_signed_artifact
+        payload_hash: str,
+        manifest_hash: str | None,
+        ceremony: RegistrationCeremony | None,
+        webauthn_attestation: WebAuthnAttestation | None,
+    ) -> OperatorSeal:
+        """Build a witness OperatorSeal over the same canonical target as the sealer.
+
+        v3 (Gap 2): the witnessing operator signs identical canonical bytes as
+        the sealer — ``build_envelope_signing_target`` strips
+        ``cryptographicSignature`` from every seal's primary/hybrid, so the
+        witness's signature fills the same empty slot pattern. The witness seal
+        is appended to ``operatorSeals[]``; the sealer's seal is untouched.
+
+        This method does NOT commit — it returns the seal object. The caller
+        appends it to the envelope and commits.
+        """
+
+        # Build placeholder sigs so the target includes the seal's metadata shape.
+        primary_placeholder = SignatureBlock(
+            cryptoAlgorithm=CRYPTO_ALGORITHM_ML_DSA_44,
+            artifactHash=payload_hash,
+            cryptographicSignature="placeholder-will-be-stripped",
+            verificationAnchor=VerificationAnchor(
+                signerFingerprint=self._signer_fingerprint,
+            ),
+            payloadCanonicalization=CANONICALIZATION_VERSION,
+        )
+        hybrid_placeholder = SignatureBlock(
+            cryptoAlgorithm=CRYPTO_ALGORITHM_ED25519,
+            artifactHash=payload_hash,
+            cryptographicSignature="placeholder-will-be-stripped",
+            verificationAnchor=VerificationAnchor(
+                signerFingerprint=self._ed25519_signer_fingerprint,
+            ),
+            payloadCanonicalization=CANONICALIZATION_VERSION,
+        )
+        attestation_strength = "webauthn" if webauthn_attestation else "none"
+        witness_pseudonym = (
+            ceremony.operator_pseudonym_hash if ceremony else None
+        )
+        witness_seal_placeholder = OperatorSeal(
+            operatorPseudonymHash=witness_pseudonym,
+            role="witness",
+            sealedAt=datetime.now(UTC).isoformat(),
+            ceremony=ceremony,
+            webauthn=webauthn_attestation,
+            attestationStrength=attestation_strength,
+            primary=primary_placeholder,
+            hybrid=hybrid_placeholder,
+        )
+        # Temporarily attach the witness seal to compute the target, then sign.
+        envelope_for_target = envelope.model_copy(
+            update={"operator_seals": list(envelope.operator_seals) + [witness_seal_placeholder]}
+        )
+        signing_target = build_envelope_signing_target(
+            envelope=envelope_for_target,
+            payload_sha256_hex=payload_hash,
+            manifest_sha256_hex=manifest_hash,
+            canonicalization_version=CANONICALIZATION_VERSION,
+        )
+        signing_hash = sha256_hex(canonical_json_bytes(signing_target))
+        signature_bytes = _sign_ml_dsa(self._private_key, signing_hash.encode("utf-8"))
+        primary_sig = SignatureBlock(
+            cryptoAlgorithm=CRYPTO_ALGORITHM_ML_DSA_44,
+            artifactHash=payload_hash,
+            cryptographicSignature=base64.b64encode(signature_bytes).decode("ascii"),
+            verificationAnchor=VerificationAnchor(
+                signerFingerprint=self._signer_fingerprint,
+            ),
+            payloadCanonicalization=CANONICALIZATION_VERSION,
+        )
+        if self._ed25519_private_key_obj is not None:
+            hybrid_sig_bytes = _sign_ed25519_with_key(
+                self._ed25519_private_key_obj,
+                signing_hash.encode("utf-8"),
+            )
+        else:
+            hybrid_sig_bytes = _sign_ed25519(
+                self._ed25519_private_key,
+                signing_hash.encode("utf-8"),
+            )
+        hybrid_sig = SignatureBlock(
+            cryptoAlgorithm=CRYPTO_ALGORITHM_ED25519,
+            artifactHash=payload_hash,
+            cryptographicSignature=base64.b64encode(hybrid_sig_bytes).decode("ascii"),
+            verificationAnchor=VerificationAnchor(
+                signerFingerprint=self._ed25519_signer_fingerprint,
+            ),
+            payloadCanonicalization=CANONICALIZATION_VERSION,
+        )
+        return witness_seal_placeholder.model_copy(
+            update={"primary": primary_sig, "hybrid": hybrid_sig}
+        )
 
     def verify_artifact(
         self,
@@ -680,8 +750,6 @@ class CryptoNotaryAdapter:
             envelope=envelope,
             payload_sha256_hex=payload_hash,
             manifest_sha256_hex=manifest_hash,
-            # Verification mirrors signing's current non-chain prev_hash behavior.
-            prev_hash=None,
             canonicalization_version=envelope.signature.payload_canonicalization,
         )
         signing_hash = sha256_hex(canonical_json_bytes(signing_target))

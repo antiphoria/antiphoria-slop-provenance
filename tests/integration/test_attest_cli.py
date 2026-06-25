@@ -21,12 +21,13 @@ from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.transparency_log import TransparencyLogAdapter
 from src.canonicalization import compute_payload_hash
 from src.domain.events import StorySigned
+from src.envelope_v2 import generation_context_for_source
 from src.infrastructure.event_bus import InMemoryEventBus
 from src.models import (
     Artifact,
-    GenerationContext,
-    Hyperparameters,
+    AuthorAttestation,
     Provenance,
+    RegistrationCeremony,
     SignatureBlock,
     VerificationAnchor,
 )
@@ -61,6 +62,10 @@ class _FakeVerificationService:
 
 
 def _build_story_signed_event(request_id: UUID, body: str) -> StorySigned:
+    """Build a v3-shaped StorySigned event for attest-cli tests.
+
+    v3: renderer requires author_attestation + registration_ceremony.
+    """
     artifact = Artifact(
         title="Attestation Test Artifact",
         timestamp=datetime.now(UTC),
@@ -70,15 +75,12 @@ def _build_story_signed_event(request_id: UUID, body: str) -> StorySigned:
             source="synthetic",
             engineVersion="test-engine",
             modelId="test-model",
-            generationContext=GenerationContext(
-                systemInstruction="Write deterministic content.",
-                prompt="test prompt",
-                hyperparameters=Hyperparameters(
-                    temperature=0.7,
-                    topP=0.95,
-                    topK=40,
-                ),
+            generationContext=generation_context_for_source("synthetic"),
+            authorAttestation=AuthorAttestation(
+                attestationNature="orchestration-declaration",
+                attestationMode="unattended",
             ),
+            provenanceGrade="unattended",
         ),
         signature=SignatureBlock(
             artifactHash=compute_payload_hash(body),
@@ -166,236 +168,6 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.ledger_path, f"{request_id}.md")
         self.assertIsNotNone(report.commit_oid)
         self.assertEqual(dict(repo.status()), {})
-
-    async def test_audit_committed_artifact_sets_remote_anchor_verified_false_when_remote_empty(
-        self,
-    ) -> None:
-        """When remote returns no rows, remote_anchor_verified is False."""
-        request_id = uuid4()
-        body = "Payload for remote verification test."
-        event = _build_story_signed_event(request_id=request_id, body=body)
-
-        ledger = GitLedgerAdapter(
-            event_bus=InMemoryEventBus(),
-            repository_path=self._repo_path,
-        )
-        await ledger._on_story_signed(event)
-
-        repo = pygit2.Repository(str(self._repo_path))
-        branch_reference = repo.lookup_reference(f"refs/heads/artifact/{request_id}")
-        branch_commit = repo[branch_reference.target]
-
-        repository = SQLiteRepository(db_path=self._artifact_db_path)
-        log_adapter = TransparencyLogAdapter(
-            log_path=self._repo_path / ".provenance" / "transparency-log.jsonl",
-            publish_url="https://test.supabase.co/rest/v1/transparency_log",
-            publish_headers={"apikey": "x", "Authorization": "Bearer x"},
-        )
-
-        def fake_urlopen(request: object, timeout: float = 10.0) -> object:
-            resp = MagicMock()
-            resp.read.return_value = b'[{"id": 1, "payload": {}}]'
-            resp.__enter__ = MagicMock(return_value=resp)
-            resp.__exit__ = MagicMock(return_value=False)
-            return resp
-
-        with patch("urllib.request.urlopen", fake_urlopen):
-            provenance_service = ProvenanceService(
-                transparency_store=repository.transparency,
-                timestamp_store=repository.timestamps,
-                transparency_log_adapter=log_adapter,
-                tsa_adapter=None,
-                key_registry=KeyRegistryAdapter(store=repository.keys),
-            )
-            provenance_service.anchor_committed_artifact(
-                repository_path=self._repo_path,
-                commit_oid=str(branch_commit.id),
-                ledger_path=f"{request_id}.md",
-                request_id=request_id,
-            )
-
-        with patch.object(
-            log_adapter,
-            "fetch_remote_entries_by_artifact_hash",
-            return_value=[],
-        ):
-            verification_service = VerificationService(
-                audit_store=repository.audit,
-                transparency_log_adapter=log_adapter,
-                tsa_adapter=None,
-                key_registry=KeyRegistryAdapter(store=repository.keys),
-                artifact_verifier=_AllowAllVerifier(),
-            )
-            report = verification_service.audit_committed_artifact(
-                repository_path=self._repo_path,
-                request_id=request_id,
-                tsa_ca_cert_path=None,
-            )
-
-        self.assertFalse(report.remote_anchor_verified)
-        self.assertIn(
-            "Remote transparency log: no matching entry.",
-            report.errors,
-        )
-
-    async def test_audit_committed_artifact_sets_remote_anchor_verified_false_when_remote_error(
-        self,
-    ) -> None:
-        """When remote fetch raises RuntimeError, only remote_anchor_verified fails; signature etc. remain valid."""
-        request_id = uuid4()
-        body = "Payload for remote error test."
-        event = _build_story_signed_event(request_id=request_id, body=body)
-
-        ledger = GitLedgerAdapter(
-            event_bus=InMemoryEventBus(),
-            repository_path=self._repo_path,
-        )
-        await ledger._on_story_signed(event)
-
-        repo = pygit2.Repository(str(self._repo_path))
-        branch_reference = repo.lookup_reference(f"refs/heads/artifact/{request_id}")
-        branch_commit = repo[branch_reference.target]
-
-        def make_post_response(*args: object, **kwargs: object) -> object:
-            resp = MagicMock()
-            resp.read.return_value = b'[{"id": 1}]'
-            resp.__enter__ = MagicMock(return_value=resp)
-            resp.__exit__ = MagicMock(return_value=False)
-            return resp
-
-        repository = SQLiteRepository(db_path=self._artifact_db_path)
-        log_adapter = TransparencyLogAdapter(
-            log_path=self._repo_path / ".provenance" / "transparency-log.jsonl",
-            publish_url="https://test.supabase.co/rest/v1/transparency_log",
-            publish_headers={"apikey": "x", "Authorization": "Bearer x"},
-        )
-        with patch("urllib.request.urlopen", side_effect=make_post_response):
-            provenance_service = ProvenanceService(
-                transparency_store=repository.transparency,
-                timestamp_store=repository.timestamps,
-                transparency_log_adapter=log_adapter,
-                tsa_adapter=None,
-                key_registry=KeyRegistryAdapter(store=repository.keys),
-            )
-            provenance_service.anchor_committed_artifact(
-                repository_path=self._repo_path,
-                commit_oid=str(branch_commit.id),
-                ledger_path=f"{request_id}.md",
-                request_id=request_id,
-            )
-
-        network_error = RuntimeError(
-            "Remote transparency log fetch failed for artifact_hash=xxx: Connection refused"
-        )
-        with patch.object(
-            log_adapter,
-            "fetch_remote_entries_by_artifact_hash",
-            side_effect=network_error,
-        ):
-            verification_service = VerificationService(
-                audit_store=repository.audit,
-                transparency_log_adapter=log_adapter,
-                tsa_adapter=None,
-                key_registry=KeyRegistryAdapter(store=repository.keys),
-                artifact_verifier=_AllowAllVerifier(),
-            )
-            report = verification_service.audit_committed_artifact(
-                repository_path=self._repo_path,
-                request_id=request_id,
-                tsa_ca_cert_path=None,
-            )
-
-        self.assertFalse(report.remote_anchor_verified)
-        self.assertTrue(report.signature_valid)
-        self.assertTrue(report.transparency_anchor_found)
-        self.assertTrue(report.transparency_log_integrity)
-        remote_errors = [e for e in report.errors if "Remote transparency log:" in e]
-        self.assertTrue(len(remote_errors) >= 1)
-        self.assertIn("Connection refused", remote_errors[0])
-
-    async def test_audit_committed_artifact_sets_remote_anchor_verified_false_when_remote_tampered(
-        self,
-    ) -> None:
-        """When remote returns tampered payload (metadata changed, entryHash unchanged), deep check rejects it."""
-        request_id = uuid4()
-        body = "Payload for tamper test."
-        event = _build_story_signed_event(request_id=request_id, body=body)
-
-        ledger = GitLedgerAdapter(
-            event_bus=InMemoryEventBus(),
-            repository_path=self._repo_path,
-        )
-        await ledger._on_story_signed(event)
-
-        repo = pygit2.Repository(str(self._repo_path))
-        branch_reference = repo.lookup_reference(f"refs/heads/artifact/{request_id}")
-        branch_commit = repo[branch_reference.target]
-
-        def make_post_response(*args: object, **kwargs: object) -> object:
-            resp = MagicMock()
-            resp.read.return_value = b'[{"id": 1}]'
-            resp.__enter__ = MagicMock(return_value=resp)
-            resp.__exit__ = MagicMock(return_value=False)
-            return resp
-
-        repository = SQLiteRepository(db_path=self._artifact_db_path)
-        log_adapter = TransparencyLogAdapter(
-            log_path=self._repo_path / ".provenance" / "transparency-log.jsonl",
-            publish_url="https://test.supabase.co/rest/v1/transparency_log",
-            publish_headers={"apikey": "x", "Authorization": "Bearer x"},
-        )
-        with patch("urllib.request.urlopen", side_effect=make_post_response):
-            provenance_service = ProvenanceService(
-                transparency_store=repository.transparency,
-                timestamp_store=repository.timestamps,
-                transparency_log_adapter=log_adapter,
-                tsa_adapter=None,
-                key_registry=KeyRegistryAdapter(store=repository.keys),
-            )
-            provenance_service.anchor_committed_artifact(
-                repository_path=self._repo_path,
-                commit_oid=str(branch_commit.id),
-                ledger_path=f"{request_id}.md",
-                request_id=request_id,
-            )
-
-        branch_ref = repo.lookup_reference(f"refs/heads/artifact/{request_id}")
-        anchor_commit = repo[branch_ref.target]
-        log_blob = repo[anchor_commit.tree[".provenance/transparency-log.jsonl"].id]
-        log_text = bytes(log_blob.data).decode("utf-8")
-        local_entry = json.loads(log_text.strip().splitlines()[-1])
-
-        tampered_payload = dict(local_entry)
-        tampered_payload["metadata"] = {"source": "humsan"}
-        tampered_payload["entryHash"] = local_entry["entryHash"]
-
-        def fetch_tampered(artifact_hash: str) -> list[dict]:
-            _ = artifact_hash
-            return [{"payload": tampered_payload}]
-
-        with patch.object(
-            log_adapter,
-            "fetch_remote_entries_by_artifact_hash",
-            side_effect=fetch_tampered,
-        ):
-            verification_service = VerificationService(
-                audit_store=repository.audit,
-                transparency_log_adapter=log_adapter,
-                tsa_adapter=None,
-                key_registry=KeyRegistryAdapter(store=repository.keys),
-                artifact_verifier=_AllowAllVerifier(),
-            )
-            report = verification_service.audit_committed_artifact(
-                repository_path=self._repo_path,
-                request_id=request_id,
-                tsa_ca_cert_path=None,
-            )
-
-        self.assertFalse(report.remote_anchor_verified)
-        self.assertTrue(report.signature_valid)
-        self.assertTrue(report.transparency_anchor_found)
-        self.assertTrue(report.transparency_log_integrity)
-        self.assertIn("Remote transparency log: no matching entry.", report.errors)
 
     async def test_attest_warns_without_timestamp_when_non_strict(self) -> None:
         request_id = uuid4()
@@ -645,44 +417,6 @@ class AttestCliTest(unittest.IsolatedAsyncioTestCase):
                 exit_code = await cli._run_attest_command(args)
         self.assertEqual(exit_code, 0)
         self.assertIn("[PASS]", buffer.getvalue())
-
-    async def test_attest_fails_when_remote_anchor_verified_false(self) -> None:
-        request_id = uuid4()
-        report = AuditReport(
-            artifact_id=str(uuid4()),
-            request_id=str(request_id),
-            source_file=f"{request_id}.md",
-            envelope_valid=True,
-            signature_valid=True,
-            payload_hash_match=True,
-            transparency_anchor_found=True,
-            transparency_log_integrity=True,
-            remote_anchor_verified=False,
-            timestamp_found=True,
-            timestamp_valid=True,
-            key_status_at_signing_time="active",
-            errors=["Remote transparency log: no matching entry."],
-            branch=f"artifact/{request_id}",
-            commit_oid="abc123",
-            ledger_path=f"{request_id}.md",
-        )
-        args = argparse.Namespace(
-            repo_path=str(self._repo_path),
-            request_id=str(request_id),
-            strict=False,
-            strict_c2pa=False,
-            json=False,
-            tsa_ca_cert_path=None,
-        )
-        with patch(
-            "src.cli._build_provenance_services",
-            return_value=(object(), _FakeVerificationService(report)),
-        ):
-            buffer = io.StringIO()
-            with redirect_stdout(buffer):
-                exit_code = await cli._run_attest_command(args)
-        self.assertEqual(exit_code, 1)
-        self.assertIn("[FAIL]", buffer.getvalue())
 
 
 if __name__ == "__main__":

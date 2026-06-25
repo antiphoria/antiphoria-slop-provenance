@@ -160,8 +160,7 @@ def _check_c2pa(env_path: Path) -> StackCheckResult:
             ok=False,
             message="C2PA enabled but material missing: " + "; ".join(missing),
         )
-    mode = read_env_optional("C2PA_MODE", env_path=env_path) or "sdk"
-    return StackCheckResult(name="c2pa", ok=True, message=f"C2PA enabled (mode={mode})")
+    return StackCheckResult(name="c2pa", ok=True, message="C2PA enabled (mode=sdk)")
 
 
 def check_ceremony_stack(

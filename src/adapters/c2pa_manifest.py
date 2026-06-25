@@ -30,7 +30,6 @@ from src.env_config import (
 )
 from src.models import Artifact, canonical_json_bytes, sha256_hex
 
-_C2PA_MODE_VALUES: tuple[str, ...] = ("mvp", "sdk")
 _C2PA_ALGORITHM_VALUES: tuple[str, ...] = (
     "ES256",
     "ES384",
@@ -40,7 +39,6 @@ _C2PA_ALGORITHM_VALUES: tuple[str, ...] = (
     "PS512",
     "ED25519",
 )
-_DEFAULT_C2PA_MODE = "mvp"
 _DEFAULT_C2PA_ALGORITHM = "ES256"
 _SDK_CARRIER_FORMAT = "image/jpeg"
 _SDK_MARKDOWN_ASSERTION_LABEL = "org.antiphoria.markdown"
@@ -95,7 +93,12 @@ _SDK_OPERATION_ERRORS: tuple[type[Exception], ...] = (
 )
 _logger = logging.getLogger(__name__)
 
-C2PAMode = Literal["mvp", "sdk"]
+C2PAMode = Literal["sdk"]
+"""v3: only SDK mode. MVP (unsigned JSON) was removed — see pre-release.md §1.
+
+The Literal is retained so existing type annotations referencing C2PAMode still
+parse; the only valid value is now "sdk". A future cleanup can drop the alias.
+"""
 
 
 @dataclass(frozen=True)
@@ -131,40 +134,6 @@ class C2PAManifestProvider(Protocol):
 
     def build(self, envelope: Artifact, body: str) -> C2PAManifestArtifact:
         """Build sidecar bytes and hash from one artifact envelope."""
-
-
-class MvpC2PAManifestProvider:
-    """Deterministic JSON sidecar provider used for MVP dual-write mode."""
-
-    def build(self, envelope: Artifact, body: str) -> C2PAManifestArtifact:
-        payload_hash = compute_payload_hash(body)
-        payload = {
-            "c2paVersion": "2.3",
-            "claimGenerator": envelope.provenance.engine_version,
-            "title": envelope.title,
-            "assertions": {
-                "c2pa.actions": [
-                    {
-                        "action": "c2pa.created",
-                        "digitalSourceType": _digital_source_type_for_source(
-                            envelope.provenance.source
-                        ),
-                        "when": envelope.timestamp.astimezone(UTC).isoformat(),
-                    }
-                ],
-                "c2pa.asset": {
-                    "artifactId": str(envelope.id),
-                    "contentType": envelope.content_type,
-                    "payloadHash": payload_hash,
-                },
-                "slopOrchestrator.context": _build_slop_orchestrator_context(envelope),
-            },
-        }
-        manifest_bytes = canonical_json_bytes(payload)
-        return C2PAManifestArtifact(
-            manifest_bytes=manifest_bytes,
-            manifest_hash=sha256_hex(manifest_bytes),
-        )
 
 
 class SdkC2PAManifestProvider:
@@ -284,30 +253,27 @@ class SdkC2PAManifestProvider:
 
 
 def resolve_c2pa_mode(
-    env_path: Path | None = None,
-    explicit_mode: C2PAMode | None = None,
+    env_path: Path | None = None,  # noqa: ARG001 — retained for API compat
+    explicit_mode: C2PAMode | None = None,  # noqa: ARG001
 ) -> C2PAMode:
-    """Resolve C2PA sidecar provider mode from env or explicit override."""
+    """Resolve C2PA sidecar provider mode. v3: always SDK.
 
-    if explicit_mode is not None:
-        return explicit_mode
-    return read_env_choice(
-        "C2PA_MODE",
-        allowed_values=_C2PA_MODE_VALUES,
-        default=_DEFAULT_C2PA_MODE,
-        env_path=env_path,
-    )
+    Retained for API compatibility with callers that still pass env_path /
+    explicit_mode. MVP mode was removed (pre-release.md §1) — the return is
+    always "sdk" now.
+    """
+    return "sdk"
 
 
 def build_c2pa_manifest_provider(
     env_path: Path | None = None,
-    mode: C2PAMode | None = None,
+    mode: C2PAMode | None = None,  # noqa: ARG001
 ) -> C2PAManifestProvider:
-    """Build provider for selected C2PA sidecar mode."""
+    """Build provider for C2PA sidecar mode. v3: SDK only.
 
-    resolved_mode = resolve_c2pa_mode(env_path=env_path, explicit_mode=mode)
-    if resolved_mode == "mvp":
-        return MvpC2PAManifestProvider()
+    The `mode` argument is accepted but ignored (only "sdk" is valid). MVP
+    (unsigned JSON) mode is gone.
+    """
     return SdkC2PAManifestProvider(settings=_resolve_sdk_settings(env_path))
 
 
@@ -315,36 +281,26 @@ def build_c2pa_sidecar_manifest(
     envelope: Artifact,
     body: str,
     env_path: Path | None = None,
-    mode: C2PAMode | None = None,
+    mode: C2PAMode | None = None,  # noqa: ARG001
 ) -> C2PAManifestArtifact:
-    """Build C2PA sidecar payload from artifact envelope and body."""
-
-    provider = build_c2pa_manifest_provider(env_path=env_path, mode=mode)
+    """Build C2PA sidecar payload from artifact envelope and body. v3: SDK only."""
+    provider = build_c2pa_manifest_provider(env_path=env_path)
     return provider.build(envelope, body)
 
 
 def build_c2pa_validation_payload(
-    envelope: Artifact,
-    body: str,
-    env_path: Path | None = None,
-    mode: C2PAMode | None = None,
+    envelope: Artifact,  # noqa: ARG001 — retained for API compat
+    body: str,  # noqa: ARG001
+    env_path: Path | None = None,  # noqa: ARG001
+    mode: C2PAMode | None = None,  # noqa: ARG001
 ) -> tuple[bytes, str]:
-    """Build payload bytes used for C2PA semantic verification."""
+    """Build payload bytes used for C2PA semantic verification. v3: SDK carrier.
 
-    resolved_mode = resolve_c2pa_mode(env_path=env_path, explicit_mode=mode)
-    if resolved_mode == "sdk":
-        _ = (envelope, body)
-        return _SDK_MINIMAL_JPEG_BYTES, _SDK_CARRIER_FORMAT
-
-    payload_bytes = (
-        canonicalize_body_for_hash(body)
-        if (
-            envelope.signature is not None
-            and envelope.signature.payload_canonicalization == "eternity.canonicalization.v1"
-        )
-        else body.encode("utf-8")
-    )
-    return payload_bytes, envelope.content_type
+    The SDK signs a minimal JPEG carrier, so the validation payload is always the
+    carrier bytes + format. The body is bound to the manifest via the
+    ``org.antiphoria.markdown`` assertion (checked in validate_c2pa_sidecar).
+    """
+    return _SDK_MINIMAL_JPEG_BYTES, _SDK_CARRIER_FORMAT
 
 
 def validate_c2pa_sidecar(
@@ -355,28 +311,13 @@ def validate_c2pa_sidecar(
     env_path: Path | None = None,
     body_for_mvp: str | None = None,
 ) -> C2PAManifestValidation:
-    """Validate one sidecar manifest against one payload.
+    """Validate one C2PA sidecar manifest against its payload. v3: SDK path only.
 
-    body_for_mvp is **required** when the manifest is MVP format (see
-    `_parse_mvp_manifest`). payload_bytes may be a JPEG dummy carrier for SDK
-    mode; for MVP, the actual markdown body must be passed via body_for_mvp for
-    payload hash validation. Third-party callers must pass body_for_mvp when
-    validating MVP sidecars; otherwise validation fails with a clear error.
+    ``body_for_mvp`` is retained as a kwarg for caller compatibility; in v3 it is
+    the canonical-body argument used to verify the ``org.antiphoria.markdown``
+    assertion inside the SDK manifest. Renaming it would ripple through callers
+    needlessly; treat it as "body for assertion verification."
     """
-
-    mvp_manifest = _parse_mvp_manifest(manifest_bytes)
-    if mvp_manifest is not None and body_for_mvp is None:
-        return C2PAManifestValidation(
-            valid=False,
-            validation_state="invalid",
-            errors=[
-                "MVP C2PA manifest requires artifact body for payload hash "
-                "validation. Pass body_for_mvp when validating MVP sidecars."
-            ],
-        )
-    if mvp_manifest is not None and body_for_mvp is not None:
-        return _validate_mvp_manifest(mvp_manifest, body_for_mvp)
-
     try:
         c2pa = _load_c2pa_module()
     except RuntimeError as exc:
@@ -568,50 +509,6 @@ def _validate_via_candidate_formats(
             f"C2PA validation failed for all candidate formats: {candidate_formats}",
             str(last_error),
         ],
-    )
-
-
-def _parse_mvp_manifest(manifest_bytes: bytes) -> dict[str, Any] | None:
-    """Parse MVP JSON manifest structure when present."""
-
-    try:
-        manifest = json.loads(manifest_bytes.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return None
-    if not isinstance(manifest, dict):
-        return None
-    assertions = manifest.get("assertions")
-    if not isinstance(assertions, dict):
-        return None
-    asset = assertions.get("c2pa.asset")
-    if not isinstance(asset, dict):
-        return None
-    expected_hash = asset.get("payloadHash")
-    if not isinstance(expected_hash, str):
-        return None
-    return manifest
-
-
-def _validate_mvp_manifest(
-    manifest: dict[str, Any],
-    body: str,
-) -> C2PAManifestValidation:
-    """Validate parsed MVP JSON manifest using supplied markdown body."""
-
-    assertions = manifest["assertions"]
-    asset = assertions["c2pa.asset"]
-    expected_hash = asset["payloadHash"]
-    actual_hash = compute_payload_hash(body)
-    if actual_hash != expected_hash:
-        return C2PAManifestValidation(
-            valid=False,
-            validation_state="invalid",
-            errors=[f"MVP payload hash mismatch: expected {expected_hash}, got {actual_hash}"],
-        )
-    return C2PAManifestValidation(
-        valid=True,
-        validation_state="valid",
-        errors=[],
     )
 
 
@@ -863,7 +760,6 @@ __all__ = [
     "C2PAManifestValidation",
     "C2PAMode",
     "C2PASdkSettings",
-    "MvpC2PAManifestProvider",
     "SdkC2PAManifestProvider",
     "build_c2pa_manifest_provider",
     "build_c2pa_sidecar_manifest",

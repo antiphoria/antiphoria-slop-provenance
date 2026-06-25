@@ -213,3 +213,23 @@ def register_maintenance_parsers(
         default=default_repo_path(),
         help="Ledger repo path (credentials stored in repo or ~/.config).",
     )
+
+    export_vector_parser = subparsers.add_parser(
+        "export-vector",
+        help="Export a cryptographic golden vector for an artifact (for independent verifiers).",
+    )
+    export_vector_parser.add_argument(
+        "--file",
+        required=True,
+        help="Artifact markdown file path (eternity.v2 frontmatter).",
+    )
+    export_vector_parser.add_argument(
+        "--out",
+        required=True,
+        help="Output directory (created if absent).",
+    )
+    export_vector_parser.add_argument(
+        "--include-keys",
+        action="store_true",
+        help="Also write the raw public key bytes (for offline test fixtures).",
+    )

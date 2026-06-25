@@ -79,23 +79,6 @@ class EnvConfigTest(unittest.TestCase):
                 )
         self.assertTrue(enabled)
 
-    def test_generate_parser_uses_generator_model_env_default(self) -> None:
-        with patch(
-            "src.cli._read_env_optional",
-            return_value="gemini-via-env",
-        ):
-            parser = build_parser()
-            args = parser.parse_args(
-                [
-                    "generate",
-                    "--prompt",
-                    "x",
-                    "--repo-path",
-                    "../repo",
-                ]
-            )
-        self.assertEqual(args.model_id, "gemini-via-env")
-
     def test_read_env_choice_normalizes_and_validates(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

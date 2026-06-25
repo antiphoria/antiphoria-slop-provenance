@@ -20,6 +20,7 @@ from src.commands.catalog import (
 from src.commands.maintenance import (
     _run_anchor_merkle_root_command,
     _run_build_inclusion_proof_command,
+    _run_export_vector_command,
     _run_forge_status_command,
     _run_process_pending_command,
     _run_recover_failed_command,
@@ -33,10 +34,9 @@ from src.commands.maintenance import (
 )
 from src.commands.parser import build_cli_parser
 from src.commands.pipeline import (
-    _run_curate_command,
-    _run_generate_command,
     _run_register_command,
     _run_seal_command,
+    _run_witness_command,
 )
 from src.commands.verification import (
     _run_anchor_command,
@@ -135,10 +135,9 @@ async def _run_attest_command(args: argparse.Namespace) -> int:
 
 
 _ASYNC_COMMAND_HANDLERS: dict[str, AsyncCommandHandler] = {
-    "generate": _run_generate_command,
-    "curate": _run_curate_command,
     "register": _run_register_command,
     "seal": _run_seal_command,
+    "witness": _run_witness_command,
     "verify": _run_verify_command,
     "anchor": _run_anchor_command,
     "timestamp": _run_timestamp_command,
@@ -161,6 +160,7 @@ _SYNC_COMMAND_HANDLERS: dict[str, SyncCommandHandler] = {
     "verify-inclusion": _run_verify_inclusion_command,
     "build-inclusion-proof": _run_build_inclusion_proof_command,
     "webauthn-register": _run_webauthn_register_command,
+    "export-vector": _run_export_vector_command,
 }
 
 _ADMIN_COMMAND_HANDLERS: dict[str, SyncCommandHandler] = {
@@ -210,9 +210,9 @@ def main() -> int:
     parsed_args = parser.parse_args()
     lock_base = Path.cwd()
     if getattr(parsed_args, "command", None) in {
-        "generate",
-        "curate",
         "register",
+        "seal",
+        "witness",
         "anchor",
         "anchor-merkle-root",
         "upgrade-merkle-ots",

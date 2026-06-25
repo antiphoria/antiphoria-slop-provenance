@@ -14,34 +14,11 @@ def register_pipeline_parsers(
     read_env_optional: Callable[[str], str | None],
     env_path: Path,
 ) -> None:
-    """Register pipeline command parsers on the root subparser."""
-    generate_parser = subparsers.add_parser(
-        "generate",
-        help="Generate, notarize, and commit a new artifact.",
-    )
-    generate_parser.add_argument("--prompt", required=True, help="Prompt text.")
-    generate_parser.add_argument(
-        "--repo-path",
-        default=default_repo_path(),
-        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
-    )
-    generate_parser.add_argument(
-        "--model-id",
-        default=read_env_optional("GENERATOR_MODEL_ID", env_path=env_path) or "gemini-2.5-flash",
-        help="Google AI Studio model identifier.",
-    )
+    """Register pipeline command parsers on the root subparser.
 
-    curate_parser = subparsers.add_parser(
-        "curate",
-        help="Re-sign and commit a curated artifact markdown file.",
-    )
-    curate_parser.add_argument("--file", required=True, help="Edited artifact file path.")
-    curate_parser.add_argument(
-        "--repo-path",
-        default=default_repo_path(),
-        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
-    )
-
+    v3: `generate` and `curate` were removed (pre-release.md §1). The remaining
+    pipeline commands are `register` (human) and `seal` (synthetic).
+    """
     register_parser = subparsers.add_parser(
         "register",
         help=("Register self-attested human-only content (no AI generation in pipeline)."),
@@ -61,6 +38,43 @@ def register_pipeline_parsers(
         "--license",
         default="ARR",
         help="Content license to apply (e.g. ARR, CC-BY-4.0, CC0-1.0).",
+    )
+    register_parser.add_argument(
+        "--author",
+        default=None,
+        help=(
+            "Rights holder / author pen name (Flaw F). Antiphoria warrants "
+            "provenance; the author holds the license. Required for v3 seals "
+            "that ship; omit only for legacy test runs."
+        ),
+    )
+    register_parser.add_argument(
+        "--supersedes",
+        default=None,
+        help=(
+            "requestId of the prior version this artifact supersedes (Gap 1). "
+            "When set, the prior artifact's payloadHash is resolved from the "
+            "archive and embedded as a content commitment in this envelope. "
+            "Cannot be combined with --reason omitted."
+        ),
+    )
+    register_parser.add_argument(
+        "--reason",
+        default=None,
+        choices=[
+            "copyright-flag",
+            "error-correction",
+            "plagiarism-removal",
+            "editorial",
+            "legal",
+            "other",
+        ],
+        help="Required when --supersedes is set. Why this version supersedes the prior.",
+    )
+    register_parser.add_argument(
+        "--note",
+        default=None,
+        help="Optional free-text explanation of the supersession (signed into the envelope).",
     )
     register_parser.add_argument(
         "--non-interactive",
@@ -100,6 +114,37 @@ def register_pipeline_parsers(
         help="Content license to apply (default: CC0-1.0).",
     )
     seal_parser.add_argument(
+        "--author",
+        default=None,
+        help=(
+            "Rights holder / orchestrator pen name (Flaw F). Optional for CC0 "
+            "(public-domain dedication); recommended even then for attribution."
+        ),
+    )
+    seal_parser.add_argument(
+        "--supersedes",
+        default=None,
+        help="requestId of the prior version this artifact supersedes (Gap 1).",
+    )
+    seal_parser.add_argument(
+        "--reason",
+        default=None,
+        choices=[
+            "copyright-flag",
+            "error-correction",
+            "plagiarism-removal",
+            "editorial",
+            "legal",
+            "other",
+        ],
+        help="Required when --supersedes is set.",
+    )
+    seal_parser.add_argument(
+        "--note",
+        default=None,
+        help="Optional free-text explanation of the supersession.",
+    )
+    seal_parser.add_argument(
         "--models",
         default=None,
         help="Comma-separated model identifiers used in production (e.g. gemini-3.1-pro,composer-2.5).",
@@ -121,4 +166,26 @@ def register_pipeline_parsers(
         "--no-webauthn",
         action="store_true",
         help="Skip WebAuthn/FIDO2; use orchestration declaration prompts only.",
+    )
+
+    # v3 (Gap 2): witness command. An independent operator adds their seal to an
+    # existing artifact as a vote of confidence / independent warranty.
+    witness_parser = subparsers.add_parser(
+        "witness",
+        help="Add your operator seal to an existing sealed artifact (independent warranty).",
+    )
+    witness_parser.add_argument(
+        "--request-id",
+        required=True,
+        help="requestId of the artifact to witness (must already be sealed + committed).",
+    )
+    witness_parser.add_argument(
+        "--repo-path",
+        default=default_repo_path(),
+        help="Ledger repo path (default: LEDGER_REPO_PATH from .env).",
+    )
+    witness_parser.add_argument(
+        "--no-webauthn",
+        action="store_true",
+        help="Skip WebAuthn capture for this witness seal.",
     )

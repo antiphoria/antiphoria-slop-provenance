@@ -1,17 +1,20 @@
-"""Curation helpers shared by CLI and provenance workflows."""
+"""Artifact helpers shared by CLI and provenance workflows.
+
+Historically this module also held curation-specific logic; the `curate`
+command was removed in v3 (pre-release.md §1) and replaced by supersession
+versioning (Gap 1). The general artifact helpers below remain because
+register/seal reuse them.
+"""
 
 from __future__ import annotations
 
-import difflib
 import re
 from pathlib import Path
 from uuid import UUID
 
-from src.models import Curation
-
 
 def extract_request_id_from_artifact_path(file_path: Path) -> UUID:
-    """Extract request id from curated artifact filename."""
+    """Extract request id from artifact filename."""
 
     try:
         return UUID(file_path.stem)
@@ -19,7 +22,7 @@ def extract_request_id_from_artifact_path(file_path: Path) -> UUID:
         match = re.match(r"^\d{8}T\d{6}Z_([0-9a-fA-F-]{36})\.md$", file_path.name)
         if match is None:
             raise RuntimeError(
-                "Invalid curated artifact filename format. Expected "
+                "Invalid artifact filename format. Expected "
                 "'<request_id>.md' (preferred) or 'YYYYMMDDTHHMMSSZ_<request_id>.md'."
             ) from None
         return UUID(match.group(1))
@@ -38,23 +41,5 @@ def extract_markdown_body(markdown_text: str) -> str:
         body = body[second_delimiter_index + len("\n---\n") :]
     stripped = body.strip()
     if not stripped:
-        raise RuntimeError("Curated artifact body is empty after metadata stripping.")
+        raise RuntimeError("Artifact body is empty after metadata stripping.")
     return stripped
-
-
-def build_curation_metadata(original_body: str, curated_body: str) -> Curation:
-    """Calculate difference score and unified diff for curation analytics."""
-
-    matcher = difflib.SequenceMatcher(None, original_body, curated_body)
-    difference_score = round((1.0 - matcher.ratio()) * 100.0, 2)
-    diff_lines = list(
-        difflib.unified_diff(
-            original_body.splitlines(),
-            curated_body.splitlines(),
-            fromfile="original",
-            tofile="curated",
-            lineterm="",
-        )
-    )
-    unified_diff = "\n".join(diff_lines) if diff_lines else "--- original\n+++ curated"
-    return Curation(differenceScore=difference_score, unifiedDiff=unified_diff)

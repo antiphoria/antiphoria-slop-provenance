@@ -70,7 +70,6 @@ def _build_human_story_signed_event(
                 ),
             ),
             authorAttestation=attestation or sample_human_attestation(),
-            registrationCeremony=registration_ceremony or sample_registration_ceremony(),
         )
     )
     artifact = Artifact(
@@ -156,7 +155,7 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn('source: "human"', markdown_text)
         self.assertIn('profile: "antiphoria.register.v1"', markdown_text)
-        self.assertIn('schemaVersion: "eternity.v2"', markdown_text)
+        self.assertIn('schemaVersion: "eternity.v3"', markdown_text)
         self.assertIn("antiphoria:", markdown_text)
         self.assertNotIn("synthesis:", markdown_text)
         self.assertNotIn(": null", markdown_text)
@@ -254,22 +253,6 @@ class RegisterCliTest(unittest.IsolatedAsyncioTestCase):
                 )
                 attest_exit = await cli._run_attest_command(attest_args)
             self.assertEqual(attest_exit, 0, "Attest should pass")
-
-            # Curate rejects human-registered artifacts
-            artifact_file = self._repo_path / f"{request_id_str}.md"
-            artifact_file.write_text(markdown_text, encoding="utf-8")
-            curate_args = cli.build_parser().parse_args(
-                [
-                    "curate",
-                    "--file",
-                    str(artifact_file),
-                    "--repo-path",
-                    str(self._repo_path),
-                ]
-            )
-            with self.assertRaises(RuntimeError) as ctx:
-                await cli._run_curate_command(curate_args)
-            self.assertIn("cannot be curated", str(ctx.exception))
         finally:
             artifact_path.unlink(missing_ok=True)
 

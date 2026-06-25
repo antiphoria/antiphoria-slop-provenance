@@ -45,6 +45,6 @@ For production key handling with zero-disk-exposure at runtime, see the BYOV (Br
 
 - For validator-grade C2PA, use a dedicated X.509 signing certificate chain and private key.
 - Keep C2PA cert-chain/key material separate from ML-DSA keys and rotate independently.
-- Validate EKU/KU and trust-chain requirements before enabling `C2PA_MODE=sdk`.
-- Treat `ENABLE_C2PA=true` with `C2PA_MODE=sdk` as fail-closed operational mode.
+- Validate EKU/KU and trust-chain requirements before enabling C2PA (SDK is the only mode in v3).
+- Treat `ENABLE_C2PA=true` as fail-closed operational mode.
 - For production, store C2PA signer material in vault-based storage (BYOV); see [SECURITY.md](../SECURITY.md). KMS/HSM or equivalent may be used where supported.

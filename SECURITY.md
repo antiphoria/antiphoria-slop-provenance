@@ -87,7 +87,19 @@ If the vault is already mounted (e.g. notary in one terminal), a second `scripts
 
 ## WebAuthn bridge (macOS Touch ID)
 
-When `WEBAUTHN_PROVIDER=platform`, `register` and `webauthn-register` start a **short-lived** HTTP server on `127.0.0.1` only. Each ceremony uses a random token (`X-Bridge-Token`), Host-header validation, and shuts down after completion. Do not expose this port beyond loopback. Platform credentials bind to `localhost` RP ID.
+When `WEBAUTHN_PROVIDER=platform`, `register` and `webauthn-register` run the ceremony on a **hosted static page** served from the production origin (`https://antiphoria.org/bridge.html`) so credentials bind to the production RP ID (`WEBAUTHN_RP_ID=antiphoria.org`) and are verifiable. The CLI starts a **short-lived, loopback-only** HTTP server (`127.0.0.1`) that exposes a single `POST /callback` endpoint and shuts down after completion. Do not expose this port beyond loopback.
+
+Design and controls:
+
+- **Token never leaks to the page host.** The per-ceremony token (`secrets.token_urlsafe(32)`) and ceremony parameters are passed in the URL **fragment** (`#...`), which browsers never send to the host server, never store in shareable history/sync, and strip from `Referer`. The page reads them from `location.hash` (the same approach as OAuth implicit flow).
+- **Result transport is a top-level form POST navigation**, not `fetch()`. This avoids HTTPS→`http://localhost` mixed-content blocking (which is unreliable in Safari) and needs no CORS.
+- **Callback hardening:** Host-header validation (anti-DNS-rebinding), `hmac.compare_digest` token check, a required and bounded `Content-Length` (≤ 64 KiB), and a confused-deputy guard that rejects results whose shape does not match the requested ceremony mode.
+- **Bridge page CSP** pins the inline script by SHA-256 hash (no `unsafe-inline`), reads input only via `textContent`/form `value` (no `innerHTML`), and restricts `form-action` to loopback. `WEBAUTHN_BRIDGE_URL` must be HTTPS (or loopback for testing) — the CLI refuses a downgraded page.
+
+Residual risks (not eliminated):
+
+- **Ceremony phishing.** A crafted `bridge.html#...` link plus a local listener with the matching token/port could harvest an assertion over an attacker-chosen challenge. The CLI is the only intended launcher; the page shows the mode and a truncated challenge; and the verifier binds the challenge to `SHA-256(artifact body)`, so a harvested assertion is useless unless the attacker already controls the exact artifact being sealed. Touch ID user-verification is always required.
+- **Registration TOFU.** With `attestation: "none"`, the credential public key is trusted on first use over the token-protected loopback channel; there is no Secure Enclave attestation chain. A future hardening could request `attestation: "direct"` and validate Apple Anonymous Attestation.
 
 ## Dev Mode
 

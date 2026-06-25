@@ -23,22 +23,33 @@ def _require_git() -> str:
     return exe
 
 
-def _generate_and_extract_artifact(env: dict, ledger_dir: Path) -> tuple[str, Path]:
-    """Generate locally, extract artifact to ledger_dir, return (request_id, artifact_path)."""
-    gen_result = run_cli(
+def _seal_and_extract_artifact(env: dict, ledger_dir: Path) -> tuple[str, Path]:
+    """Seal a synthetic artifact locally, extract it to ledger_dir, return (request_id, artifact_path).
+
+    v3: replaces the former `_generate_and_extract_artifact` helper. The
+    `generate` command (Gemini adapter) was removed; `seal --non-interactive
+    --no-webauthn` is the equivalent hermetic setup path for synthetic work.
+    """
+    plain_file = ledger_dir / "e2e_artifact.md"
+    plain_file.write_text("# E2E artifact\n\nBody for the seal pipeline.", encoding="utf-8")
+    seal_result = run_cli(
         [
-            "generate",
-            "--prompt",
-            "E2E artifact",
+            "seal",
+            "--file",
+            str(plain_file),
             "--repo-path",
             str(ledger_dir),
+            "--title",
+            "E2E artifact",
+            "--non-interactive",
+            "--no-webauthn",
         ],
         env=env,
     )
-    assert gen_result.returncode == 0, gen_result.stderr or gen_result.stdout
-    match = re.search(r"request_id=([0-9a-f-]{36})", gen_result.stdout or "")
+    assert seal_result.returncode == 0, seal_result.stderr or seal_result.stdout
+    match = re.search(r"request_id=([0-9a-f-]{36})", seal_result.stdout or "")
     if not match:
-        raise pytest.skip("Could not parse request_id from generate output")
+        raise pytest.skip("Could not parse request_id from seal output")
     request_id = match.group(1)
     artifact_content = subprocess.run(  # noqa: S603
         [
@@ -118,24 +129,15 @@ def test_admin_revoke_key_missing_db(isolated_env) -> None:
     assert result.returncode != 0
 
 
-def test_generate_fails_when_repo_path_invalid(isolated_env) -> None:
-    """slop-cli generate with non-existent repo path fails."""
+def test_register_fails_when_repo_path_invalid(isolated_env) -> None:
+    """slop-cli register with non-existent repo path fails."""
     env, ledger_dir, _ = isolated_env
     nonexistent_repo = ledger_dir.parent / "nonexistent_repo" / "ledger"
     env["LEDGER_REPO_PATH"] = str(nonexistent_repo)
+    plain_file = ledger_dir / "x.md"
+    plain_file.write_text("body", encoding="utf-8")
     result = run_cli(
-        ["generate", "--prompt", "x"],
-        env=env,
-    )
-    assert result.returncode != 0
-
-
-def test_curate_requires_valid_artifact(isolated_env) -> None:
-    """slop-cli curate --file <nonexistent> fails."""
-    env, ledger_dir, _ = isolated_env
-    nonexistent = ledger_dir.parent / "nonexistent_curate" / "artifact.md"
-    result = run_cli(
-        ["curate", "--file", str(nonexistent), "--repo-path", str(ledger_dir)],
+        ["register", "--file", str(plain_file), "--non-interactive", "--no-webauthn"],
         env=env,
     )
     assert result.returncode != 0
@@ -208,13 +210,13 @@ def test_process_pending_ots_disabled(isolated_env) -> None:
     assert "OTS forging is disabled" in (result.stdout or "")
 
 
-def test_events_after_generate(isolated_env) -> None:
-    """slop-cli events lists generated events. Requires test keys."""
+def test_events_after_seal(isolated_env) -> None:
+    """slop-cli events lists sealed events. Requires test keys."""
     env, ledger_dir, _ = isolated_env
     keys_dir = Path(__file__).resolve().parents[1] / "fixtures" / "keys"
     if not (keys_dir / "test_ml_dsa.priv").exists():
         pytest.skip("Test keys not found")
-    _generate_and_extract_artifact(env, ledger_dir)
+    _seal_and_extract_artifact(env, ledger_dir)
     result = run_cli(
         ["events", "--repo-path", str(ledger_dir), "--limit", "5"],
         env=env,
@@ -223,13 +225,13 @@ def test_events_after_generate(isolated_env) -> None:
     assert "request_id=" in (result.stdout or "")
 
 
-def test_attest_after_generate(isolated_env) -> None:
-    """slop-cli attest after generate. Requires test keys."""
+def test_attest_after_seal(isolated_env) -> None:
+    """slop-cli attest after seal. Requires test keys."""
     env, ledger_dir, _ = isolated_env
     keys_dir = Path(__file__).resolve().parents[1] / "fixtures" / "keys"
     if not (keys_dir / "test_ml_dsa.priv").exists():
         pytest.skip("Test keys not found")
-    request_id, _ = _generate_and_extract_artifact(env, ledger_dir)
+    request_id, _ = _seal_and_extract_artifact(env, ledger_dir)
     result = run_cli(
         ["attest", "--repo-path", str(ledger_dir), "--request-id", request_id],
         env=env,
@@ -237,13 +239,13 @@ def test_attest_after_generate(isolated_env) -> None:
     assert result.returncode == 0
 
 
-def test_anchor_after_generate(isolated_env) -> None:
-    """slop-cli anchor after generate. Requires test keys."""
+def test_anchor_after_seal(isolated_env) -> None:
+    """slop-cli anchor after seal. Requires test keys."""
     env, ledger_dir, _ = isolated_env
     keys_dir = Path(__file__).resolve().parents[1] / "fixtures" / "keys"
     if not (keys_dir / "test_ml_dsa.priv").exists():
         pytest.skip("Test keys not found")
-    _, artifact_path = _generate_and_extract_artifact(env, ledger_dir)
+    _, artifact_path = _seal_and_extract_artifact(env, ledger_dir)
     result = run_cli(
         ["anchor", "--file", str(artifact_path), "--repo-path", str(ledger_dir)],
         env=env,
@@ -252,13 +254,13 @@ def test_anchor_after_generate(isolated_env) -> None:
     assert "entry_id=" in (result.stdout or "")
 
 
-def test_audit_after_generate(isolated_env) -> None:
-    """slop-cli audit after generate. Requires test keys."""
+def test_audit_after_seal(isolated_env) -> None:
+    """slop-cli audit after seal. Requires test keys."""
     env, ledger_dir, _ = isolated_env
     keys_dir = Path(__file__).resolve().parents[1] / "fixtures" / "keys"
     if not (keys_dir / "test_ml_dsa.priv").exists():
         pytest.skip("Test keys not found")
-    _, artifact_path = _generate_and_extract_artifact(env, ledger_dir)
+    _, artifact_path = _seal_and_extract_artifact(env, ledger_dir)
     result = run_cli(
         ["audit", "--file", str(artifact_path), "--repo-path", str(ledger_dir)],
         env=env,
@@ -274,7 +276,7 @@ def test_timestamp_with_tsa_mock(isolated_env, tsa_mock) -> None:
     keys_dir = Path(__file__).resolve().parents[1] / "fixtures" / "keys"
     if not (keys_dir / "test_ml_dsa.priv").exists():
         pytest.skip("Test keys not found")
-    _, artifact_path = _generate_and_extract_artifact(env, ledger_dir)
+    _, artifact_path = _seal_and_extract_artifact(env, ledger_dir)
     result = run_cli(
         [
             "timestamp",
@@ -299,7 +301,7 @@ def test_verify_valid_artifact_passes(isolated_env) -> None:
         pytest.skip("Test keys not found; run keygen for fixtures/keys/")
 
     # 1. Generate artifact using hermetic test keys
-    request_id, _ = _generate_and_extract_artifact(env, ledger_dir)
+    request_id, _ = _seal_and_extract_artifact(env, ledger_dir)
 
     # 2. Attest (sign) the artifact
     attest_result = run_cli(
@@ -358,7 +360,7 @@ def test_redact_and_verify_allow_redacted(isolated_env) -> None:
     if not (keys_dir / "test_ml_dsa.priv").exists() or not (keys_dir / "test_ml_dsa.pub").exists():
         pytest.skip("Test keys not found; run keygen for fixtures/keys/")
 
-    request_id, _ = _generate_and_extract_artifact(env, ledger_dir)
+    request_id, _ = _seal_and_extract_artifact(env, ledger_dir)
     attest_result = run_cli(
         ["attest", "--repo-path", str(ledger_dir), "--request-id", request_id],
         env=env,
@@ -395,7 +397,12 @@ def test_redact_and_verify_allow_redacted(isolated_env) -> None:
         env=env,
     )
     assert verify_redacted.returncode == 0, verify_redacted.stderr or verify_redacted.stdout
-    assert "REDACTED" in (verify_redacted.stdout or "")
+    # v3 (Flaw C): the message must NOT claim "valid" / "VERIFIED" — body is absent.
+    out = verify_redacted.stdout or ""
+    assert "REDACTED" in out
+    assert "[INFO]" in out
+    assert "VERIFIED" not in out
+    assert "valid" not in out.lower()
 
     verify_strict = run_cli(
         ["verify", "--file", str(redacted_path)],
@@ -419,7 +426,6 @@ def _create_worktree_transparency_log(ledger_dir: Path) -> list[str]:
         previous_entry_hash=None,
         request_id="00000000-0000-0000-0000-000000000002",
         metadata={"source": "test"},
-        skip_remote=True,
     )
     line = json.dumps(serializable, sort_keys=True) + "\n"
     log_path.write_text(line, encoding="utf-8")

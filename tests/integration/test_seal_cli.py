@@ -90,7 +90,6 @@ def _build_synthetic_story_signed_event(
                     ),
                 ),
                 authorAttestation=attestation or sample_synthetic_attestation(),
-                registrationCeremony=registration_ceremony or sample_registration_ceremony(),
             )
         ),
         signature=SignatureBlock(
@@ -311,7 +310,6 @@ class SealCliTest(unittest.IsolatedAsyncioTestCase):
                         ),
                     ),
                     authorAttestation=sample_synthetic_attestation(),
-                    registrationCeremony=sample_registration_ceremony(),
                 )
             ),
             signature=SignatureBlock(

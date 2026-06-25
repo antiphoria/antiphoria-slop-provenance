@@ -79,11 +79,10 @@ Goal: run **`pytest`** and basic **`slop-cli`** without API keys or cloud servic
 
 3. In `.env`, set at least:
 
-   - `GENERATOR_DUMMY_MODE=true` (and optionally `GENERATOR_DUMMY_DELAY_SEC=0`)
    - `PQC_PRIVATE_KEY_PATH` → `./keys/private.key` (or absolute path)
    - `OQS_PUBLIC_KEY_PATH` → `./keys/public.key`
    - `ED25519_PRIVATE_KEY_PATH` / `ED25519_PUBLIC_KEY_PATH` → your generated PEM paths
-   - Leave **`TRANSPARENCY_LOG_PUBLISH_URL` empty** unless you use Supabase (Track B).
+   - (Optional) `RFC3161_TSA_URL` for trusted-third-party timestamping
 
 4. **Ledger:** the CLI expects `--repo-path` to be a **git repository**. Example:
 
@@ -91,11 +90,14 @@ Goal: run **`pytest`** and basic **`slop-cli`** without API keys or cloud servic
    mkdir -p ../my-ledger && cd ../my-ledger && git init && cd -
    ```
 
-### Track B — Full stack (Gemini + optional transparency)
+### Sealing content (v3)
 
-1. Set `GENERATOR_DUMMY_MODE=false` and add **`GOOGLE_API_KEY`** (see `.env.example`).
-2. If you set **`TRANSPARENCY_LOG_PUBLISH_URL`**, you **must** set **`SUPABASE_SERVICE_KEY`** or **`SUPABASE_ANON_KEY`** (CLI fails fast otherwise).
-3. Configure RFC3161/TSA paths if you rely on timestamping; see `.env.example`.
+v3 has two pipeline commands: `register` (human-authored, operator warrants) and `seal` (LLM-sourced, operator declares orchestration). Both are operator-side. Writers send text; they never install.
+
+- `slop-cli seal --file <body.md> --models <m1>,<m2>` — seal operator-supplied LLM output.
+- `slop-cli register --file <body.md>` — register a human-authored text.
+
+The transparency log is local-only in v3 (Supabase remote publication removed); Bitcoin via OTS is the only remote anchor.
 
 ### Production / vault (BYOV)
 
@@ -141,10 +143,10 @@ Goal: register **your own** markdown with maximum personhood metadata—without 
 
    ```bash
    WEBAUTHN_PROVIDER=platform
-   WEBAUTHN_RP_ID=localhost
+   WEBAUTHN_RP_ID=antiphoria.org
    ```
 
-   Omit `WEBAUTHN_BRIDGE_PORT` to use an ephemeral OS-assigned port (recommended). The CLI opens a short-lived local browser bridge; approve Touch ID when prompted.
+   The ceremony runs on the hosted page `https://antiphoria.org/bridge.html`, which must be deployed before enrolling (the page origin must match `WEBAUTHN_RP_ID`). The CLI opens that page with the ceremony parameters in the URL fragment and runs a short-lived, loopback-only callback server; approve Touch ID when prompted. Omit `WEBAUTHN_BRIDGE_PORT` to use an ephemeral OS-assigned port (recommended). Set `WEBAUTHN_BRIDGE_URL` only to point at a staging page (must be https, or a loopback host for local testing).
 
    **USB security key** (default `hid` provider): set `WEBAUTHN_RP_ID` to your production domain, plug in a FIDO2 key, skip `WEBAUTHN_PROVIDER=platform`.
 

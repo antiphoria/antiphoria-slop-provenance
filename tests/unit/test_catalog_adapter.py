@@ -53,7 +53,6 @@ def _build_human_signed(request_id: UUID, body: str, title: str = "Human") -> St
                     hyperparameters=Hyperparameters(temperature=0.0, topP=1.0, topK=0),
                 ),
                 authorAttestation=sample_human_attestation(),
-                registrationCeremony=sample_registration_ceremony(),
             )
         ),
         signature=SignatureBlock(
@@ -84,7 +83,6 @@ def _build_synthetic_signed(request_id: UUID, body: str) -> StorySigned:
                     hyperparameters=Hyperparameters(temperature=0.0, topP=1.0, topK=0),
                 ),
                 authorAttestation=sample_synthetic_attestation(),
-                registrationCeremony=sample_registration_ceremony(),
             )
         ),
         signature=SignatureBlock(

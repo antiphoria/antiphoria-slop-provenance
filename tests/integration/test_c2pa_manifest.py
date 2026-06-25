@@ -150,23 +150,54 @@ class C2PAManifestTest(unittest.TestCase):
         )
 
     def test_manifest_hash_is_stable_for_same_input(self) -> None:
-        artifact = self._build_artifact()
-        first = build_c2pa_sidecar_manifest(artifact, "payload", mode="mvp")
-        second = build_c2pa_sidecar_manifest(artifact, "payload", mode="mvp")
-        self.assertEqual(first.manifest_hash, second.manifest_hash)
-        self.assertEqual(first.manifest_bytes, second.manifest_bytes)
+        """Two SDK builds over the same input produce identical manifest bytes.
 
-    def test_mode_defaults_to_mvp(self) -> None:
+        v3: MVP mode removed; SDK is the only path. Stability is verified
+        through the SDK manifest-builder (the builder itself is deterministic
+        for the same artifact+body+settings).
+        """
+        artifact = self._build_artifact()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            cert_path = temp_path / "cert.pem"
+            key_path = temp_path / "key.pem"
+            cert_path.write_text("-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----\n")
+            key = ec.generate_private_key(ec.SECP256R1())
+            key_pem = key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()).decode()
+            key_path.write_text(key_pem)
+            env_path = temp_path / ".env"
+            env_path.write_text(
+                "\n".join(
+                    [
+                        f"C2PA_SIGN_CERT_CHAIN_PATH={cert_path}",
+                        f"C2PA_PRIVATE_KEY_PATH={key_path}",
+                        "C2PA_SIGNING_ALG=ES256",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            # build_c2pa_validation_payload is deterministic for SDK carrier
+            first_bytes, first_fmt = build_c2pa_validation_payload(artifact, "payload", env_path=env_path)
+            second_bytes, second_fmt = build_c2pa_validation_payload(artifact, "payload", env_path=env_path)
+            self.assertEqual(first_bytes, second_bytes)
+            self.assertEqual(first_fmt, second_fmt)
+            self.assertEqual(first_fmt, _SDK_CARRIER_FORMAT)
+
+    def test_resolve_c2pa_mode_is_always_sdk(self) -> None:
+        """v3: MVP mode removed; resolve_c2pa_mode always returns 'sdk'."""
         with tempfile.TemporaryDirectory() as temp_dir:
             env_path = Path(temp_dir) / ".env"
             env_path.write_text("", encoding="utf-8")
-            self.assertEqual(resolve_c2pa_mode(env_path=env_path), "mvp")
+            self.assertEqual(resolve_c2pa_mode(env_path=env_path), "sdk")
+        # Explicit mode is ignored (only sdk valid)
+        self.assertEqual(resolve_c2pa_mode(explicit_mode="sdk"), "sdk")
 
     def test_sdk_mode_requires_certificate_paths(self) -> None:
         artifact = self._build_artifact()
         with tempfile.TemporaryDirectory() as temp_dir:
             env_path = Path(temp_dir) / ".env"
-            env_path.write_text("C2PA_MODE=sdk\n", encoding="utf-8")
+            env_path.write_text("", encoding="utf-8")
             with self.assertRaises(RuntimeError):
                 build_c2pa_sidecar_manifest(
                     artifact,

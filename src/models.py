@@ -113,9 +113,22 @@ class AuthorAttestation(StrictModel):
 
 
 class WebAuthnAttestation(StrictModel):
-    """FIDO2/WebAuthn assertion for strong non-repudiation of author attestation."""
+    """FIDO2/WebAuthn assertion captured at operator ceremony time.
+
+    v3 (Flaw A, pre-release.md §3): ``client_data_json`` is now stored in full
+    (base64-encoded), not just its hash. This closes the verification loop —
+    the assertion's signature is over ``authenticatorData || SHA-256(clientDataJSON)``,
+    and the ``clientDataJSON.challenge`` field must equal the expected body hash
+    for the assertion to mean anything. Without the full clientDataJSON, the
+    challenge couldn't be checked.
+    """
 
     credential_id: str = Field(alias="credentialId", min_length=1)
+    client_data_json: str = Field(
+        alias="clientDataJson",
+        min_length=1,
+        description="base64-encoded clientDataJSON (full, not just the hash).",
+    )
     client_data_json_hash: str = Field(
         alias="clientDataJsonHash",
         min_length=64,
@@ -128,6 +141,58 @@ class WebAuthnAttestation(StrictModel):
 
 
 AttestationStrength: TypeAlias = Literal["webauthn", "none", "unattended"]
+
+
+RevisionReason: TypeAlias = Literal[
+    "copyright-flag",
+    "error-correction",
+    "plagiarism-removal",
+    "editorial",
+    "legal",
+    "other",
+]
+
+
+class Revision(StrictModel):
+    """Work-version link. Absent on the first version of a work; present on
+    every superseding version.
+
+    Design (Gap 1, pre-release.md §3): the link is a *content commitment*, not a
+    verification dependency. ``supersedesHash`` proves the new author had the
+    prior version's exact bytes — it does NOT make this artifact's verification
+    depend on the prior artifact existing. Every artifact stays independently
+    verifiable. The block lives inside the signed envelope target, so it's
+    covered by every operator seal automatically.
+    """
+
+    chain_root: str = Field(
+        alias="chainRoot",
+        min_length=1,
+        description="Stable identifier for the work across all versions (the v1 requestId).",
+    )
+    sequence: int = Field(
+        ge=2,
+        description="1-based version number. v1 has no revision block; v2+ start at 2.",
+    )
+    supersedes: str = Field(
+        alias="supersedes",
+        min_length=1,
+        description="requestId of the immediately-prior version.",
+    )
+    supersedes_hash: str = Field(
+        alias="supersedesHash",
+        min_length=64,
+        max_length=64,
+        pattern=r"^[a-fA-F0-9]{64}$",
+        description="payloadHash of the prior version — content commitment, not a dependency.",
+    )
+    reason: RevisionReason = Field(
+        description="Why this version supersedes the prior (machine-readable category).",
+    )
+    note: str | None = Field(
+        default=None,
+        description="Free-text explanation. Optional; included in the signed envelope if present.",
+    )
 
 
 class VerificationAnchor(StrictModel):
@@ -151,7 +216,14 @@ class RegistrationCeremony(StrictModel):
 
 
 class Provenance(StrictModel):
-    """Provenance metadata independent from transport/render format."""
+    """Provenance metadata independent from transport/render format.
+
+    v3 (Gap 2): ``webauthn_attestation``, ``attestation_strength``, and
+    ``registration_ceremony`` were moved from Provenance to ``OperatorSeal``.
+    Each seal is self-contained; Provenance describes the work, not who sealed
+    it or how. This keeps the signing target stable regardless of how many
+    witnesses append seals.
+    """
 
     source: Literal["synthetic", "hybrid", "human"]
     engine_version: str = Field(alias="engineVersion", min_length=1)
@@ -164,18 +236,6 @@ class Provenance(StrictModel):
     )
     author_attestation: AuthorAttestation | None = Field(
         alias="authorAttestation",
-        default=None,
-    )
-    webauthn_attestation: WebAuthnAttestation | None = Field(
-        alias="webauthnAttestation",
-        default=None,
-    )
-    attestation_strength: AttestationStrength | None = Field(
-        alias="attestationStrength",
-        default=None,
-    )
-    registration_ceremony: RegistrationCeremony | None = Field(
-        alias="registrationCeremony",
         default=None,
     )
     provenance_grade: ProvenanceGrade | None = Field(
@@ -218,12 +278,55 @@ class SignatureBlock(StrictModel):
     )
 
 
-class Artifact(StrictModel):
-    """Eternity v1 portable artifact envelope."""
+OperatorSealRole: TypeAlias = Literal["sealer", "witness"]
 
-    schema_version: Literal["eternity.v1"] = Field(
+
+class OperatorSeal(StrictModel):
+    """One operator's independent seal over the canonical envelope target.
+
+    v3 (Gap 2, Option A): every seal has identical anatomy. The ``role`` string
+    distinguishes the primary sealer from witnesses (and future roles). Each
+    seal is self-contained — it carries its own ceremony, webauthn attestation,
+    and primary + hybrid signature pair. Multiple operators each independently
+    sign identical canonical bytes; seals are order-independent and verify
+    independently.
+    """
+
+    operator_pseudonym_hash: str | None = Field(
+        alias="operatorPseudonymHash",
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    role: OperatorSealRole = Field(default="sealer")
+    sealed_at: str = Field(
+        alias="sealedAt",
+        min_length=1,
+        description="ISO-8601 UTC timestamp when this seal was applied.",
+    )
+    ceremony: RegistrationCeremony | None = Field(default=None)
+    webauthn_attestation: WebAuthnAttestation | None = Field(
+        alias="webauthn",
+        default=None,
+    )
+    attestation_strength: AttestationStrength | None = Field(
+        alias="attestationStrength",
+        default=None,
+    )
+    primary: SignatureBlock
+    hybrid: SignatureBlock | None = None
+
+
+class Artifact(StrictModel):
+    """Eternity v3 portable artifact envelope.
+
+    v3 bumps the wire format from v2 to reflect: operator/author role split,
+    witnessing, versioning, and the license-owner correction. See
+    `user-stories.md §7.1` and `pre-release.md §3` (Flaw D).
+    """
+
+    schema_version: Literal["eternity.v3", "eternity.v1"] = Field(
         alias="schemaVersion",
-        default="eternity.v1",
+        default="eternity.v3",
     )
     id: UUID = Field(default_factory=uuid4)
     title: str = Field(min_length=1)
@@ -233,11 +336,104 @@ class Artifact(StrictModel):
         PolicyLicenseId | str,
         Field(min_length=1),
     ]
+    rights_holder: str | None = Field(
+        alias="rightsHolder",
+        default=None,
+        description=(
+            "The rights holder for this work — the author's pen name or legal "
+            "name (Flaw F). Antiphoria warrants provenance; the author owns the "
+            "work. None on legacy v2 artifacts; required for v3 seals."
+        ),
+    )
+    revision: Revision | None = Field(
+        default=None,
+        description=(
+            "Work-version link (Gap 1). None on the first version of a work; "
+            "present on every superseding version. Lives inside the signed "
+            "envelope, so it's covered by every operator seal automatically."
+        ),
+    )
     provenance: Provenance
     curation: Curation | None = None
-    signature: SignatureBlock | None = None
-    hybrid_signature: SignatureBlock | None = Field(alias="hybridSignature", default=None)
+    operator_seals: list[OperatorSeal] = Field(
+        alias="operatorSeals",
+        default_factory=list,
+        description=(
+            "v3 (Gap 2, Option A): independent operator seals over the canonical "
+            "envelope target. Each seal is self-contained (pseudonym, role, "
+            "ceremony, webauthn, primary + hybrid signatures). Min 1 (the "
+            "sealer); additional entries are witnesses. Order-independent."
+        ),
+    )
     record_status: Literal["unverified"] = Field(alias="recordStatus", default="unverified")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_signature_fields(cls, data: Any) -> Any:
+        """Map legacy singular signature/hybridSignature into operatorSeals[].
+
+        v3 (Gap 2): Artifact no longer has ``signature`` / ``hybridSignature``
+        as real fields — they're computed properties over ``operator_seals``.
+        But many callers (tests, the v2 parser, legacy code paths) still
+        construct Artifact with the old singular fields. This validator
+        translates them into a single ``role="sealer"`` OperatorSeal entry
+        before validation runs, so the old call sites keep working.
+
+        Ceremony/webauthn/strength come from ``provenance`` if present there
+        (the v2 parser still reads them from that location for legacy input).
+        """
+        if not isinstance(data, dict):
+            return data
+        sig = data.get("signature") or data.get("signatureBlock")
+        hybrid = data.get("hybridSignature") or data.get("hybrid_signature")
+        existing_seals = data.get("operatorSeals") or data.get("operator_seals")
+        if sig is not None and not existing_seals:
+            # v3 (Gap 2): ceremony / webauthn / strength now live on OperatorSeal,
+            # not Provenance. Legacy callers that construct Artifact with the old
+            # singular signature field won't have these — the seal gets minimal
+            # metadata and the renderer synthesizes a placeholder ceremony.
+            from datetime import UTC, datetime as _dt
+
+            seal_dict: dict[str, Any] = {
+                "role": "sealer",
+                "sealedAt": _dt.now(UTC).isoformat(),
+                "primary": sig,
+            }
+            if hybrid is not None:
+                seal_dict["hybrid"] = hybrid
+            # Use the alias key the field expects.
+            data = {k: v for k, v in data.items() if k not in (
+                "signature",
+                "signatureBlock",
+                "hybridSignature",
+                "hybrid_signature",
+            )}
+            data["operatorSeals"] = [seal_dict]
+        return data
+
+    # --- Backward-compat computed views onto operator_seals ---
+    # These let existing callers (catalog, notary, verification, maintenance,
+    # provenance_service, repository) keep reading envelope.signature /
+    # envelope.hybrid_signature unchanged. They return the *sealer's* primary
+    # and hybrid signature blocks — i.e. the first operatorSeal with
+    # role == "sealer" (or the first seal if none is explicitly the sealer).
+    # Gap 2's witness command reads operator_seals directly.
+
+    @property
+    def signature(self) -> SignatureBlock | None:
+        """The sealer's primary signature block (backward compat)."""
+        for seal in self.operator_seals:
+            if seal.role == "sealer":
+                return seal.primary
+        return self.operator_seals[0].primary if self.operator_seals else None
+
+    @property
+    def hybrid_signature(self) -> SignatureBlock | None:
+        """The sealer's hybrid signature block (backward compat)."""
+        for seal in self.operator_seals:
+            if seal.role == "sealer":
+                return seal.hybrid
+        return self.operator_seals[0].hybrid if self.operator_seals else None
 
 
 def canonical_json_bytes(data: dict[str, Any]) -> bytes:
@@ -254,27 +450,48 @@ def build_envelope_signing_target(
     envelope: Artifact,
     payload_sha256_hex: str,
     manifest_sha256_hex: str | None,
-    prev_hash: str | None,
     canonicalization_version: str | None = None,
 ) -> dict[str, Any]:
-    """Build canonical signing target from envelope and chain anchors."""
+    """Build canonical signing target from envelope.
+
+    v3: `prev_hash` was removed (OD-2, pre-release.md §4). Work-versioning is
+    handled by the signed `revision` block (Gap 1) — a content commitment, not a
+    verification dependency. Each artifact stays independently verifiable.
+
+    Gap 2 (Option A): the target strips `cryptographicSignature` from every
+    `operatorSeals[].primary` and `.hybrid` block, while leaving all other seal
+    metadata (pseudonymHash, role, ceremony, webauthn, algorithm,
+    signerFingerprint, artifactHash) intact. Every operator independently signs
+    identical canonical bytes; seals are order-independent and verify
+    independently. Adding a witness seal does NOT change the bytes the sealer
+    already signed — it just appends another signature over the same target.
+    """
 
     envelope_data = envelope.model_dump(
         mode="json",
         by_alias=True,
         exclude_none=True,
     )
-    # Signature metadata is excluded from the signed envelope target to keep
-    # sign/verify bytes stable regardless of post-signature attachment details.
+    # Legacy singular signature fields (kept as computed properties; they don't
+    # appear in model_dump output since they're not real fields, but we strip
+    # them defensively in case a caller copied them into a dict).
     envelope_data.pop("signature", None)
     envelope_data.pop("hybridSignature", None)
+
+    # v3 (Gap 2): the entire ``operatorSeals`` list is EXCLUDED from the signing
+    # target. Each operator signs the *envelope* (the work being attested:
+    # document, rights, revision, claim, synthesis, provenance, integrity hashes)
+    # — not the list of who else has attested. This is what makes witnessing
+    # work: a witness appends their seal without changing the bytes the sealer
+    # already signed. The seal list is post-hoc metadata; removing it from the
+    # target keeps every existing signature valid as witnesses accumulate.
+    envelope_data.pop("operatorSeals", None)
 
     target: dict[str, Any] = {
         "schemaVersion": "eternity.signing-target.v1",
         "artifactId": str(envelope.id),
         "payloadHash": payload_sha256_hex,
         "manifestHash": manifest_sha256_hex,
-        "prevHash": prev_hash,
         "envelope": envelope_data,
     }
     if canonicalization_version:
