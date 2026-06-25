@@ -12,7 +12,7 @@ _STUB_MLDSA_PUB_TO_SECRET: dict[bytes, bytes] = {}
 
 
 class Signature:
-    """Subset of liboqs Signature API for crypto_notary and antiphoria_sdk."""
+    """Subset of liboqs Signature API for crypto_notary."""
 
     def __init__(
         self,

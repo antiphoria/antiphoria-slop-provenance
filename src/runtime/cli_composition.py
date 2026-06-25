@@ -8,10 +8,7 @@ from src.adapters.crypto_notary import CryptoNotaryAdapter
 from src.adapters.key_registry import KeyRegistryAdapter
 from src.adapters.ots_adapter import OTSAdapter, resolve_ots_binary
 from src.adapters.rfc3161_tsa import RFC3161TSAAdapter
-from src.adapters.transparency_log import (
-    TransparencyLogAdapter,
-    build_supabase_publish_config,
-)
+from src.adapters.transparency_log import TransparencyLogAdapter
 from src.env_config import (
     get_project_env_path,
     read_env_bool,
@@ -49,19 +46,7 @@ def build_provenance_services(
 
     resolved_env = env_path or get_project_env_path()
     transparency_log_path = repository_path / ".provenance" / "transparency-log.jsonl"
-    publish_url = read_env_optional(
-        "TRANSPARENCY_LOG_PUBLISH_URL",
-        env_path=resolved_env,
-    )
-    publish_headers, publish_supabase_format = build_supabase_publish_config(
-        publish_url, env_path=resolved_env
-    )
-    transparency_log_adapter = TransparencyLogAdapter(
-        log_path=transparency_log_path,
-        publish_url=publish_url,
-        publish_headers=publish_headers if publish_headers else None,
-        publish_supabase_format=publish_supabase_format,
-    )
+    transparency_log_adapter = TransparencyLogAdapter(log_path=transparency_log_path)
     tsa_url = tsa_url_override or read_env_optional(
         "RFC3161_TSA_URL",
         env_path=resolved_env,

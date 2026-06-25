@@ -18,7 +18,7 @@ import webbrowser
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from src.env_config import read_env_optional
 from src.models import WebAuthnAttestation
@@ -30,12 +30,9 @@ from src.webauthn_attestation import (
 )
 
 CeremonyMode = Literal["create", "get"]
-PLATFORM_RP_ID = "localhost"
 _BRIDGE_TOKEN_HEADER = "X-Bridge-Token"  # noqa: S105
-_BRIDGE_CSP = (
-    "default-src 'none'; connect-src 'self'; script-src 'unsafe-inline'; "
-    "style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
-)
+_BRIDGE_PAGE_DEFAULT_URL = "https://antiphoria.org/bridge.html"
+_MAX_CALLBACK_BODY = 65536
 _DEFAULT_TIMEOUT_SEC = 60.0
 _MAX_PORT_TRIES = 10
 
@@ -44,144 +41,34 @@ class WebAuthnAlreadyRegisteredError(Exception):
     """Platform passkey already registered for this ledger."""
 
 
-BRIDGE_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Antiphoria Touch ID Bridge</title>
-    <style>
-        body { font-family: monospace; background: #111; color: #eee; padding: 40px; }
-        pre { background: #000; padding: 20px; border: 1px solid #333; overflow-x: auto; white-space: pre-wrap; }
-    </style>
-</head>
-<body>
-    <h2>Antiphoria - Local WebAuthn Bridge</h2>
-    <p id="status">Loading ceremony options...</p>
-    <pre id="output">Awaiting Touch ID...</pre>
-    <script>
-        const bridgeToken = new URLSearchParams(location.search).get("token");
-        if (!bridgeToken) {
-            document.getElementById("status").textContent = "Missing bridge token.";
-            throw new Error("Missing bridge token in URL.");
-        }
+def _resolve_bridge_page_url(env_path: Any = None) -> str:
+    """Resolve the hosted ceremony page URL.
 
-        const bridgeHeaders = {
-            "Content-Type": "application/json",
-            "X-Bridge-Token": bridgeToken,
-        };
+    Defaults to the production page. The page must be served from an HTTPS
+    origin so the ceremony cannot be downgraded/MITM'd; a loopback host is
+    permitted only for local testing.
+    """
+    url = (read_env_optional("WEBAUTHN_BRIDGE_URL", env_path=env_path) or _BRIDGE_PAGE_DEFAULT_URL).strip()
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    is_loopback = host in {"localhost", "127.0.0.1"}
+    if parsed.scheme != "https" and not is_loopback:
+        raise RuntimeError(
+            "WEBAUTHN_BRIDGE_URL must use https (or a loopback host for local testing)."
+        )
+    return url
 
-        function b64urlToBytes(b64url) {
-            const pad = "=".repeat((4 - (b64url.length % 4)) % 4);
-            const b64 = (b64url + pad).replace(/-/g, "+").replace(/_/g, "/");
-            const raw = atob(b64);
-            const arr = new Uint8Array(raw.length);
-            for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
-            return arr;
-        }
 
-        function bytesToB64url(buffer) {
-            const bytes = new Uint8Array(buffer);
-            let binary = "";
-            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-            return btoa(binary).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=/g, "");
-        }
-
-        async function postResult(payload) {
-            const res = await fetch("/result", {
-                method: "POST",
-                headers: bridgeHeaders,
-                body: JSON.stringify(payload),
-            });
-            if (!res.ok) throw new Error("Bridge rejected ceremony result.");
-        }
-
-        async function runCeremony() {
-            const statusEl = document.getElementById("status");
-            const outputEl = document.getElementById("output");
-            try {
-                const optionsRes = await fetch("/options", { headers: bridgeHeaders });
-                if (!optionsRes.ok) throw new Error("Failed to load ceremony options.");
-                const opts = await optionsRes.json();
-
-                const challenge = b64urlToBytes(opts.challenge);
-                const allowCredentials = (opts.allowCredentials || []).map((cred) => ({
-                    type: "public-key",
-                    id: b64urlToBytes(cred.id),
-                }));
-
-                let credential;
-                if (opts.mode === "create") {
-                    statusEl.textContent = "Touch ID registration — approve the macOS prompt.";
-                    const userId = b64urlToBytes(opts.userId);
-                    credential = await navigator.credentials.create({
-                        publicKey: {
-                            challenge,
-                            rp: { name: "Antiphoria Local Bridge", id: opts.rpId },
-                            user: {
-                                id: userId,
-                                name: "author@localhost",
-                                displayName: "Author",
-                            },
-                            pubKeyCredParams: [{ alg: -7, type: "public-key" }],
-                            authenticatorSelection: {
-                                authenticatorAttachment: "platform",
-                                userVerification: "required",
-                            },
-                            timeout: opts.timeoutMs,
-                            attestation: "none",
-                        },
-                    });
-                } else {
-                    statusEl.textContent = "Touch ID assertion — approve the macOS prompt.";
-                    credential = await navigator.credentials.get({
-                        publicKey: {
-                            challenge,
-                            rpId: opts.rpId,
-                            allowCredentials: allowCredentials.length ? allowCredentials : undefined,
-                            userVerification: "required",
-                            timeout: opts.timeoutMs,
-                        },
-                    });
-                }
-
-                const payload = {
-                    id: credential.id,
-                    rawId: bytesToB64url(credential.rawId),
-                    type: credential.type,
-                    response: {
-                        clientDataJSON: bytesToB64url(credential.response.clientDataJSON),
-                        authenticatorData: bytesToB64url(credential.response.authenticatorData),
-                        signature: bytesToB64url(credential.response.signature),
-                    },
-                };
-                if (opts.mode === "create" && credential.response.attestationObject) {
-                    payload.response.attestationObject = bytesToB64url(
-                        credential.response.attestationObject
-                    );
-                }
-
-                await postResult(payload);
-                statusEl.textContent = "Ceremony complete. You can close this tab.";
-                outputEl.textContent = JSON.stringify(payload, null, 2);
-            } catch (err) {
-                statusEl.textContent = "Ceremony failed.";
-                outputEl.textContent =
-                    "Error: " + err.message +
-                    "\\n\\n(Did you cancel Touch ID, or run this outside localhost?)";
-                try {
-                    await postResult({ error: err.message || String(err) });
-                } catch (_) {
-                    /* ignore secondary failure */
-                }
-            }
-        }
-
-        runCeremony();
-    </script>
-</body>
-</html>
-"""
+def _result_matches_mode(payload: dict[str, Any], mode: str) -> bool:
+    """Confused-deputy guard: the result shape must match the requested mode."""
+    response = payload.get("response")
+    if not isinstance(response, dict):
+        return False
+    if mode == "create":
+        return bool(response.get("attestationObject"))
+    if mode == "get":
+        return bool(response.get("signature") and response.get("authenticatorData"))
+    return False
 
 
 @dataclass
@@ -266,94 +153,99 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             return port == self._bound_port
         return True
 
-    def _authorized(self, *, require_token: bool) -> bool:
-        if not self._valid_host():
-            return False
-        if not require_token:
-            return True
-        supplied = self.headers.get(_BRIDGE_TOKEN_HEADER, "")
-        expected = self._state.token
-        return hmac.compare_digest(supplied, expected)
-
-    def _add_security_headers(self, *, html: bool = False) -> None:
+    def _add_security_headers(self) -> None:
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        if html:
-            self.send_header("Content-Security-Policy", _BRIDGE_CSP)
 
-    def _send_json(self, status: int, payload: dict[str, Any]) -> None:
-        body = json.dumps(payload).encode("utf-8")
+    def _send_status(self, status: int) -> None:
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
         self._add_security_headers()
         self.end_headers()
-        self.wfile.write(body)
-
-    def _send_html(self, status: int, html: str) -> None:
-        body = html.encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self._add_security_headers(html=True)
-        self.end_headers()
-        self.wfile.write(body)
 
     def _reject(self) -> None:
-        self.send_response(403)
+        self._send_status(403)
+
+    def _send_callback_done(self) -> None:
+        body = (
+            b"<!DOCTYPE html><meta charset=utf-8><title>Antiphoria</title>"
+            b"<p>Ceremony complete. You can close this tab.</p>"
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
         self._add_security_headers()
         self.end_headers()
+        self.wfile.write(body)
 
-    def do_GET(self) -> None:
-        path = urlparse(self.path).path
-        if path == "/":
-            if not self._authorized(require_token=False):
-                self._reject()
-                return
-            self._send_html(200, BRIDGE_HTML)
-            return
-        if path == "/options":
-            if not self._authorized(require_token=True):
-                self._reject()
-                return
-            state = self._state
-            self._send_json(
-                200,
-                {
-                    "mode": state.mode,
-                    "rpId": state.rp_id,
-                    "challenge": state.challenge_b64url,
-                    "allowCredentials": state.allow_credentials,
-                    "userId": state.user_id_b64url,
-                    "timeoutMs": int(state.timeout_sec * 1000),
-                },
-            )
-            return
-        self.send_error(404)
+    def _read_bounded_body(self) -> bytes | None:
+        """Read the request body, enforcing a present and bounded Content-Length."""
+        raw_len = self.headers.get("Content-Length")
+        if raw_len is None:
+            self._send_status(411)
+            return None
+        try:
+            length = int(raw_len)
+        except ValueError:
+            self._send_status(400)
+            return None
+        if length < 0 or length > _MAX_CALLBACK_BODY:
+            self._send_status(413)
+            return None
+        return self.rfile.read(length)
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path != "/result":
+        if path != "/callback":
             self.send_error(404)
             return
-        if not self._authorized(require_token=True):
+        if not self._valid_host():
             self._reject()
             return
-        length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length)
-        try:
-            payload = json.loads(raw.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            self.send_error(400)
+
+        body = self._read_bounded_body()
+        if body is None:
+            return
+
+        content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        token = ""
+        payload: Any = None
+        if content_type == "application/x-www-form-urlencoded":
+            try:
+                fields = parse_qs(body.decode("utf-8"), keep_blank_values=True)
+            except UnicodeDecodeError:
+                self._send_status(400)
+                return
+            token = (fields.get("token") or [""])[0]
+            result_b64 = (fields.get("result") or [""])[0]
+            if result_b64:
+                try:
+                    payload = json.loads(_b64url_decode(result_b64).decode("utf-8"))
+                except Exception:
+                    self._send_status(400)
+                    return
+        else:
+            token = self.headers.get(_BRIDGE_TOKEN_HEADER, "")
+            try:
+                payload = json.loads(body.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                self._send_status(400)
+                return
+
+        if not hmac.compare_digest(token, self._state.token):
+            self._reject()
             return
 
         state = self._state
-        if payload.get("error"):
+        if not isinstance(payload, dict):
+            state.error = "Malformed ceremony payload."
+        elif payload.get("error"):
             state.error = str(payload["error"])
+        elif not _result_matches_mode(payload, state.mode):
+            state.error = f"Ceremony result does not match requested mode '{state.mode}'."
         else:
             state.result = payload
         state.done.set()
-        self._send_json(200, {"ok": True})
+        self._send_callback_done()
 
 
 def run_ceremony(
@@ -364,8 +256,16 @@ def run_ceremony(
     *,
     port: int | None = None,
     timeout: float = _DEFAULT_TIMEOUT_SEC,
+    env_path: Any = None,
 ) -> dict[str, Any] | None:
-    """Run a browser WebAuthn ceremony and return the credential payload."""
+    """Run a browser WebAuthn ceremony and return the credential payload.
+
+    Opens the hosted ceremony page (https://antiphoria.org/bridge.html by
+    default), passing the bridge token and ceremony parameters in the URL
+    *fragment* so they never reach the page host's access logs. The page
+    posts the result back to this loopback server's ``/callback`` endpoint.
+    """
+    bridge_url = _resolve_bridge_page_url(env_path)
     token = secrets.token_urlsafe(32)
     state = _CeremonyState(
         mode=mode,
@@ -384,11 +284,27 @@ def run_ceremony(
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
+    params = {
+        "token": token,
+        "port": str(bound_port),
+        "mode": mode,
+        "challenge": state.challenge_b64url,
+        "timeoutMs": str(int(timeout * 1000)),
+    }
+    if mode == "create":
+        params["userId"] = state.user_id_b64url
+    if allow_credentials:
+        params["allowCredentials"] = _b64url_encode(
+            json.dumps(allow_credentials).encode("utf-8")
+        )
+
     try:
-        webbrowser.open(f"http://localhost:{bound_port}/?token={token}")
+        webbrowser.open(f"{bridge_url}#{urlencode(params)}")
         if not state.done.wait(timeout=timeout):
             return None
         if state.error or state.result is None:
+            return None
+        if not _result_matches_mode(state.result, mode):
             return None
         return state.result
     finally:
@@ -428,7 +344,8 @@ def register_credential_platform(
     env_path: Any = None,
 ) -> bool:
     """Register a platform (Touch ID) passkey via the browser bridge."""
-    if not _resolve_rp_id(env_path):
+    rp_id = _resolve_rp_id(env_path)
+    if not rp_id:
         return False
 
     cred_path = _get_credentials_path(env_path=env_path, repo_path=repo_path)
@@ -443,9 +360,10 @@ def register_credential_platform(
 
     payload = run_ceremony(
         mode="create",
-        rp_id=PLATFORM_RP_ID,
+        rp_id=rp_id,
         challenge=os.urandom(32),
         port=_resolve_bridge_port(env_path),
+        env_path=env_path,
     )
     if not payload:
         return False
@@ -465,7 +383,7 @@ def register_credential_platform(
             "credential_id": cred_id,
             "public_key_cose_b64": pub_key_b64,
             "provider": "platform",
-            "rp_id": PLATFORM_RP_ID,
+            "rp_id": rp_id,
         },
     )
     return True
@@ -477,7 +395,8 @@ def get_assertion_platform(
     env_path: Any = None,
 ) -> WebAuthnAttestation | None:
     """Get a platform (Touch ID) assertion bound to the given challenge."""
-    if not _resolve_rp_id(env_path):
+    rp_id = _resolve_rp_id(env_path)
+    if not rp_id:
         return None
 
     credentials_path = _get_credentials_path(env_path=env_path, repo_path=repo_path)
@@ -489,10 +408,11 @@ def get_assertion_platform(
     allow_credentials = [{"id": cred_id, "type": "public-key"}]
     payload = run_ceremony(
         mode="get",
-        rp_id=PLATFORM_RP_ID,
+        rp_id=rp_id,
         challenge=challenge,
         allow_credentials=allow_credentials,
         port=_resolve_bridge_port(env_path),
+        env_path=env_path,
     )
     if not payload:
         return None
@@ -513,6 +433,7 @@ def get_assertion_platform(
 
     return WebAuthnAttestation(
         credentialId=credential_id,
+        clientDataJson=client_data_b64,
         clientDataJsonHash=client_data_hash,
         authenticatorData=auth_data_b64,
         signature=signature_b64,

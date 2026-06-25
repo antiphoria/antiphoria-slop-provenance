@@ -72,6 +72,15 @@ def build_catalog_row(
         "artifactHash": artifact_hash,
         "hasC2pa": has_c2pa,
         "hasProcessNarrative": has_process_narrative,
+        # v3 (Gap 1): version-chain fields. None/absent on the first version
+        # of a work; populated on superseding versions. chainRoot is the
+        # stable identifier across all versions of a work.
+        "chainRoot": (envelope.revision.chain_root if envelope.revision else rid),
+        "sequence": (envelope.revision.sequence if envelope.revision else 1),
+        "supersedes": (envelope.revision.supersedes if envelope.revision else None),
+        # supersededBy is filled in on the prior version's row when this row is
+        # indexed (see CatalogAdapter.upsert_row — the v1 row gets pointed at v2).
+        "supersededBy": None,
         "indexedAt": _utc_now_iso(),
     }
     return row
@@ -226,13 +235,27 @@ class CatalogAdapter:
                 raise ValueError(f"Invalid JSONL: line {i + 1} is not valid JSON: {exc}") from exc
 
     def upsert_entry(self, row: dict[str, Any]) -> None:
-        """Upsert one catalog row by requestId and commit to Git."""
+        """Upsert one catalog row by requestId and commit to Git.
+
+        v3 (Gap 1): if the row carries a ``supersedes`` field, the prior
+        version's row is also patched with ``supersededBy`` pointing at this
+        new requestId. The prior artifact itself never changes — only its
+        catalog index entry. This makes version chains queryable without
+        walking every envelope.
+        """
 
         request_id = row.get(_REQUEST_ID_KEY)
         if not request_id:
             raise RuntimeError("Catalog row must include requestId.")
         entries = _parse_entries(self.read_raw_content())
         entries[str(request_id)] = row
+
+        supersedes = row.get("supersedes")
+        if isinstance(supersedes, str) and supersedes:
+            prior = entries.get(supersedes)
+            if prior is not None:
+                prior["supersededBy"] = str(request_id)
+
         content = _render_entries(entries)
         self._write_content(content, f"catalog: upsert {request_id}")
 

@@ -1,12 +1,15 @@
-"""Append-only transparency log adapter for artifact hash anchoring."""
+"""Append-only transparency log adapter for artifact hash anchoring.
+
+v3: remote publication (Supabase) was removed (pre-release.md §1). The
+transparency log is now strictly local + Bitcoin-anchored via OTS. Bitcoin is
+the only remote trust root; RFC3161 is the trusted-third-party time root; this
+log is the local tamper-evident record. Three distinct layers, no vendor.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
-import re
-import urllib.error
-import urllib.parse
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,49 +18,9 @@ from uuid import uuid4
 
 from filelock import FileLock
 
-from src.env_config import read_env_optional
-from src.http_safe import build_http_request, ensure_allowed_http_url, open_http_urlopen
 from src.models import canonical_json_bytes, sha256_hex
 
 _logger = logging.getLogger(__name__)
-_MAX_REMOTE_RESPONSE_BYTES = 1_048_576
-_MAX_REMOTE_TIMEOUT_SEC = 5.0
-
-
-def _sanitize_for_log(raw: str, max_len: int = 200) -> str:
-    """Truncate and redact secret-like substrings before logging."""
-    if not raw:
-        return raw
-    out = re.sub(r"Bearer\s+[^\s]+", "Bearer ***", raw, flags=re.IGNORECASE)
-    out = re.sub(
-        r"(apikey|Authorization)[=:\s]+[^\s]+",
-        r"\1=***",
-        out,
-        flags=re.IGNORECASE,
-    )
-    return out[:max_len] + "..." if len(out) > max_len else out
-
-
-def _read_response_bytes_bounded(
-    response: Any,
-    *,
-    context: str,
-    max_bytes: int = _MAX_REMOTE_RESPONSE_BYTES,
-) -> bytes:
-    """Read response bytes with an explicit hard size cap."""
-
-    raw = response.read(max_bytes + 1)
-    if len(raw) > max_bytes:
-        raise RuntimeError(f"{context} exceeded maximum allowed size ({max_bytes} bytes).")
-    return raw
-
-
-def _normalize_remote_timeout(timeout_sec: float) -> float:
-    """Return bounded timeout for all outbound transparency log calls."""
-
-    if timeout_sec <= 0:
-        return _MAX_REMOTE_TIMEOUT_SEC
-    return min(timeout_sec, _MAX_REMOTE_TIMEOUT_SEC)
 
 
 def _hash_payload_from_parts(
@@ -89,253 +52,20 @@ def _hash_payload_from_parts(
     return sha256_hex(canonical_json_bytes(hash_payload))
 
 
-def build_supabase_publish_config(
-    publish_url: str | None,
-    env_path: Path | None = None,
-) -> tuple[dict[str, str], bool]:
-    """Build Supabase auth headers and format flag when URL and key are set.
-
-    Returns:
-        (headers, use_supabase_format). Prefer SUPABASE_SERVICE_KEY over
-        SUPABASE_ANON_KEY. If no key is set and no URL, returns ({}, False).
-
-    Raises:
-        RuntimeError: When TRANSPARENCY_LOG_PUBLISH_URL is set but neither
-            SUPABASE_SERVICE_KEY nor SUPABASE_ANON_KEY is set. Attestation
-            cannot validate against the remote log without keys.
-    """
-    if not publish_url:
-        return {}, False
-    ensure_allowed_http_url(
-        publish_url,
-        context="TRANSPARENCY_LOG_PUBLISH_URL",
-    )
-    key = read_env_optional("SUPABASE_SERVICE_KEY", env_path=env_path)
-    if key is None:
-        key = read_env_optional("SUPABASE_ANON_KEY", env_path=env_path)
-    if key is None:
-        raise RuntimeError(
-            "TRANSPARENCY_LOG_PUBLISH_URL is set but neither SUPABASE_SERVICE_KEY "
-            "nor SUPABASE_ANON_KEY is set. Set one of these for attestation to "
-            "validate against the remote transparency log."
-        )
-    return (
-        {
-            "apikey": key,
-            "Authorization": f"Bearer {key}",
-            "Prefer": "return=representation",
-        },
-        True,
-    )
-
-
 def _utc_now_iso() -> str:
     """Return current UTC timestamp as ISO-8601 string."""
 
     return datetime.now(UTC).isoformat()
 
 
-def publish_merkle_anchor(
-    root_hash: str,
-    entry_count: int,
-    anchored_at: str,
-    ots_path: str | None = None,
-    bitcoin_block_height: int | None = None,
-    publish_url: str | None = None,
-    publish_headers: dict[str, str] | None = None,
-    timeout_sec: float = 10.0,
-) -> bool:
-    """Publish Merkle anchor to Supabase merkle_anchors table.
-
-    Returns True on success, False on soft-fail (e.g. network error).
-    Outbound timeout is capped by `_MAX_REMOTE_TIMEOUT_SEC`.
-    """
-    if not publish_url or not publish_url.strip() or not publish_headers:
-        return False
-    payload = {
-        "rootHash": root_hash,
-        "entryCount": entry_count,
-        "anchoredAt": anchored_at,
-        "otsPath": ots_path,
-        "bitcoinBlockHeight": bitcoin_block_height,
-    }
-    request_body = {"payload": payload}
-    headers = {
-        "Content-Type": "application/json",
-        **publish_headers,
-    }
-    try:
-        request = build_http_request(
-            publish_url.strip(),
-            context="Merkle anchor publish_url",
-            method="POST",
-            headers=headers,
-            data=json.dumps(request_body).encode("utf-8"),
-        )
-    except RuntimeError as exc:
-        _logger.warning(
-            "Merkle anchor publish soft-fail. Local anchor secure. Error: %s",
-            _sanitize_for_log(str(exc)),
-        )
-        return False
-    timeout = _normalize_remote_timeout(timeout_sec)
-    try:
-        with open_http_urlopen(
-            request,
-            timeout=timeout,
-            context="Merkle anchor publish request URL",
-        ) as response:
-            _read_response_bytes_bounded(
-                response,
-                context="Merkle anchor publish response",
-            )
-            return True
-    except urllib.error.HTTPError as exc:
-        try:
-            error_body = _read_response_bytes_bounded(
-                exc,
-                context="Merkle anchor publish error body",
-            ).decode("utf-8", errors="replace")
-            _logger.warning(
-                "Merkle anchor publish soft-fail. Local anchor secure. HTTP %s: %s",
-                exc.code,
-                _sanitize_for_log(error_body or str(exc)),
-            )
-        except RuntimeError:
-            _logger.warning(
-                "Merkle anchor publish soft-fail. Local anchor secure. Error: %s",
-                _sanitize_for_log(str(exc)),
-            )
-        return False
-    except (TimeoutError, urllib.error.URLError, ConnectionError) as exc:
-        _logger.warning(
-            "Merkle anchor publish soft-fail. Local anchor secure. Error: %s",
-            _sanitize_for_log(str(exc)),
-        )
-        return False
-
-
-def update_merkle_anchor_block_height(
-    root_hash: str,
-    bitcoin_block_height: int,
-    publish_url: str | None = None,
-    publish_headers: dict[str, str] | None = None,
-    timeout_sec: float = 10.0,
-) -> bool:
-    """PATCH merkle_anchors row by rootHash to set bitcoinBlockHeight.
-
-    Returns True on success, False on soft-fail.
-    Outbound timeout is capped by `_MAX_REMOTE_TIMEOUT_SEC`.
-    """
-    if not publish_url or not publish_url.strip() or not publish_headers:
-        return False
-    try:
-        ensure_allowed_http_url(
-            publish_url,
-            context="Merkle anchor publish_url",
-        )
-    except RuntimeError as exc:
-        _logger.warning(
-            "Merkle anchor block height update failed: %s",
-            _sanitize_for_log(str(exc)),
-        )
-        return False
-    query = urllib.parse.urlencode([("payload->>rootHash", f"eq.{root_hash}")])
-    get_url = f"{publish_url.rstrip('/')}?{query}"
-    headers = {k: v for k, v in publish_headers.items() if k != "Prefer"}
-    timeout = _normalize_remote_timeout(timeout_sec)
-    try:
-        req = build_http_request(
-            get_url,
-            context="Merkle anchor fetch request URL",
-            method="GET",
-            headers=headers,
-        )
-        with open_http_urlopen(
-            req,
-            timeout=timeout,
-            context="Merkle anchor fetch request URL",
-        ) as resp:
-            raw = (
-                _read_response_bytes_bounded(
-                    resp,
-                    context="Merkle anchor fetch response",
-                )
-                .decode("utf-8")
-                .strip()
-            )
-    except (
-        TimeoutError,
-        urllib.error.URLError,
-        urllib.error.HTTPError,
-        ConnectionError,
-        RuntimeError,
-    ) as exc:
-        _logger.warning(
-            "Merkle anchor fetch for update failed: %s",
-            _sanitize_for_log(str(exc)),
-        )
-        return False
-    if not raw:
-        return False
-    try:
-        rows = json.loads(raw)
-    except json.JSONDecodeError:
-        return False
-    if not isinstance(rows, list) or len(rows) == 0:
-        return False
-    row = rows[0]
-    if not isinstance(row, dict):
-        return False
-    payload = row.get("payload")
-    if not isinstance(payload, dict):
-        return False
-    row_id = row.get("id")
-    if row_id is None:
-        return False
-    payload = {**payload, "bitcoinBlockHeight": bitcoin_block_height}
-    patch_query = urllib.parse.urlencode([("id", f"eq.{row_id}")])
-    patch_url = f"{publish_url.rstrip('/')}?{patch_query}"
-    body = {"payload": payload}
-    headers = {
-        "Content-Type": "application/json",
-        **publish_headers,
-    }
-    try:
-        req = build_http_request(
-            patch_url,
-            context="Merkle anchor patch request URL",
-            method="PATCH",
-            headers=headers,
-            data=json.dumps(body).encode("utf-8"),
-        )
-        with open_http_urlopen(
-            req,
-            timeout=timeout,
-            context="Merkle anchor patch request URL",
-        ) as resp:
-            _read_response_bytes_bounded(
-                resp,
-                context="Merkle anchor patch response",
-            )
-        return True
-    except (
-        TimeoutError,
-        urllib.error.URLError,
-        urllib.error.HTTPError,
-        ConnectionError,
-        RuntimeError,
-    ) as exc:
-        _logger.warning(
-            "Merkle anchor block height update failed: %s",
-            _sanitize_for_log(str(exc)),
-        )
-        return False
-
-
 @dataclass(frozen=True)
 class TransparencyLogEntry:
-    """Immutable append-only transparency entry."""
+    """Immutable append-only transparency entry.
+
+    `remote_receipt` is always None in v3 (Supabase publication removed). The
+    field is retained so existing JSONL logs and the SQLite store schema keep
+    parsing without migration.
+    """
 
     entry_id: str
     artifact_hash: str
@@ -345,43 +75,27 @@ class TransparencyLogEntry:
     previous_entry_hash: str | None
     entry_hash: str
     anchored_at: str
-    remote_receipt: str | None
     metadata: dict[str, Any]
+    remote_receipt: str | None = None
     bitcoin_block_height: int | None = None
 
 
 class TransparencyLogAdapter:
-    """File-backed append-only log with optional remote publication."""
+    """File-backed append-only local transparency log.
 
-    def __init__(
-        self,
-        log_path: Path,
-        publish_url: str | None = None,
-        publish_timeout_sec: float = 10.0,
-        publish_headers: dict[str, str] | None = None,
-        publish_supabase_format: bool = False,
-    ) -> None:
+    v3: no remote publication. The log is canonical locally; Bitcoin (via OTS)
+    is the only remote anchor. Each entry is hash-chained to the previous one
+    (`previousEntryHash`), and the chain is re-verified on read.
+    """
+
+    def __init__(self, log_path: Path) -> None:
         self._log_path = log_path
-        if publish_url and publish_url.strip():
-            ensure_allowed_http_url(
-                publish_url,
-                context="Transparency log publish_url",
-            )
-        self._publish_url = publish_url
-        self._publish_timeout_sec = publish_timeout_sec
-        self._publish_headers = publish_headers or {}
-        self._publish_supabase_format = publish_supabase_format
 
     @property
     def log_path(self) -> Path:
         """Return append-only log file path."""
 
         return self._log_path
-
-    def is_remote_configured(self) -> bool:
-        """Return True when remote publish is configured (URL and auth headers)."""
-
-        return bool(self._publish_url and self._publish_url.strip()) and bool(self._publish_headers)
 
     def append_entry(
         self,
@@ -392,14 +106,9 @@ class TransparencyLogAdapter:
         metadata: dict[str, Any] | None = None,
         bitcoin_block_height: int | None = None,
     ) -> TransparencyLogEntry:
-        """Append a new hash anchor entry and optionally publish it.
+        """Append a new hash anchor entry to the local log.
 
-        Writes to local log before publishing to avoid remote-only desync.
         Uses file locking to prevent interleaved writes from concurrent workers.
-        Remote publication and receipt persistence happen outside the append lock,
-        so concurrent writers may publish out of local append order. The local
-        hash chain remains canonical because `previousEntryHash` is computed from
-        locked local state before any remote call.
         """
         lock_path = Path(str(self._log_path) + ".lock")
         with FileLock(lock_path):
@@ -412,25 +121,12 @@ class TransparencyLogAdapter:
                 request_id=request_id,
                 metadata=metadata,
                 bitcoin_block_height=bitcoin_block_height,
-                skip_remote=True,
             )
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
             with self._log_path.open("a", encoding="utf-8") as log_file:
                 log_file.write(json.dumps(serializable, sort_keys=True))
                 log_file.write("\n")
-        receipt = self.publish_entry(serializable)
-        if not receipt:
-            return entry
-        self._persist_remote_receipt(entry_id=entry.entry_id, remote_receipt=receipt)
-        return replace(entry, remote_receipt=receipt)
-
-    def publish_entry(self, record: dict[str, Any]) -> str | None:
-        """Publish a transparency record to remote when configured.
-
-        Call after local persistence to avoid remote-only desync.
-        This operation does not acquire the append lock.
-        """
-        return self._publish_entry(record)
+        return entry
 
     def build_entry_record(
         self,
@@ -441,7 +137,6 @@ class TransparencyLogAdapter:
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         bitcoin_block_height: int | None = None,
-        skip_remote: bool = False,
     ) -> tuple[TransparencyLogEntry, dict[str, Any]]:
         """Build one transparency record without writing local files."""
 
@@ -472,8 +167,7 @@ class TransparencyLogAdapter:
             bitcoin_block_height=bitcoin_block_height,
         )
         full_record = {**payload, "entryHash": entry_hash}
-        remote_receipt = None if skip_remote else self._publish_entry(full_record)
-        serializable = {**full_record, "remoteReceipt": remote_receipt}
+        serializable = {**full_record, "remoteReceipt": None}
         entry = TransparencyLogEntry(
             entry_id=entry_id,
             artifact_hash=artifact_hash,
@@ -483,7 +177,7 @@ class TransparencyLogAdapter:
             previous_entry_hash=previous_entry_hash,
             entry_hash=entry_hash,
             anchored_at=anchored_at,
-            remote_receipt=remote_receipt,
+            remote_receipt=None,
             metadata=metadata or {},
             bitcoin_block_height=bitcoin_block_height,
         )
@@ -607,7 +301,9 @@ class TransparencyLogAdapter:
 
     @staticmethod
     def compute_expected_entry_hash_from_payload(payload: dict[str, Any]) -> str:
-        """Compute entryHash from payload dict. Used for remote integrity verification."""
+        """Compute entryHash from payload dict. Retained for callers that build
+        payloads in tests. In v3 (no remote) this is mostly used for self-checks.
+        """
         return _hash_payload_from_parts(
             entry_id=payload.get("entryId"),
             artifact_hash=payload.get("artifactHash"),
@@ -653,210 +349,3 @@ class TransparencyLogAdapter:
                 break
             window_size = min(file_size, window_size * 2)
         return None
-
-    def _persist_remote_receipt(
-        self,
-        *,
-        entry_id: str,
-        remote_receipt: str,
-    ) -> None:
-        """Persist remote receipt for an existing local entry id."""
-
-        lock_path = Path(str(self._log_path) + ".lock")
-        with FileLock(lock_path):
-            if not self._log_path.exists():
-                _logger.warning(
-                    "Cannot persist remote receipt; log file is missing entry_id=%s",
-                    entry_id,
-                )
-                return
-            lines = self._log_path.read_text(encoding="utf-8").splitlines()
-            updated = False
-            for index in range(len(lines) - 1, -1, -1):
-                raw = lines[index].strip()
-                if not raw:
-                    continue
-                try:
-                    loaded = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                if str(loaded.get("entryId")) != entry_id:
-                    continue
-                loaded["remoteReceipt"] = remote_receipt
-                lines[index] = json.dumps(loaded, sort_keys=True)
-                updated = True
-                break
-            if not updated:
-                _logger.warning(
-                    "Cannot persist remote receipt; entry_id=%s was not found in local log",
-                    entry_id,
-                )
-                return
-            rewritten = "\n".join(lines)
-            if rewritten and not rewritten.endswith("\n"):
-                rewritten += "\n"
-            self._log_path.write_text(rewritten, encoding="utf-8")
-
-    def _publish_entry(self, payload: dict[str, Any]) -> str | None:
-        """Publish anchor payload to remote endpoint when configured."""
-
-        if not self._publish_url or not self._publish_url.strip():
-            return None
-        try:
-            ensure_allowed_http_url(
-                self._publish_url,
-                context="Transparency log publish_url",
-            )
-        except RuntimeError as exc:
-            _logger.warning(
-                "Supabase broadcast soft-fail. Local anchor secure. Error: %s",
-                _sanitize_for_log(str(exc)),
-            )
-            return None
-        headers: dict[str, str] = {"Content-Type": "application/json", **self._publish_headers}
-        body = {"payload": payload} if self._publish_supabase_format else payload
-        timeout = _normalize_remote_timeout(self._publish_timeout_sec)
-        try:
-            request = build_http_request(
-                self._publish_url.strip(),
-                context="Transparency log publish_url",
-                method="POST",
-                headers=headers,
-                data=json.dumps(body).encode("utf-8"),
-            )
-            with open_http_urlopen(
-                request,
-                timeout=timeout,
-                context="Transparency log publish request URL",
-            ) as response:
-                raw = (
-                    _read_response_bytes_bounded(
-                        response,
-                        context="Transparency publish response",
-                    )
-                    .decode("utf-8")
-                    .strip()
-                )
-                if not raw:
-                    return None
-                return raw
-        except (
-            TimeoutError,
-            urllib.error.URLError,
-            urllib.error.HTTPError,
-            ConnectionError,
-            RuntimeError,
-        ) as exc:
-            _logger.warning(
-                "Supabase broadcast soft-fail. Local anchor secure. Error: %s",
-                _sanitize_for_log(str(exc)),
-            )
-            return None
-
-    def entry_exists_in_remote(self, entry_hash: str, artifact_hash: str) -> bool:
-        """Return True if remote has a row with this entry_hash (idempotency check)."""
-        rows = self.fetch_remote_entries_by_artifact_hash(artifact_hash)
-        if rows is None:
-            return False
-        for row in rows:
-            payload = row.get("payload") or row.get("Payload")
-            if isinstance(payload, dict) and payload.get("entryHash") == entry_hash:
-                return True
-        return False
-
-    def republish_entry_if_missing(self, serializable: dict[str, Any]) -> tuple[bool, str]:
-        """Publish entry to remote only if not already present. Idempotent.
-
-        Returns:
-            (published, message) - published=True if INSERT was performed.
-        """
-        entry_hash = serializable.get("entryHash")
-        artifact_hash = serializable.get("artifactHash")
-        if not entry_hash or not artifact_hash:
-            return False, "Record missing entryHash or artifactHash"
-        if not self.is_remote_configured():
-            return False, "Remote publish not configured"
-        if self.entry_exists_in_remote(entry_hash, artifact_hash):
-            return False, "Already present"
-        receipt = self._publish_entry(serializable)
-        if receipt is None:
-            return False, "Publish failed (network or server error)"
-        return True, "Published"
-
-    def fetch_remote_entries_by_artifact_hash(
-        self, artifact_hash: str
-    ) -> list[dict[str, Any]] | None:
-        """Fetch remote transparency log rows by artifact hash.
-
-        Returns None only when remote is not configured (no publish_url or headers).
-        Returns [] on successful request with no matching rows (verified empty).
-        Returns list of row dicts (each with 'payload' key) on success.
-
-        Raises:
-            RuntimeError: On HTTP/network/JSON error when remote is configured.
-                Callers must not treat this as "skip verification" to prevent
-                network-level bypass attacks.
-        """
-        if not (self._publish_url and self._publish_url.strip()) or not self._publish_headers:
-            return None
-        try:
-            ensure_allowed_http_url(
-                self._publish_url,
-                context="Transparency log publish_url",
-            )
-        except RuntimeError as exc:
-            raise RuntimeError(
-                "Remote transparency log fetch failed for "
-                f"artifact_hash={artifact_hash}: {_sanitize_for_log(str(exc))}"
-            ) from exc
-        query = urllib.parse.urlencode([("payload->>artifactHash", f"eq.{artifact_hash}")])
-        url = f"{self._publish_url.rstrip('/')}?{query}"
-        headers = {k: v for k, v in self._publish_headers.items() if k != "Prefer"}
-        timeout = _normalize_remote_timeout(self._publish_timeout_sec)
-        try:
-            request = build_http_request(
-                url,
-                context="Remote transparency log fetch request URL",
-                method="GET",
-                headers=headers,
-            )
-            with open_http_urlopen(
-                request,
-                timeout=timeout,
-                context="Remote transparency log fetch request URL",
-            ) as response:
-                raw = (
-                    _read_response_bytes_bounded(
-                        response,
-                        context="Remote transparency log fetch response",
-                    )
-                    .decode("utf-8")
-                    .strip()
-                )
-                if not raw:
-                    return []
-                data = json.loads(raw)
-                if not isinstance(data, list):
-                    raise RuntimeError(
-                        "Remote transparency log fetch returned unexpected non-list JSON body."
-                    )
-                return [row for row in data if isinstance(row, dict)]
-        except urllib.error.HTTPError as exc:
-            raise RuntimeError(
-                "Remote transparency log fetch failed for "
-                f"artifact_hash={artifact_hash} with HTTP {exc.code}"
-            ) from exc
-        except (TimeoutError, urllib.error.URLError, OSError) as exc:
-            raise RuntimeError(
-                "Remote transparency log fetch failed for "
-                f"artifact_hash={artifact_hash}: {_sanitize_for_log(str(exc))}"
-            ) from exc
-        except RuntimeError as exc:
-            raise RuntimeError(
-                "Remote transparency log fetch failed for "
-                f"artifact_hash={artifact_hash}: {_sanitize_for_log(str(exc))}"
-            ) from exc
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"Remote transparency log fetch failed for artifact_hash={artifact_hash}: {exc}"
-            ) from exc

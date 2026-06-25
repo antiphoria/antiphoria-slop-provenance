@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 from dataclasses import asdict, dataclass, field
@@ -53,6 +54,8 @@ class AuditReport:
     timestamp_found: bool
     timestamp_valid: bool
     key_status_at_signing_time: str
+    # v3: remote_anchor_verified was removed (Supabase code gone, pre-release.md §1).
+    # Kept as a field so legacy JSON reports still parse; always None for new audits.
     remote_anchor_verified: bool | None = None
     c2pa_present: bool = False
     c2pa_valid: bool = False
@@ -66,8 +69,19 @@ class AuditReport:
     bitcoin_block_height: int | None = None
     unattended_ceremony: bool = False
     webauthn_present: bool = False
+    # v3 (Flaw A): distinguishes "block exists" from "cryptographically verified".
+    # webauthn_verified is True only after a successful ES256 verify against the
+    # published credential public key, RP ID hash, and challenge. Legacy v2
+    # artifacts (no clientDataJson) report present=True, verified=False.
+    webauthn_verified: bool = False
+    webauthn_verify_skipped: str | None = None
     ots_sidecar_declared: bool = False
     ots_blob_present: bool = False
+    # v3 (Gap 1): supersession state from the catalog row. None = unknown / no
+    # catalog row. A non-empty string = requestId of the newer version that
+    # supersedes this one. Surfaced as a WARN (not FAIL) — the artifact is
+    # honest, just no longer current.
+    superseded_by: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert report dataclass to serializable dictionary."""
@@ -162,16 +176,6 @@ class VerificationService:
                 transparency_log_integrity = (
                     self._transparency_log_adapter.verify_integrity_entries(entries)
                 )
-                remote_anchor_verified: bool | None = None
-                remote_error_message: str | None = None
-                try:
-                    remote_anchor_verified = self._verify_remote_anchor(
-                        digest_hex=digest_hex,
-                        entries=entries,
-                    )
-                except RuntimeError as remote_exc:
-                    remote_anchor_verified = False
-                    remote_error_message = str(remote_exc)
             else:
                 if repository_path is not None:
                     log_text = self._read_optional_blob_from_head(
@@ -189,16 +193,10 @@ class VerificationService:
                     if entries
                     else True
                 )
-                remote_anchor_verified = None
-                remote_error_message = None
-                try:
-                    remote_anchor_verified = self._verify_remote_anchor(
-                        digest_hex=digest_hex,
-                        entries=entries,
-                    )
-                except RuntimeError as remote_exc:
-                    remote_anchor_verified = False
-                    remote_error_message = str(remote_exc)
+            # v3: remote_anchor_verified removed (Supabase code gone, pre-release.md §1).
+            # Bitcoin (OTS) is the only remote anchor.
+            remote_anchor_verified: bool | None = None
+            remote_error_message: str | None = None
             manifest_hash, manifest_bytes = self._read_manifest_for_file(artifact_path)
             ots_forged, bitcoin_block_height = self._verify_ots_from_git(
                 repository_path=repository_path,
@@ -330,52 +328,104 @@ class VerificationService:
             return ""
         return bytes(blob_obj.data).decode("utf-8")
 
+    def _verify_webauthn(
+        self,
+        envelope: Artifact,
+        payload: str,
+    ) -> tuple[bool, str | None]:
+        """Verify an operator WebAuthn assertion. v3 (Flaw A).
+
+        Returns ``(verified, skip_reason)``. ``skip_reason`` is non-None when
+        verification could not be attempted (e.g. no attestation on the artifact,
+        no credential public key resolvable, RP ID not configured). This is the
+        honest "captured-unverified" state — distinct from a real verification
+        failure (which returns ``(False, None)``).
+
+        The verifier resolves the credential public key from the local
+        ``.webauthn-credentials.json`` (operator-state file). Cross-machine
+        verification (e.g. a third-party verifier using the published registry)
+        is the web-ui's job; this method serves the CLI audit path.
+        """
+        # v3 (Gap 2): webauthn lives on the sealer's OperatorSeal, not Provenance.
+        sealer_seal = next(
+            (s for s in envelope.operator_seals if s.role == "sealer"),
+            envelope.operator_seals[0] if envelope.operator_seals else None,
+        )
+        wa = sealer_seal.webauthn_attestation if sealer_seal is not None else None
+        if wa is None:
+            return False, "no attestation captured"
+        # clientDataJson is required for verification. Legacy v2 artifacts lack it.
+        if not getattr(wa, "client_data_json", None):
+            return False, "legacy v2 attestation (no clientDataJson — cannot verify)"
+
+        rp_id = self._resolve_webauthn_rp_id()
+        if rp_id is None:
+            return False, "WEBAUTHN_RP_ID not configured"
+
+        credential_cose = self._resolve_webauthn_credential_public_key(wa.credential_id)
+        if credential_cose is None:
+            return False, "credential public key not found in local store"
+
+        from src.canonicalization import canonicalize_body_for_hash
+        from src.webauthn_attestation import verify_webauthn_assertion
+
+        challenge_hash = hashlib.sha256(canonicalize_body_for_hash(payload)).digest()
+        ok = verify_webauthn_assertion(
+            wa,
+            expected_rp_id=rp_id,
+            expected_challenge_hash=challenge_hash,
+            credential_public_key_cose=credential_cose,
+        )
+        return ok, (None if ok else "signature/RP/challenge check failed")
+
+    def _resolve_webauthn_rp_id(self) -> str | None:
+        """Resolve the RP ID for WebAuthn verification."""
+        try:
+            from src.webauthn_attestation import _resolve_rp_id
+
+            return _resolve_rp_id(env_path=self._env_path)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _resolve_webauthn_credential_public_key(self, credential_id: str) -> bytes | None:
+        """Resolve the stored COSE public key for a credential id.
+
+        Reads from the operator-state credentials file (the same one written at
+        enrollment). This serves the *local* CLI audit; cross-machine verifiers
+        use the published registry instead.
+        """
+        try:
+            import base64
+
+            from src.webauthn_attestation import _get_credentials_path, _load_credentials
+
+            path = _get_credentials_path(env_path=self._env_path)
+            stored = _load_credentials(path)
+            stored_id = stored.get("credential_id", "")
+            # base64url compare (padding-insensitive)
+            padded = stored_id + "=" * (-len(stored_id) % 4)
+            if padded != credential_id + "=" * (-len(credential_id) % 4):
+                return None
+            pub_b64 = stored.get("public_key_cose_b64")
+            if not pub_b64:
+                return None
+            return base64.urlsafe_b64decode(pub_b64 + "=" * (-len(pub_b64) % 4))
+        except Exception:  # noqa: BLE001
+            return None
+
     def _verify_remote_anchor(
         self,
-        digest_hex: str,
-        entries: list[TransparencyLogEntry],
+        digest_hex: str,  # noqa: ARG002
+        entries: list[TransparencyLogEntry],  # noqa: ARG002
     ) -> bool | None:
-        """Verify remote Supabase has matching entry. None=skip, True=ok, False=fail."""
-        matching_entry = next((e for e in entries if e.artifact_hash == digest_hex), None)
-        if matching_entry is None:
-            return None
-        remote_rows = self._transparency_log_adapter.fetch_remote_entries_by_artifact_hash(
-            digest_hex
-        )
-        if remote_rows is None:
-            return None
-        if not remote_rows:
-            return False
-        for row in remote_rows:
-            payload = row.get("payload") or row.get("Payload")
-            if not isinstance(payload, dict):
-                _logger.warning(
-                    "Remote transparency log row has unexpected shape: "
-                    "payload column missing or not a dict. Keys: %s",
-                    list(row.keys()) if isinstance(row, dict) else "not a dict",
-                )
-                continue
+        """v3 stub. Remote Supabase verification was removed (pre-release.md §1).
 
-            # Deep check: recompute entryHash from remote payload; detect tampering
-            expected_hash = TransparencyLogAdapter.compute_expected_entry_hash_from_payload(payload)
-            if expected_hash != payload.get("entryHash"):
-                _logger.warning(
-                    "Remote transparency log payload tampered: recomputed entryHash "
-                    "does not match stored value."
-                )
-                continue
-
-            if payload.get("entryHash") != matching_entry.entry_hash:
-                continue
-            if payload.get("artifactHash") != matching_entry.artifact_hash:
-                _logger.warning(
-                    "Remote row entryHash matches but artifactHash differs: expected %s, got %s",
-                    matching_entry.artifact_hash,
-                    payload.get("artifactHash"),
-                )
-                continue
-            return True
-        return False
+        Always returns None (= "skip"). Bitcoin (OTS) is the only remote trust
+        root. The method is retained so legacy callers/tests that invoke it
+        don't break; the parameter plumbing in audit_artifact /
+        audit_committed_artifact is preserved as dead-but-harmless.
+        """
+        return None
 
     def audit_committed_artifact(
         self,
@@ -449,12 +499,27 @@ class VerificationService:
                 request_id=str(request_id),
                 envelope_source=envelope.provenance.source,
             )
+            superseded_by = self._resolve_catalog_superseded_by(
+                repository_path=repository_path,
+                request_id=str(request_id),
+            )
             sidecars = parse_sidecars_from_markdown(markdown_text)
             unattended_ceremony = envelope.provenance.provenance_grade == "unattended" or (
                 envelope.provenance.author_attestation is not None
                 and envelope.provenance.author_attestation.attestation_mode == "unattended"
             )
-            webauthn_present = envelope.provenance.webauthn_attestation is not None
+            # v3 (Gap 2): webauthn presence comes from the sealer's OperatorSeal.
+            sealer_seal = next(
+                (s for s in envelope.operator_seals if s.role == "sealer"),
+                envelope.operator_seals[0] if envelope.operator_seals else None,
+            )
+            webauthn_present = (
+                sealer_seal is not None and sealer_seal.webauthn_attestation is not None
+            )
+            webauthn_verified, webauthn_skip_reason = self._verify_webauthn(
+                envelope=envelope,
+                payload=payload,
+            )
             ots_sidecar_declared = sidecars.ots is not None
             ots_blob_present = (
                 sidecars.ots is not None
@@ -480,6 +545,9 @@ class VerificationService:
                 extra_errors=catalog_errors,
                 unattended_ceremony=unattended_ceremony,
                 webauthn_present=webauthn_present,
+                webauthn_verified=webauthn_verified,
+                webauthn_verify_skipped=webauthn_skip_reason,
+                superseded_by=superseded_by,
                 ots_sidecar_declared=ots_sidecar_declared,
                 ots_blob_present=ots_blob_present,
             )
@@ -570,6 +638,38 @@ class VerificationService:
             return [f"Catalog source '{catalog_source}' != envelope source '{envelope_source}'."]
         return []
 
+    def _resolve_catalog_superseded_by(
+        self,
+        repository_path: Path,
+        request_id: str,
+    ) -> str | None:
+        """Look up this artifact's catalog row and return its supersededBy, if any.
+
+        v3 (Gap 1): a superseded artifact is honest — it just has a newer version.
+        Surfaced as WARN, not FAIL.
+        """
+        try:
+            adapter = CatalogAdapter(
+                repository_path=repository_path,
+                env_path=self._env_path,
+            )
+            row = next(
+                (
+                    entry
+                    for entry in adapter.read_entries()
+                    if str(entry.get("requestId")) == request_id
+                ),
+                None,
+            )
+        except (RuntimeError, OSError, KeyError):
+            return None
+        if row is None:
+            return None
+        superseded_by = row.get("supersededBy")
+        if isinstance(superseded_by, str) and superseded_by:
+            return superseded_by
+        return None
+
     def _build_audit_report(
         self,
         envelope: Artifact,
@@ -591,6 +691,9 @@ class VerificationService:
         extra_errors: list[str] | None = None,
         unattended_ceremony: bool = False,
         webauthn_present: bool = False,
+        webauthn_verified: bool = False,
+        webauthn_verify_skipped: str | None = None,
+        superseded_by: str | None = None,
         ots_sidecar_declared: bool = False,
         ots_blob_present: bool = False,
     ) -> AuditReport:
@@ -705,6 +808,9 @@ class VerificationService:
             bitcoin_block_height=bitcoin_block_height,
             unattended_ceremony=unattended_ceremony,
             webauthn_present=webauthn_present,
+            webauthn_verified=webauthn_verified,
+            webauthn_verify_skipped=webauthn_verify_skipped,
+            superseded_by=superseded_by,
             ots_sidecar_declared=ots_sidecar_declared,
             ots_blob_present=ots_blob_present,
         )

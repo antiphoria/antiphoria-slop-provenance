@@ -23,20 +23,42 @@ from src.models import (
     AuthorAttestation,
     GenerationContext,
     Hyperparameters,
+    OperatorSeal,
     Provenance,
     RegistrationCeremony,
+    Revision,
     SignatureBlock,
     VerificationAnchor,
     WebAuthnAttestation,
 )
 from src.policies.license_text import resolve_license_text
 
-SCHEMA_VERSION_V2 = "eternity.v2"
+SCHEMA_VERSION_V2 = "eternity.v3"
+"""v3 wire format schema version.
+
+The constant name ``SCHEMA_VERSION_V2`` is retained (the module is still
+``envelope_v2.py``) for source stability; the value is the v3 schema label.
+The internal model and the C2PA context assertion now both report
+``eternity.v3``, fixing the v1/v2 drift (Flaw D).
+"""
 PROFILE_REGISTER = "antiphoria.register.v1"
 PROFILE_SEAL = "antiphoria.seal.v1"
 
 _ALLOWED_TOP_LEVEL = frozenset(
-    {"antiphoria", "document", "rights", "operator", "claim", "synthesis", "integrity"}
+    {
+        "antiphoria",
+        "document",
+        # v3 (Gap 1): revision block lives between document and rights.
+        "revision",
+        "rights",
+        # v3 (Gap 2): operatorSeals replaces the old singular operator/signature.
+        "operatorSeals",
+        # Legacy v2 sections — still accepted for grandfathered reads:
+        "operator",
+        "claim",
+        "synthesis",
+        "integrity",
+    }
 )
 
 _PROCESS_NARRATIVE_DISCLAIMER = "Operator-supplied narrative. Not machine-verified lineage."
@@ -76,41 +98,34 @@ def source_for_profile(profile: str) -> str:
     raise RuntimeError(f"Unknown or unsupported v2 profile '{profile}'.")
 
 
-def resolve_envelope_wire_version(env_path: Any = None) -> str:
-    raw = read_env_optional("ENVELOPE_WIRE_VERSION", env_path=env_path)
-    if raw is None or raw.strip() == "":
-        return "v2"
-    version = raw.strip().lower()
-    if version not in ("v1", "v2"):
-        raise RuntimeError(f"Invalid ENVELOPE_WIRE_VERSION '{raw}'. Expected 'v1' or 'v2'.")
-    return version
+def resolve_envelope_wire_version(env_path: Any = None) -> str:  # noqa: ARG001
+    """v3 stub. Always returns 'v3'. Wire-version selection was removed (v1
+    renderer deleted, pre-release.md §1). Retained for API compatibility with
+    any caller that still imports it; the env knob ``ENVELOPE_WIRE_VERSION`` is
+    ignored.
+    """
+    return "v3"
 
 
 def resolve_wire_version_for_artifact(
-    artifact: Artifact,
+    artifact: Artifact,  # noqa: ARG001
     *,
-    env_path: Any = None,
-    wire_version: str | None = None,
+    env_path: Any = None,  # noqa: ARG001
+    wire_version: str | None = None,  # noqa: ARG001
 ) -> str:
-    """Pick v1 or v2 wire codec for an artifact.
-
-    Register/seal artifacts carry author attestation and ceremony metadata;
-    legacy generate/curate envelopes stay on v1 unless forced via env.
-    """
-
-    if wire_version is not None:
-        return wire_version
-    configured = resolve_envelope_wire_version(env_path)
-    if configured == "v1":
-        return "v1"
-    prov = artifact.provenance
-    if prov.author_attestation is not None and prov.registration_ceremony is not None:
-        return "v2"
-    return "v1"
+    """v3 stub. Always returns 'v3'. See ``resolve_envelope_wire_version``."""
+    return "v3"
 
 
 def is_v2_wire_format(text: str) -> bool:
-    """Return True when frontmatter uses eternity.v2 enterprise layout."""
+    """Return True when frontmatter uses the antiphoria enterprise layout.
+
+    Name is retained for source compatibility. In v3 the layout is unchanged
+    from v2 (same top-level sections); only the ``schemaVersion`` label differs
+    (``eternity.v3`` for new seals, ``eternity.v2`` accepted as legacy input).
+    Detection keys off the ``antiphoria:`` top-level block, not the schema
+    label, so both v2 and v3 wire formats route here.
+    """
 
     if not text.startswith("---\n"):
         return False
@@ -118,11 +133,6 @@ def is_v2_wire_format(text: str) -> bool:
     if delimiter_index == -1:
         return False
     frontmatter = text[4:delimiter_index]
-    if (
-        'schemaVersion: "eternity.v2"' in frontmatter
-        or "schemaVersion: 'eternity.v2'" in frontmatter
-    ):
-        return True
     return frontmatter.startswith("antiphoria:")
 
 
@@ -169,8 +179,14 @@ class EnvelopeSidecars:
     tsa_provider: str | None = None
 
 
-def _rights_block(policy_id: str) -> tuple[str, str]:
-    text = resolve_license_text(policy_id)
+def _rights_block(policy_id: str, holder: str | None = None) -> tuple[str, str]:
+    """Build (notice, statement) for a policy id.
+
+    v3 (Flaw F): when ``holder`` is provided, license text is attributed to the
+    author (the rights holder). When omitted, legacy v2 wording is emitted
+    (Antiphoria as holder) — only for grandfathered compatibility.
+    """
+    text = resolve_license_text(policy_id, holder=holder)
     return text.notice, text.statement
 
 
@@ -193,7 +209,10 @@ def _validate_v2_invariants(loaded: dict[str, Any]) -> None:
         raise RuntimeError("v2 envelope missing antiphoria section.")
     profile = antiphoria.get("profile")
     schema = antiphoria.get("schemaVersion")
-    if schema != SCHEMA_VERSION_V2:
+    # v3 emits eternity.v3; eternity.v2 is accepted as legacy input only (the
+    # two dev-run artifacts in the archive). v1 (the old flat schema) is not
+    # routed here at all — see parsing.py.
+    if schema not in ("eternity.v3", "eternity.v2"):
         raise RuntimeError(f"Unsupported antiphoria.schemaVersion '{schema}'.")
 
     claim = loaded.get("claim")
@@ -235,6 +254,110 @@ def _build_claim_statements_block(att: AuthorAttestation) -> str:
     return "".join(lines)
 
 
+def _render_signature_block_yaml(
+    block: SignatureBlock,
+    *,
+    indent: int,
+) -> str:
+    """Render one SignatureBlock as a YAML mapping at the given indent.
+
+    The signature bytes are rendered as a literal block (``|``) with wrapped
+    lines, matching the v2 wire format's conventions.
+    """
+    pad = " " * indent
+    sig_lines = _wrap_signature_lines(block.cryptographic_signature)
+    sig_yaml = "\n".join(f"{pad}  {line}" for line in sig_lines)
+    canon_line = (
+        f"{pad}canonicalization: {_yaml_quoted(block.payload_canonicalization)}\n"
+        if block.payload_canonicalization
+        else ""
+    )
+    return (
+        f"{pad}algorithm: {_yaml_quoted(block.crypto_algorithm)}\n"
+        f"{pad}signerFingerprint: {_yaml_quoted(block.verification_anchor.signer_fingerprint)}\n"
+        f"{pad}artifactHash: {_yaml_quoted(block.artifact_hash)}\n"
+        + canon_line
+        + f"{pad}signature: |\n"
+        f"{sig_yaml}\n"
+    )
+
+
+def _render_operator_seals_block(
+    artifact: Artifact,
+    primary_sealer_sig: SignatureBlock,
+    hybrid_sealer_sig: SignatureBlock | None,
+    *,
+    rc: RegistrationCeremony,
+    pseudonym: str,
+    strength: str,
+    webauthn_block: str,
+) -> str:
+    """Render the ``operatorSeals:`` YAML block (v3 Gap 2, Option A).
+
+    Every seal — sealer and witnesses — has identical anatomy: pseudonymHash,
+    role, sealedAt, ceremony, webauthn, attestationStrength, primary, hybrid.
+    The block is the only place signatures appear in the envelope; the
+    ``integrity`` block no longer carries a ``signatures:`` list.
+
+    The resolved ``rc`` / ``pseudonym`` / ``strength`` / ``webauthn_block``
+    are used for the *sealer* seal (index 0 with role=sealer) — they carry the
+    fallback logic for legacy fixtures that lack ceremony on the seal itself.
+    Witness seals (role=witness) render from their own self-contained fields.
+    """
+    lines = ["operatorSeals:"]
+    for idx, seal in enumerate(artifact.operator_seals):
+        is_sealer = seal.role == "sealer" or idx == 0
+        seal_ceremony = seal.ceremony if seal.ceremony is not None and is_sealer else (
+            rc if is_sealer else seal.ceremony
+        )
+        seal_pseudonym = (
+            (seal.operator_pseudonym_hash or pseudonym) if is_sealer else seal.operator_pseudonym_hash
+        )
+        seal_strength = (
+            (seal.attestation_strength or strength) if is_sealer else seal.attestation_strength
+        )
+        # For the sealer, prefer the resolved webauthn_block (string) — we
+        # render it directly. Witnesses render from seal.webauthn_attestation.
+        lines.append(
+            f"  - operatorPseudonymHash: {_yaml_quoted(seal_pseudonym or '')}"
+        )
+        lines.append(f"    role: {_yaml_quoted(seal.role)}")
+        lines.append(f"    sealedAt: {_yaml_quoted(seal.sealed_at)}")
+        if seal_ceremony is not None:
+            lines.append("    ceremony:")
+            lines.append(
+                f"      registeredAt: {_yaml_quoted(_ms_to_iso(seal_ceremony.registration_utc_ms))}"
+            )
+            lines.append(
+                f"      orchestratorCommit: {_yaml_quoted(seal_ceremony.orchestrator_git_commit)}"
+            )
+        if is_sealer and webauthn_block:
+            # webauthn_block is pre-indented ("    webauthn:\n      ...") for the
+            # old operator: layout. Re-indent to match the operatorSeals layout
+            # (6 spaces for the inner block). The block already starts with two
+            # spaces; we need four more to nest under "  - ".
+            for wa_line in webauthn_block.splitlines():
+                lines.append(f"  {wa_line}")
+        else:
+            seal_wa = seal.webauthn_attestation
+            if seal_wa is not None:
+                lines.append("    webauthn:")
+                lines.append(f"      credentialId: {_yaml_quoted(seal_wa.credential_id)}")
+                lines.append(f"      clientDataJson: {_yaml_quoted(seal_wa.client_data_json)}")
+                lines.append(f"      clientDataJsonHash: {_yaml_quoted(seal_wa.client_data_json_hash)}")
+                lines.append(f"      authenticatorData: {_yaml_quoted(seal_wa.authenticator_data)}")
+                lines.append(f"      signature: {_yaml_quoted(seal_wa.signature)}")
+                lines.append(f"      fmt: {_yaml_quoted(seal_wa.fmt)}")
+        if seal_strength is not None:
+            lines.append(f"    attestationStrength: {_yaml_quoted(seal_strength)}")
+        lines.append("    primary:")
+        lines.append(_render_signature_block_yaml(seal.primary, indent=6))
+        if seal.hybrid is not None:
+            lines.append("    hybrid:")
+            lines.append(_render_signature_block_yaml(seal.hybrid, indent=6))
+    return "\n".join(lines) + "\n"
+
+
 def render_artifact_markdown_v2(
     artifact: Artifact,
     body: str,
@@ -257,20 +380,38 @@ def render_artifact_markdown_v2(
     if att is None:
         raise RuntimeError("v2 envelope requires author attestation in claim.")
 
-    rc = artifact.provenance.registration_ceremony
-    if rc is None:
-        raise RuntimeError("v2 envelope requires operator ceremony metadata.")
+    # v3 (Gap 2): ceremony / webauthn / attestation_strength live on the sealer's
+    # OperatorSeal now. Fall back to Provenance for legacy callers that haven't
+    # migrated yet (the model_validator maps old singular signatures into a
+    # sealer OperatorSeal, so this fallback is mostly defensive).
+    sealer_seal = next(
+        (s for s in artifact.operator_seals if s.role == "sealer"),
+        artifact.operator_seals[0] if artifact.operator_seals else None,
+    )
+    rc = sealer_seal.ceremony if sealer_seal is not None else None
+    # v3: ceremony is normally set by register/seal via the notary. If absent
+    # (test fixtures, legacy), we DON'T synthesize a placeholder — we render
+    # only what's actually on the seal, so round-trip signing hashes stay
+    # stable. The real register/seal path always sets ceremony.
 
-    pseudonym = rc.operator_pseudonym_hash or ""
-    strength = artifact.provenance.attestation_strength or "none"
-    registered_at = _ms_to_iso(rc.registration_utc_ms)
+    pseudonym = (
+        sealer_seal.operator_pseudonym_hash
+        if sealer_seal is not None and sealer_seal.operator_pseudonym_hash
+        else ""
+    )
+    strength = (
+        sealer_seal.attestation_strength
+        if sealer_seal is not None
+        else None
+    )
 
+    wa = sealer_seal.webauthn_attestation if sealer_seal is not None else None
     webauthn_block = ""
-    wa = artifact.provenance.webauthn_attestation
     if wa is not None:
         webauthn_block = (
             "  webauthn:\n"
             f"    credentialId: {_yaml_quoted(wa.credential_id)}\n"
+            f"    clientDataJson: {_yaml_quoted(wa.client_data_json)}\n"
             f"    clientDataJsonHash: {_yaml_quoted(wa.client_data_json_hash)}\n"
             f"    authenticatorData: {_yaml_quoted(wa.authenticator_data)}\n"
             f"    signature: {_yaml_quoted(wa.signature)}\n"
@@ -317,27 +458,9 @@ def render_artifact_markdown_v2(
             f"{process_block}"
         )
 
-    primary_sig_lines = _wrap_signature_lines(sig.cryptographic_signature)
-    primary_yaml = "\n".join(f"        {line}" for line in primary_sig_lines)
-    signatures_yaml = (
-        "  signatures:\n"
-        "    - tier: primary\n"
-        f"      algorithm: {_yaml_quoted(sig.crypto_algorithm)}\n"
-        f"      signerFingerprint: {_yaml_quoted(sig.verification_anchor.signer_fingerprint)}\n"
-        "      signature: |\n"
-        f"{primary_yaml}\n"
-    )
-    if artifact.hybrid_signature is not None:
-        hs = artifact.hybrid_signature
-        hybrid_lines = _wrap_signature_lines(hs.cryptographic_signature)
-        hybrid_yaml = "\n".join(f"        {line}" for line in hybrid_lines)
-        signatures_yaml += (
-            "    - tier: hybrid\n"
-            f"      algorithm: {_yaml_quoted(hs.crypto_algorithm)}\n"
-            f"      signerFingerprint: {_yaml_quoted(hs.verification_anchor.signer_fingerprint)}\n"
-            "      signature: |\n"
-            f"{hybrid_yaml}\n"
-        )
+    # v3 (Gap 2): signature rendering moved into _render_operator_seals_block
+    # (each seal carries its own primary + hybrid signatures). The integrity
+    # block carries only payloadHash, canonicalization, timestamps, sidecars.
 
     timestamps_yaml = ""
     if sig.rfc3161_token and sig.rfc3161_token.strip():
@@ -361,7 +484,8 @@ def render_artifact_markdown_v2(
         sidecars_yaml += f"    ots: {_yaml_quoted(sidecars.ots)}\n"
 
     policy_id = str(artifact.license)
-    rights_notice, rights_statement = _rights_block(policy_id)
+    rights_holder = artifact.rights_holder
+    rights_notice, rights_statement = _rights_block(policy_id, holder=rights_holder)
     stored_body = (
         canonicalize_body(body)
         if sig.payload_canonicalization == CANONICALIZATION_VERSION
@@ -380,23 +504,42 @@ def render_artifact_markdown_v2(
         f"  title: {_yaml_quoted(artifact.title)}\n"
         f"  createdAt: {_yaml_quoted(artifact.timestamp.astimezone(UTC).isoformat())}\n"
         f"  contentType: {_yaml_quoted(artifact.content_type)}\n"
-        "rights:\n"
+        + (
+            # v3 (Gap 1): revision block lives between document and rights.
+            # Absent on first version of a work; present on every supersession.
+            "revision:\n"
+            f"  chainRoot: {_yaml_quoted(artifact.revision.chain_root)}\n"
+            f"  sequence: {artifact.revision.sequence}\n"
+            f"  supersedes: {_yaml_quoted(artifact.revision.supersedes)}\n"
+            f"  supersedesHash: {_yaml_quoted(artifact.revision.supersedes_hash)}\n"
+            f"  reason: {_yaml_quoted(artifact.revision.reason)}\n"
+            + (
+                f"  note: {_yaml_quoted(artifact.revision.note)}\n"
+                if artifact.revision.note
+                else ""
+            )
+            if artifact.revision is not None
+            else ""
+        )
+        + "rights:\n"
         f"  policyId: {_yaml_quoted(policy_id)}\n"
-        f"  notice: {_yaml_quoted(rights_notice)}\n"
+        + (f"  holder: {_yaml_quoted(rights_holder)}\n" if rights_holder else "")
+        + f"  notice: {_yaml_quoted(rights_notice)}\n"
         f"  statement: {_yaml_quoted(rights_statement)}\n"
-        "operator:\n"
-        f"  pseudonymHash: {_yaml_quoted(pseudonym)}\n"
-        f"  attestationStrength: {_yaml_quoted(strength)}\n"
-        "  ceremony:\n"
-        f"    registeredAt: {_yaml_quoted(registered_at)}\n"
-        f"    orchestratorCommit: {_yaml_quoted(rc.orchestrator_git_commit)}\n"
-        f"{webauthn_block}"
-        f"{claim_block}"
+        + _render_operator_seals_block(
+            artifact,
+            sig,
+            artifact.hybrid_signature,
+            rc=rc,
+            pseudonym=pseudonym,
+            strength=strength,
+            webauthn_block=webauthn_block,
+        )
+        + f"{claim_block}"
         f"{synthesis_block}"
         "integrity:\n"
         f"  payloadHash: {_yaml_quoted(sig.artifact_hash)}\n"
         f"  canonicalization: {_yaml_quoted(sig.payload_canonicalization or CANONICALIZATION_VERSION)}\n"
-        f"{signatures_yaml}"
         f"{timestamps_yaml}"
         f"{sidecars_yaml}"
         "---\n"
@@ -404,10 +547,15 @@ def render_artifact_markdown_v2(
     )
 
 
-def _parse_signatures(integrity: dict[str, Any]) -> tuple[SignatureBlock, SignatureBlock | None]:
+def _parse_signatures(integrity: dict[str, Any]) -> tuple[SignatureBlock | None, SignatureBlock | None]:
+    """Parse primary + hybrid signatures from the legacy ``integrity.signatures``
+    list. v3 envelopes carry signatures in ``operatorSeals`` instead — when
+    that's the case, ``integrity.signatures`` is absent and this returns
+    ``(None, None)``. The caller then builds seals from ``operatorSeals``.
+    """
     signatures = integrity.get("signatures")
     if not isinstance(signatures, list) or not signatures:
-        raise RuntimeError("integrity.signatures must be a non-empty list.")
+        return None, None
 
     primary: SignatureBlock | None = None
     hybrid: SignatureBlock | None = None
@@ -461,12 +609,192 @@ def _parse_signatures(integrity: dict[str, Any]) -> tuple[SignatureBlock, Signat
     return primary, hybrid
 
 
+def _signature_block_from_seal_dict(
+    block_raw: dict[str, Any],
+    *,
+    default_payload_hash: str,
+    default_canon: str | None,
+) -> SignatureBlock:
+    """Build a SignatureBlock from one ``primary:``/``hybrid:`` dict in an
+    operatorSeals entry. The dict mirrors the legacy integrity.signatures shape
+    (algorithm, signerFingerprint, signature, optional artifactHash/canonicalization).
+    """
+    algorithm = str(block_raw.get("algorithm", ""))
+    fingerprint = str(block_raw.get("signerFingerprint", ""))
+    signature_b64 = "".join(str(block_raw.get("signature", "")).split())
+    artifact_hash = str(block_raw.get("artifactHash") or default_payload_hash)
+    canon = block_raw.get("canonicalization") or default_canon
+    return SignatureBlock(
+        cryptoAlgorithm=algorithm,
+        artifactHash=artifact_hash,
+        cryptographicSignature=signature_b64,
+        verificationAnchor=VerificationAnchor(signerFingerprint=fingerprint),
+        payloadCanonicalization=canon,
+    )
+
+
+def _operator_seal_from_loaded(seal_raw: dict[str, Any]) -> OperatorSeal:
+    """Build an OperatorSeal from one parsed ``operatorSeals:`` entry."""
+
+    primary_raw = seal_raw.get("primary")
+    if not isinstance(primary_raw, dict):
+        raise RuntimeError("operatorSeals entry missing primary signature block.")
+    # Default artifactHash/canonicalization come from the primary block if present,
+    # otherwise empty/None — the caller typically supplies them via the integrity
+    # block when falling back from the legacy shape.
+    default_hash = str(primary_raw.get("artifactHash", ""))
+    default_canon = primary_raw.get("canonicalization")
+    primary = _signature_block_from_seal_dict(
+        primary_raw,
+        default_payload_hash=default_hash,
+        default_canon=default_canon,
+    )
+    hybrid: SignatureBlock | None = None
+    hybrid_raw = seal_raw.get("hybrid")
+    if isinstance(hybrid_raw, dict):
+        hybrid = _signature_block_from_seal_dict(
+            hybrid_raw,
+            default_payload_hash=default_hash,
+            default_canon=default_canon,
+        )
+
+    # Ceremony
+    ceremony_raw = seal_raw.get("ceremony")
+    ceremony: RegistrationCeremony | None = None
+    if isinstance(ceremony_raw, dict):
+        registered_at = ceremony_raw.get("registeredAt")
+        raw_pseudonym = seal_raw.get("operatorPseudonymHash")
+        # Empty string → None (the pattern rejects ""). Honest "no pseudonym."
+        if isinstance(raw_pseudonym, str) and not raw_pseudonym.strip():
+            raw_pseudonym = None
+        ceremony = RegistrationCeremony(
+            registrationUtcMs=(
+                _iso_to_ms(str(registered_at)) if isinstance(registered_at, str) else 0
+            ),
+            orchestratorGitCommit=str(ceremony_raw.get("orchestratorCommit", "")) or "unknown",
+            operatorPseudonymHash=raw_pseudonym,
+        )
+
+    # WebAuthn
+    webauthn: WebAuthnAttestation | None = None
+    wa_raw = seal_raw.get("webauthn")
+    if isinstance(wa_raw, dict):
+        cred_id = wa_raw.get("credentialId")
+        client_json = wa_raw.get("clientDataJson")
+        client_hash = wa_raw.get("clientDataJsonHash")
+        auth_data = wa_raw.get("authenticatorData")
+        signature = wa_raw.get("signature")
+        fmt = wa_raw.get("fmt")
+        # v3 (Flaw A): clientDataJson required for real verification. Legacy v2
+        # artifacts lack it — those parse with webauthn=None (honest skip).
+        if client_json and all(
+            isinstance(v, str) and v
+            for v in (cred_id, client_hash, auth_data, signature, fmt)
+        ):
+            webauthn = WebAuthnAttestation(
+                credentialId=cred_id,
+                clientDataJson=client_json,
+                clientDataJsonHash=client_hash,
+                authenticatorData=auth_data,
+                signature=signature,
+                fmt=fmt,
+            )
+
+    strength = seal_raw.get("attestationStrength")
+    if not isinstance(strength, str):
+        strength = None
+
+    seal_pseudonym = seal_raw.get("operatorPseudonymHash")
+    if isinstance(seal_pseudonym, str) and not seal_pseudonym.strip():
+        seal_pseudonym = None
+
+    return OperatorSeal(
+        operatorPseudonymHash=seal_pseudonym,
+        role=str(seal_raw.get("role", "sealer")),  # type: ignore[arg-type]
+        sealedAt=str(seal_raw.get("sealedAt", "")) or "unknown",
+        ceremony=ceremony,
+        webauthn=webauthn,
+        attestationStrength=strength,  # type: ignore[arg-type]
+        primary=primary,
+        hybrid=hybrid,
+    )
+
+
+def _legacy_sealer_seal_from_operator(
+    operator: dict[str, Any],
+    primary_sig: SignatureBlock,
+    hybrid_sig: SignatureBlock | None,
+) -> OperatorSeal:
+    """Build a single ``role="sealer"`` OperatorSeal from legacy v2 operator +
+    integrity.signatures data. Used when an envelope has no ``operatorSeals:``
+    block (legacy v2 artifacts grandfathered into v3)."""
+
+    ceremony_raw = operator.get("ceremony")
+    ceremony: RegistrationCeremony | None = None
+    if isinstance(ceremony_raw, dict):
+        registered_at = ceremony_raw.get("registeredAt")
+        raw_pseudonym = operator.get("pseudonymHash")
+        if isinstance(raw_pseudonym, str) and not raw_pseudonym.strip():
+            raw_pseudonym = None
+        ceremony = RegistrationCeremony(
+            registrationUtcMs=(
+                _iso_to_ms(str(registered_at)) if isinstance(registered_at, str) else 0
+            ),
+            orchestratorGitCommit=str(ceremony_raw.get("orchestratorCommit", "")) or "unknown",
+            operatorPseudonymHash=raw_pseudonym,
+        )
+
+    # Legacy webauthn block (may lack clientDataJson — handled in parser).
+    webauthn: WebAuthnAttestation | None = None
+    wa_raw = operator.get("webauthn")
+    if isinstance(wa_raw, dict):
+        cred_id = wa_raw.get("credentialId")
+        client_json = wa_raw.get("clientDataJson")
+        client_hash = wa_raw.get("clientDataJsonHash")
+        auth_data = wa_raw.get("authenticatorData")
+        signature = wa_raw.get("signature")
+        fmt = wa_raw.get("fmt")
+        if client_json and all(
+            isinstance(v, str) and v
+            for v in (cred_id, client_hash, auth_data, signature, fmt)
+        ):
+            webauthn = WebAuthnAttestation(
+                credentialId=cred_id,
+                clientDataJson=client_json,
+                clientDataJsonHash=client_hash,
+                authenticatorData=auth_data,
+                signature=signature,
+                fmt=fmt,
+            )
+
+    strength = operator.get("attestationStrength")
+    if not isinstance(strength, str):
+        strength = None
+
+    legacy_pseudonym = operator.get("pseudonymHash")
+    if isinstance(legacy_pseudonym, str) and not legacy_pseudonym.strip():
+        legacy_pseudonym = None
+
+    return OperatorSeal(
+        operatorPseudonymHash=legacy_pseudonym,
+        role="sealer",
+        sealedAt=str(ceremony_raw.get("registeredAt", "")) if isinstance(ceremony_raw, dict) else "" or "unknown",
+        ceremony=ceremony,
+        webauthn=webauthn,
+        attestationStrength=strength,  # type: ignore[arg-type]
+        primary=primary_sig,
+        hybrid=hybrid_sig,
+    )
+
+
 def _artifact_from_v2_loaded(loaded: dict[str, Any]) -> Artifact:
     _validate_v2_invariants(loaded)
 
     document = loaded["document"]
     rights = loaded["rights"]
-    operator = loaded["operator"]
+    # v3 (Gap 2): operator block is optional — superseded by operatorSeals.
+    # Legacy v2 envelopes still carry it; v3 envelopes don't.
+    operator = loaded.get("operator") or {}
     claim = loaded["claim"]
     integrity = loaded["integrity"]
 
@@ -500,23 +828,37 @@ def _artifact_from_v2_loaded(loaded: dict[str, Any]) -> Artifact:
         if isinstance(registered_at, str)
         else int(ceremony.get("registrationUtcMs", 0))
     )
+    # Coerce empty/whitespace pseudonymHash to None — the renderer emits "" when
+    # the operator has no pseudonym salt configured, but the model field's strict
+    # pattern (^[a-f0-9]{64}$) rejects empty strings. None is the honest value.
+    raw_pseudonym_hash = operator.get("pseudonymHash")
+    if isinstance(raw_pseudonym_hash, str) and not raw_pseudonym_hash.strip():
+        raw_pseudonym_hash = None
     registration_ceremony = RegistrationCeremony(
         registrationUtcMs=registration_ms,
-        orchestratorGitCommit=str(ceremony.get("orchestratorCommit", "")),
-        operatorPseudonymHash=operator.get("pseudonymHash"),
+        orchestratorGitCommit=str(ceremony.get("orchestratorCommit", "")) or "unknown",
+        operatorPseudonymHash=raw_pseudonym_hash,
     )
 
     webauthn_attestation: WebAuthnAttestation | None = None
     webauthn_raw = operator.get("webauthn")
     if isinstance(webauthn_raw, dict):
         cred_id = webauthn_raw.get("credentialId")
+        client_json = webauthn_raw.get("clientDataJson")
         client_hash = webauthn_raw.get("clientDataJsonHash")
         auth_data = webauthn_raw.get("authenticatorData")
         signature = webauthn_raw.get("signature")
         fmt = webauthn_raw.get("fmt")
-        if all(isinstance(v, str) and v for v in (cred_id, client_hash, auth_data, signature, fmt)):
+        # v3 (Flaw A): clientDataJson is required for verification. Legacy v2
+        # artifacts don't carry it — those parse but cannot be cryptographically
+        # verified (honest "captured-unverified" state).
+        if client_json and all(
+            isinstance(v, str) and v
+            for v in (cred_id, client_hash, auth_data, signature, fmt)
+        ):
             webauthn_attestation = WebAuthnAttestation(
                 credentialId=cred_id,
+                clientDataJson=client_json,
                 clientDataJsonHash=client_hash,
                 authenticatorData=auth_data,
                 signature=signature,
@@ -542,12 +884,57 @@ def _artifact_from_v2_loaded(loaded: dict[str, Any]) -> Artifact:
 
     primary_sig, hybrid_sig = _parse_signatures(integrity)
 
+    # v3 (Gap 2): prefer the operatorSeals block; fall back to building a single
+    # sealer seal from the legacy operator + integrity.signatures shape.
+    operator_seals_raw = loaded.get("operatorSeals")
+    parsed_seals: list[OperatorSeal] = []
+    if isinstance(operator_seals_raw, list):
+        for seal_raw in operator_seals_raw:
+            if not isinstance(seal_raw, dict):
+                continue
+            parsed_seals.append(_operator_seal_from_loaded(seal_raw))
+
+    # Legacy fallback: build a sealer seal from operator + integrity.signatures.
+    # Only fires when no operatorSeals block was present AND primary_sig parsed.
+    if not parsed_seals and primary_sig is not None:
+        parsed_seals.append(
+            _legacy_sealer_seal_from_operator(
+                operator=operator,
+                primary_sig=primary_sig,
+                hybrid_sig=hybrid_sig,
+            )
+        )
+
+    # v3 (Gap 1): optional revision block between document and rights.
+    revision_raw = loaded.get("revision")
+    revision_obj: Revision | None = None
+    if isinstance(revision_raw, dict):
+        rev_sequence = revision_raw.get("sequence")
+        if not isinstance(rev_sequence, int) or rev_sequence < 2:
+            raise RuntimeError(
+                f"Invalid revision.sequence '{rev_sequence}'. Must be an integer >= 2."
+            )
+        revision_obj = Revision(
+            chainRoot=str(revision_raw["chainRoot"]),
+            sequence=rev_sequence,
+            supersedes=str(revision_raw["supersedes"]),
+            supersedesHash=str(revision_raw["supersedesHash"]),
+            reason=str(revision_raw["reason"]),
+            note=(
+                None
+                if revision_raw.get("note") is None
+                else str(revision_raw["note"])
+            ),
+        )
+
     return Artifact(
         id=document["artifactId"],
         title=document["title"],
         timestamp=document["createdAt"],
         contentType=document.get("contentType", "text/markdown"),
         license=rights.get("policyId", "ARR"),
+        rights_holder=rights.get("holder") if isinstance(rights.get("holder"), str) else None,
+        revision=revision_obj,
         provenance=Provenance(
             source=source,
             engineVersion=loaded["antiphoria"].get(
@@ -556,15 +943,11 @@ def _artifact_from_v2_loaded(loaded: dict[str, Any]) -> Artifact:
             modelId=model_id,
             generationContext=generation_context_for_source(source),
             authorAttestation=author_attestation,
-            webauthnAttestation=webauthn_attestation,
-            attestationStrength=raw_strength,
-            registrationCeremony=registration_ceremony,
             provenanceGrade=claim.get("provenanceGrade"),
             modelsUsed=models_used,
             processNarrativeHash=process_hash,
         ),
-        signature=primary_sig,
-        hybridSignature=hybrid_sig,
+        operatorSeals=parsed_seals,
     )
 
 
@@ -602,25 +985,20 @@ def render_artifact_markdown_wire(
     ledger_request_id: str,
     sidecars: EnvelopeSidecars | None = None,
     env_path: Any = None,
-    wire_version: str | None = None,
+    wire_version: str | None = None,  # noqa: ARG001 — retained for API compat
 ) -> str:
-    """Render artifact markdown using configured or explicit wire version."""
+    """Render artifact markdown. v3: always emits the v3 wire format.
 
-    version = resolve_wire_version_for_artifact(
+    The ``wire_version`` argument is accepted but ignored — v1 wire rendering
+    was removed in v3 (pre-release.md §1). Legacy v1/v2 artifacts remain
+    *parseable* (see ``parse_artifact_markdown_text``) but new seals always
+    emit the antiphoria enterprise layout (``eternity.v3`` schema label).
+    """
+
+    return render_artifact_markdown_v2(
         artifact,
+        body,
+        ledger_request_id=ledger_request_id,
+        sidecars=sidecars,
         env_path=env_path,
-        wire_version=wire_version,
     )
-    if version == "v2":
-        return render_artifact_markdown_v2(
-            artifact,
-            body,
-            ledger_request_id=ledger_request_id,
-            sidecars=sidecars,
-            env_path=env_path,
-        )
-    if version == "v1":
-        from src.artifact_serialization import render_artifact_markdown
-
-        return render_artifact_markdown(artifact, body)
-    raise RuntimeError(f"Unsupported wire version '{version}'.")

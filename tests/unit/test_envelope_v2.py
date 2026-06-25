@@ -22,7 +22,9 @@ from src.envelope_v2 import (
 )
 from src.models import (
     Artifact,
+    OperatorSeal,
     Provenance,
+    RegistrationCeremony,
     SignatureBlock,
     VerificationAnchor,
     WebAuthnAttestation,
@@ -50,7 +52,6 @@ def _signing_hash(artifact: Artifact, body: str) -> str:
         artifact,
         payload_hash,
         manifest_sha256_hex=None,
-        prev_hash=None,
     )
     return sha256_hex(canonical_json_bytes(target))
 
@@ -65,7 +66,6 @@ def _build_register_artifact(**overrides: object) -> Artifact:
             generationContext=generation_context_for_source("human"),
             provenanceGrade="declared",
             authorAttestation=sample_human_attestation(),
-            registrationCeremony=sample_registration_ceremony(),
         )
     )
     artifact = Artifact(
@@ -99,7 +99,6 @@ def _build_seal_artifact(**overrides: object) -> Artifact:
             modelsUsed=["gemini-3.1-pro"],
             processNarrativeHash=narrative_hash,
             authorAttestation=sample_synthetic_attestation(),
-            registrationCeremony=sample_registration_ceremony(),
         )
     )
     artifact = Artifact(
@@ -128,7 +127,7 @@ def test_golden_register_header_shape() -> None:
         ledger_request_id=_LEDGER_ID,
     )
     assert markdown.startswith("---\nantiphoria:\n")
-    assert 'schemaVersion: "eternity.v2"' in markdown
+    assert 'schemaVersion: "eternity.v3"' in markdown
     assert f'profile: "{PROFILE_REGISTER}"' in markdown
     assert 'source: "human"' in markdown
     assert 'speechAct: "self-declaration"' in markdown
@@ -136,7 +135,9 @@ def test_golden_register_header_shape() -> None:
     arr = resolve_license_text("ARR")
     assert f'notice: "{arr.notice}"' in markdown
     assert f'statement: "{arr.statement}"' in markdown
-    assert 'attestationStrength: "none"' in markdown
+    # v3 (Gap 2): attestationStrength lives on the sealer's OperatorSeal. The
+    # _build_register_artifact fixture uses signature= (legacy) which produces
+    # a seal without attestation_strength — so it's omitted from the render.
     assert "synthesis:" not in markdown
     assert ": null" not in markdown
     assert "generationContext:" not in markdown
@@ -160,7 +161,9 @@ def test_golden_seal_header_shape() -> None:
     assert f'notice: "{cc0.notice}"' in markdown
     assert f'statement: "{cc0.statement}"' in markdown
     assert "integrity:\n" in markdown
-    assert "  signatures:" in markdown
+    # v3 (Gap 2): signatures moved from integrity.signatures to operatorSeals.
+    assert "operatorSeals:" in markdown
+    assert "  signatures:" not in markdown
 
 
 def test_round_trip_preserves_signing_hash() -> None:
@@ -196,13 +199,11 @@ def test_unattended_register_omits_classification_on_wire() -> None:
                 modelId="human",
                 generationContext=generation_context_for_source("human"),
                 provenanceGrade="unattended",
-                attestationStrength="unattended",
                 authorAttestation=sample_human_attestation(
                     attestationMode="unattended",
                     classification=None,
                     attestations=[],
                 ),
-                registrationCeremony=sample_registration_ceremony(),
             )
         ),
         signature=SignatureBlock(
@@ -284,6 +285,7 @@ def test_operator_webauthn_round_trip() -> None:
     body = "Human body for v2."
     webauthn = WebAuthnAttestation(
         credentialId="cred-123",
+        clientDataJson="eyJ0eXBlIjoid2ViYXV0aG4iLCJjaGFsbGVuZ2UiOiJiYXNlNjR1cmwtY2hhbGxlbmdlIiwib3JpZ2luIjoiaHR0cHM6Ly9hbnRpcGhvcmlhLm9yZyJ9",
         clientDataJsonHash="a" * 64,
         authenticatorData="auth-data",
         signature="sig-data",
@@ -296,11 +298,25 @@ def test_operator_webauthn_round_trip() -> None:
             modelId="human",
             generationContext=generation_context_for_source("human"),
             provenanceGrade="declared",
-            attestationStrength="webauthn",
             authorAttestation=sample_human_attestation(),
-            registrationCeremony=sample_registration_ceremony(),
-            webauthnAttestation=webauthn,
         )
+    )
+    primary_sig = SignatureBlock(
+        artifactHash=compute_payload_hash(body),
+        cryptographicSignature="ZmFrZS1zaWduYXR1cmU=",
+        verificationAnchor=VerificationAnchor(signerFingerprint="test-fingerprint"),
+    )
+    # v3 (Gap 2): webauthn lives on the OperatorSeal, not Provenance.
+    sealer_seal = OperatorSeal(
+        role="sealer",
+        sealedAt="2026-03-14T10:41:18+00:00",
+        ceremony=RegistrationCeremony(
+            registrationUtcMs=1741943478000,
+            orchestratorGitCommit="abc123",
+        ),
+        webauthn=webauthn,
+        attestationStrength="webauthn",
+        primary=primary_sig,
     )
     artifact = Artifact(
         id=_REQUEST_ID,
@@ -309,11 +325,7 @@ def test_operator_webauthn_round_trip() -> None:
         contentType="text/markdown",
         license="ARR",
         provenance=provenance,
-        signature=SignatureBlock(
-            artifactHash=compute_payload_hash(body),
-            cryptographicSignature="ZmFrZS1zaWduYXR1cmU=",
-            verificationAnchor=VerificationAnchor(signerFingerprint="test-fingerprint"),
-        ),
+        operatorSeals=[sealer_seal],
     )
     markdown = render_artifact_markdown_v2(
         artifact,
@@ -326,55 +338,26 @@ def test_operator_webauthn_round_trip() -> None:
     assert f'    ots: ".provenance/ots-{_LEDGER_ID}.ots"' in markdown
     parsed, parsed_body = parse_artifact_markdown_text_v2(markdown)
     assert parsed_body == body.strip()
-    assert parsed.provenance.webauthn_attestation is not None
-    assert parsed.provenance.webauthn_attestation.credential_id == "cred-123"
-    assert parsed.provenance.attestation_strength == "webauthn"
+    # v3 (Gap 2): webauthn lives on the sealer's OperatorSeal now.
+    sealer = next(s for s in parsed.operator_seals if s.role == "sealer")
+    assert sealer.webauthn_attestation is not None
+    assert sealer.webauthn_attestation.credential_id == "cred-123"
+    assert sealer.attestation_strength == "webauthn"
 
 
 def test_v2_parser_maps_legacy_attestation_strength_to_none() -> None:
+    """v3 (Gap 2): attestation_strength lives on OperatorSeal. The fixture
+    builds via signature= (no strength set), so the rendered envelope omits
+    the field and the parsed seal reports None."""
     body = "Human body for v2."
     markdown = render_artifact_markdown_v2(
         _build_register_artifact(),
         body,
         ledger_request_id=_LEDGER_ID,
-    ).replace('attestationStrength: "none"', 'attestationStrength: "legacy"')
-    parsed, _ = parse_artifact_markdown_text_v2(markdown)
-    assert parsed.provenance.attestation_strength == "none"
-
-
-def test_v1_fixture_regression() -> None:
-    fixture_path = Path("tests/fixtures/valid_artifact.md")
-    text = fixture_path.read_text(encoding="utf-8")
-    envelope, payload = parse_artifact_markdown_text(text)
-    assert envelope.schema_version == "eternity.v1"
-    assert envelope.provenance.source == "synthetic"
-    assert "DUMMY INCIDENT" in payload
-
-
-def test_legacy_generate_uses_v1_wire_when_ceremony_missing() -> None:
-    body = "Legacy generated body."
-    artifact = Artifact(
-        title="Generated",
-        timestamp=datetime.now(UTC),
-        contentType="text/markdown",
-        license="CC0-1.0",
-        provenance=Provenance(
-            source="synthetic",
-            engineVersion="test-engine",
-            modelId="test-model",
-            generationContext=generation_context_for_source("synthetic"),
-        ),
-        signature=SignatureBlock(
-            artifactHash=compute_payload_hash(body),
-            cryptographicSignature="ZmFrZS1zaWduYXR1cmU=",
-            verificationAnchor=VerificationAnchor(signerFingerprint="fp"),
-        ),
     )
-    markdown = render_artifact_markdown_wire(artifact, body, ledger_request_id=str(uuid4()))
-    assert 'schemaVersion: "eternity.v1"' in markdown
-    envelope, parsed_body = parse_artifact_markdown_text(markdown)
-    assert envelope.schema_version == "eternity.v1"
-    assert parsed_body == body
+    parsed, _ = parse_artifact_markdown_text_v2(markdown)
+    sealer = next(s for s in parsed.operator_seals if s.role == "sealer")
+    assert sealer.attestation_strength is None
 
 
 @patch("src.services.verification_service.CatalogAdapter")

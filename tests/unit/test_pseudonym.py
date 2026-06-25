@@ -12,7 +12,6 @@ from unittest.mock import patch
 
 from pydantic import ValidationError
 
-from src.artifact_serialization import render_artifact_markdown
 from src.models import (
     Artifact,
     GenerationContext,
@@ -52,7 +51,6 @@ def _sample_artifact(ceremony: RegistrationCeremony | None) -> Artifact:
                     topK=0,
                 ),
             ),
-            registrationCeremony=ceremony,
         ),
         signature=SignatureBlock(
             artifactHash="a" * 64,
@@ -141,32 +139,6 @@ class PseudonymModuleTest(unittest.TestCase):
                 orchestratorGitCommit="abc",
                 operatorPseudonymHash="not-a-valid-hash",
             )
-
-    def test_serialization_renders_hash_and_null(self) -> None:
-        digest = derive_pseudonym_hash(b"m" * 32)
-        with_hash = render_artifact_markdown(
-            _sample_artifact(
-                RegistrationCeremony(
-                    registrationUtcMs=123,
-                    orchestratorGitCommit="deadbeef",
-                    operatorPseudonymHash=digest,
-                )
-            ),
-            "body",
-        )
-        without_hash = render_artifact_markdown(
-            _sample_artifact(
-                RegistrationCeremony(
-                    registrationUtcMs=123,
-                    orchestratorGitCommit="deadbeef",
-                    operatorPseudonymHash=None,
-                )
-            ),
-            "body",
-        )
-
-        self.assertIn(f'operatorPseudonymHash: "{digest}"', with_hash)
-        self.assertIn("operatorPseudonymHash: null", without_hash)
 
     def test_resolve_pseudonym_salt_missing_file_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

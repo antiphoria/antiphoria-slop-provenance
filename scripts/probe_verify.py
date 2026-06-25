@@ -66,7 +66,6 @@ def probe(path: Path) -> None:
         envelope=artifact,
         payload_sha256_hex=payload_hash,
         manifest_sha256_hex=manifest_hash,
-        prev_hash=None,
         canonicalization_version=artifact.signature.payload_canonicalization,
     )
     signing_hash = sha256_hex(canonical_json_bytes(target))

@@ -250,7 +250,6 @@ class ProvenanceService:
             previous_entry_hash=previous_entry_hash,
             request_id=str(request_id),
             metadata={"source": envelope.provenance.source},
-            skip_remote=True,
         )
         next_log_content = f"{existing_log}{json.dumps(serializable, sort_keys=True)}\n"
         self._commit_branch_file(
@@ -260,7 +259,7 @@ class ProvenanceService:
             payload_text=next_log_content,
             commit_message=f"provenance: append transparency anchor ({request_id})",
         )
-        remote_receipt = self._transparency_log_adapter.publish_entry(serializable)
+        # v3: remote publication removed; remote_receipt is always None.
         self._transparency_store.create_transparency_log_record(
             entry_id=entry.entry_id,
             artifact_hash=entry.artifact_hash,
@@ -271,7 +270,7 @@ class ProvenanceService:
             previous_entry_hash=entry.previous_entry_hash,
             entry_hash=entry.entry_hash,
             published_at=entry.anchored_at,
-            remote_receipt=remote_receipt,
+            remote_receipt=None,
         )
         return AnchorOutcome(
             entry_id=entry.entry_id,
@@ -350,7 +349,6 @@ class ProvenanceService:
             previous_entry_hash=previous_entry_hash,
             request_id=str(request_id),
             metadata={"source": envelope.provenance.source},
-            skip_remote=True,
         )
         next_log_content = f"{existing_log}{json.dumps(serializable, sort_keys=True)}\n"
         self._commit_branch_file(
@@ -360,7 +358,7 @@ class ProvenanceService:
             payload_text=next_log_content,
             commit_message=f"provenance: append transparency anchor ({request_id})",
         )
-        remote_receipt = self._transparency_log_adapter.publish_entry(serializable)
+        # v3: remote publication removed; remote_receipt is always None.
         self._transparency_store.create_transparency_log_record(
             entry_id=entry.entry_id,
             artifact_hash=entry.artifact_hash,
@@ -371,7 +369,7 @@ class ProvenanceService:
             previous_entry_hash=entry.previous_entry_hash,
             entry_hash=entry.entry_hash,
             published_at=entry.anchored_at,
-            remote_receipt=remote_receipt,
+            remote_receipt=None,
         )
         return AnchorOutcome(
             entry_id=entry.entry_id,
@@ -810,60 +808,16 @@ class ProvenanceService:
             return str(entry_hash)
         return None
 
-    def sync_transparency_log_to_remote(self, repository_path: Path) -> tuple[int, int]:
-        """Republish local transparency log entries to remote if missing. Idempotent.
+    def sync_transparency_log_to_remote(self, repository_path: Path) -> tuple[int, int]:  # noqa: ARG002
+        """v3 stub. Remote Supabase publication was removed (pre-release.md §1).
 
-        Iterates all artifact branches, reads .provenance/transparency-log.jsonl,
-        and publishes each entry to Supabase only when not already present.
-
-        Returns:
-            (published_count, skipped_count)
+        Always returns (0, 0). Kept so the `sync-transparency-log` CLI command
+        still works (it's a no-op now; the local log is canonical, Bitcoin via
+        OTS is the only remote anchor). The command itself is preserved for
+        operational habit — operators who run it as part of a workflow see no
+        error, just no remote action.
         """
-        published = 0
-        skipped = 0
-        try:
-            repo = pygit2.Repository(str(repository_path))
-        except (KeyError, pygit2.GitError):
-            return 0, 0
-        for ref in repo.references:
-            name = getattr(ref, "name", str(ref))
-            if not name.startswith("refs/heads/artifact/"):
-                continue
-            try:
-                log_content = self._read_branch_file(
-                    repository_path=repository_path,
-                    ref_name=name,
-                    relative_path=_BRANCH_LOG_PATH,
-                )
-            except RuntimeError:
-                continue
-            entries = self._transparency_log_adapter.parse_entries_from_jsonl(log_content)
-            for entry in entries:
-                serializable = {
-                    "entryId": entry.entry_id,
-                    "artifactHash": entry.artifact_hash,
-                    "artifactId": entry.artifact_id,
-                    "requestId": entry.request_id,
-                    "sourceFile": entry.source_file,
-                    "previousEntryHash": entry.previous_entry_hash,
-                    "anchoredAt": entry.anchored_at,
-                    "metadata": entry.metadata,
-                    "entryHash": entry.entry_hash,
-                    "remoteReceipt": entry.remote_receipt,
-                }
-                if entry.bitcoin_block_height is not None:
-                    serializable["bitcoinBlockHeight"] = entry.bitcoin_block_height
-                ok, msg = self._transparency_log_adapter.republish_entry_if_missing(serializable)
-                if ok:
-                    published += 1
-                    _logger.info(
-                        "Republished transparency entry entry_hash=%s source=%s",
-                        entry.entry_hash[:16] + "...",
-                        entry.source_file,
-                    )
-                else:
-                    skipped += 1
-        return published, skipped
+        return 0, 0
 
     def _resolve_previous_entry_hash(
         self,

@@ -15,10 +15,12 @@ This document complements the overview in the root [README.md](../README.md). It
 - **Hybrid signing** includes Ed25519 alongside ML-DSA; both key materials must be configured for generation/signing paths. See [QUICKSTART.md](QUICKSTART.md) Track A.
 - **Canonical JSON** for signing uses JCS (RFC 8785). Older artifacts may not verify if they were produced under different canonicalization rules (see [SECURITY.md](../SECURITY.md) remediation notes).
 
-## C2PA modes
+## C2PA mode (v3)
 
-- **`C2PA_MODE=mvp`:** emits deterministic JSON sidecars intended for development and pipeline hooks. This is **not** the same as a full C2PA validator-grade signed manifest in the binary `c2pa` sense.
-- **`C2PA_MODE=sdk`:** uses `c2pa-python` for signed binary sidecars; requires appropriate X.509 material and stricter configuration. Fail-closed behavior applies when sidecar generation fails.
+- **SDK only.** MVP (unsigned JSON) mode was removed in v3 — it produced a sidecar
+  that looked like C2PA but was signed by nobody, which is metadata theater. The
+  `c2pa-python` SDK path is now the only mode. It requires X.509 material and
+  uses fail-closed behavior when sidecar generation fails. See `pre-release.md §1`.
 
 ## C2PA and markdown
 
@@ -35,7 +37,7 @@ Git ledger commits use **process-local** file locks. Multiple processes or hosts
 - **`operator.webauthn`** (v2 wire) carries the FIDO assertion metadata separately from the public declaration in `claim`.
 - **`--non-interactive`:** skips the wizard and records `attestationMode: unattended` with no Q&A pairs and `classification: null`. Suitable for CI, not operator self-declaration.
 - **WebAuthn** binds a platform or roaming authenticator assertion to the artifact body hash. The engine **embeds** assertion metadata in `operator.webauthn`; it does not currently **verify** WebAuthn assertions in `verify` / `attest` (treat as experimental provenance, not a legal identity guarantee). `--strict` attest requires the block to be **present** on interactive artifacts.
-- **Platform provider (macOS Touch ID):** uses a short-lived `127.0.0.1` browser bridge with per-ceremony token auth. Credentials are bound to `localhost` RP ID—not a production web domain.
+- **Platform provider (macOS Touch ID):** runs the ceremony on the hosted page `https://antiphoria.org/bridge.html` (so the page origin matches the RP ID) and posts the result back to a short-lived, loopback-only `127.0.0.1` bridge with per-ceremony token auth. Credentials bind to the production RP ID (`WEBAUTHN_RP_ID=antiphoria.org`). Credentials minted against `localhost` by older builds are permanently un-verifiable and must be re-enrolled.
 - **HID provider (USB FIDO2):** requires `pip install -e ".[webauthn]"` and a connected security key.
 - **Operator pseudonym** (`operatorPseudonymHash`): HMAC-derived from a secret salt you control. Proves continuity across artifacts registered with the same salt; reveals no device data. Losing the salt breaks continuity; leaking it lets others impersonate that pseudonym. Prefer this over `CAPTURE_MACHINE_ID` (MAC hash), which remains opt-in and off by default.
 - **`--non-interactive` / `--no-webauthn`:** explicit CI escape hatches only; default interactive register/seal requires the full stack and aborts on missing layers.

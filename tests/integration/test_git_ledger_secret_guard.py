@@ -14,12 +14,15 @@ import pygit2
 
 from src.adapters.git_ledger import GitLedgerAdapter
 from src.domain.events import StorySigned
+from src.envelope_v2 import generation_context_for_source
 from src.infrastructure.event_bus import InMemoryEventBus
 from src.models import (
     Artifact,
+    AuthorAttestation,
     GenerationContext,
     Hyperparameters,
     Provenance,
+    RegistrationCeremony,
     SignatureBlock,
     VerificationAnchor,
 )
@@ -32,6 +35,13 @@ def _build_story_signed_event(
     c2pa_manifest_hash: str | None = None,
     request_id: UUID | None = None,
 ) -> StorySigned:
+    """Build a v3-shaped StorySigned event for ledger tests.
+
+    v3: the renderer requires ``author_attestation`` and ``registration_ceremony``
+    on every artifact (no more v1 fallback). The ``prompt`` is preserved as a
+    custom GenerationContext so the secrets-guard path (which inspects
+    ``generation_context.prompt``) still has something to check.
+    """
     artifact = Artifact(
         title="Safe Artifact",
         timestamp=datetime.now(UTC),
@@ -42,14 +52,15 @@ def _build_story_signed_event(
             engineVersion="test-engine",
             modelId="test-model",
             generationContext=GenerationContext(
-                systemInstruction="Write a concise test story.",
+                systemInstruction="Orchestrator declaration only.",
                 prompt=prompt,
-                hyperparameters=Hyperparameters(
-                    temperature=0.5,
-                    topP=0.9,
-                    topK=40,
-                ),
+                hyperparameters=Hyperparameters(temperature=0.0, topP=1.0, topK=0),
             ),
+            authorAttestation=AuthorAttestation(
+                attestationNature="orchestration-declaration",
+                attestationMode="unattended",
+            ),
+            provenanceGrade="unattended",
         ),
         signature=SignatureBlock(
             artifactHash="a" * 64,

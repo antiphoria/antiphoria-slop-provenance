@@ -16,10 +16,7 @@ import pygit2
 
 from src.adapters.ots_adapter import build_ots_adapter
 from src.adapters.ots_queue import OtsQueueAdapter
-from src.adapters.transparency_log import (
-    TransparencyLogAdapter,
-    build_supabase_publish_config,
-)
+from src.adapters.transparency_log import TransparencyLogAdapter
 from src.env_config import get_project_env_path
 from src.merkle import build_merkle_root
 from src.parsing import parse_artifact_markdown
@@ -331,44 +328,12 @@ def _run_anchor_merkle_root_command(args: argparse.Namespace) -> int:
         file_handle.write(line)
 
     try:
-        publish_url = _read_env_optional(
-            "MERKLE_ANCHORS_PUBLISH_URL",
-            env_path=env_path,
-        )
-        if not publish_url:
-            base_url = _read_env_optional(
-                "TRANSPARENCY_LOG_PUBLISH_URL",
-                env_path=env_path,
-            )
-            if base_url and "transparency_log" in base_url:
-                publish_url = base_url.replace(
-                    "transparency_log",
-                    "merkle_anchors",
-                )
-        if publish_url:
-            publish_headers, _ = build_supabase_publish_config(
-                publish_url,
-                env_path=env_path,
-            )
-            if publish_headers:
-                from src.adapters.transparency_log import publish_merkle_anchor
-
-                published = publish_merkle_anchor(
-                    root_hash=merkle_root,
-                    entry_count=len(entries),
-                    anchored_at=snapshot["anchored_at"],
-                    ots_path=ots_rel,
-                    bitcoin_block_height=None,
-                    publish_url=publish_url,
-                    publish_headers=publish_headers,
-                )
-                if published:
-                    print("Merkle anchor published to remote.")
-                else:
-                    _warn_merkle_remote_publish_failed(
-                        "Merkle anchor was not published to the remote",
-                    )
-    except RuntimeError as exc:
+        # v3: remote Merkle anchor publication (Supabase) was removed
+        # (pre-release.md §1). The snapshot is local-only; Bitcoin (OTS) is the
+        # only remote anchor. Block kept as a no-op tombstone so the surrounding
+        # logic that writes the local snapshot stays intact.
+        pass
+    except RuntimeError as exc:  # noqa: BLE001  -- defensive; unreachable in v3
         _warn_merkle_remote_config(exc)
 
     repo = pygit2.Repository(str(repository_path))
@@ -488,45 +453,9 @@ def _run_upgrade_merkle_ots_command(args: argparse.Namespace) -> int:
         return 0
     print(f"Upgraded: bitcoin_block_height={block_height}")
 
-    try:
-        publish_url = _read_env_optional(
-            "MERKLE_ANCHORS_PUBLISH_URL",
-            env_path=env_path,
-        )
-        if not publish_url:
-            base_url = _read_env_optional(
-                "TRANSPARENCY_LOG_PUBLISH_URL",
-                env_path=env_path,
-            )
-            if base_url and "transparency_log" in base_url:
-                publish_url = base_url.replace(
-                    "transparency_log",
-                    "merkle_anchors",
-                )
-        if publish_url:
-            publish_headers, _ = build_supabase_publish_config(
-                publish_url,
-                env_path=env_path,
-            )
-            if publish_headers:
-                from src.adapters.transparency_log import (
-                    update_merkle_anchor_block_height,
-                )
-
-                updated = update_merkle_anchor_block_height(
-                    root_hash=merkle_root,
-                    bitcoin_block_height=block_height,
-                    publish_url=publish_url,
-                    publish_headers=publish_headers,
-                )
-                if updated:
-                    print("Supabase merkle_anchors updated.")
-                else:
-                    _warn_merkle_remote_publish_failed(
-                        "Merkle anchor block height was not updated on the remote",
-                    )
-    except RuntimeError as exc:
-        _warn_merkle_remote_config(exc)
+    # v3: remote Merkle anchor block-height update (Supabase) was removed
+    # (pre-release.md §1). Block height is recorded in the local merkle-snapshots
+    # file only; Bitcoin (OTS) is the only remote anchor.
     return 0
 
 
@@ -674,7 +603,6 @@ def _run_export_vector_command(args: argparse.Namespace) -> int:
         envelope=artifact,
         payload_sha256_hex=payload_hash,
         manifest_sha256_hex=manifest_hash,
-        prev_hash=None,
         canonicalization_version=artifact.signature.payload_canonicalization,
     )
     jcs_bytes = canonical_json_bytes(target)
@@ -901,11 +829,20 @@ def _run_build_inclusion_proof_command(args: argparse.Namespace) -> int:
 
 def _run_webauthn_register_command(args: argparse.Namespace) -> int:
     """Register a WebAuthn credential for author attestation."""
+    from src.commands.pipeline import _enforce_webauthn_rp_id_or_dev_run
     from src.webauthn_attestation import get_webauthn_provider, register_webauthn_credential
     from src.webauthn_bridge import WebAuthnAlreadyRegisteredError
 
     repository_path = _require_repo_path(args)
     env_path = get_project_env_path()
+    # Flaw B: refuse to enrol against a non-production RP ID. Credentials bind to
+    # the RP ID forever, so enrolling against localhost/typo mints un-verifiable
+    # credentials just like sealing does.
+    try:
+        _enforce_webauthn_rp_id_or_dev_run(env_path)
+    except RuntimeError as exc:
+        print(str(exc))
+        return 1
     if get_webauthn_provider(env_path=env_path) == "platform":
         print("Opening browser for Touch ID registration...")
     else:
@@ -923,14 +860,14 @@ def _run_webauthn_register_command(args: argparse.Namespace) -> int:
         return 0
     if get_webauthn_provider(env_path=env_path) == "platform":
         print(
-            "WebAuthn registration failed. Set WEBAUTHN_RP_ID (any non-empty value), "
-            "WEBAUTHN_PROVIDER=platform, approve Touch ID in the browser, and serve "
-            "over http://localhost (not file://)."
+            "WebAuthn registration failed. Set WEBAUTHN_RP_ID=antiphoria.org, "
+            "WEBAUTHN_PROVIDER=platform, ensure the bridge page is deployed at "
+            "https://antiphoria.org/bridge.html, and approve Touch ID in the browser."
         )
     else:
         print(
             "WebAuthn registration failed. Set WEBAUTHN_RP_ID to your production domain "
-            "(e.g. antiphoria-archive.com), ensure fido2 is installed (pip install fido2), "
+            "(e.g. antiphoria.org), ensure fido2 is installed (pip install fido2), "
             "and a FIDO2 device is connected."
         )
     return 1

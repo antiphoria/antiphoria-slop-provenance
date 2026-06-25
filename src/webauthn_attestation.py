@@ -48,6 +48,24 @@ def _resolve_rp_id(env_path: Path | None = None) -> str | None:
     return rp_id.strip().lower()
 
 
+def _origin_matches_rp_id(origin: str, rp_id: str) -> bool:
+    """True iff ``origin``'s host equals the RP ID or is a subdomain of it.
+
+    WebAuthn requires the RP ID to be a registrable-domain suffix of the origin's
+    effective domain. A naive ``origin.endswith(rp_id)`` is exploitable — e.g.
+    ``https://evil-antiphoria.org`` ends with ``antiphoria.org`` but is a wholly
+    different registrable domain. Parse the host and require an exact match or a
+    dot-delimited subdomain match.
+    """
+    from urllib.parse import urlparse
+
+    if not origin or not rp_id:
+        return False
+    host = (urlparse(origin).hostname or "").lower()
+    rp = rp_id.lower()
+    return host == rp or host.endswith("." + rp)
+
+
 def _get_credentials_path(
     *,
     env_path: Path | None = None,
@@ -141,18 +159,168 @@ def get_webauthn_assertion(
 
     auth_data = assertion.auth_data
     client_data = assertion.client_data
+    client_data_bytes = bytes(client_data)
     cred_id = base64.urlsafe_b64encode(assertion.credential_id).decode("ascii").rstrip("=")
-    client_data_hash = hashlib.sha256(bytes(client_data)).hexdigest()
+    client_data_b64 = base64.urlsafe_b64encode(client_data_bytes).decode("ascii").rstrip("=")
+    client_data_hash = hashlib.sha256(client_data_bytes).hexdigest()
     auth_data_b64 = base64.urlsafe_b64encode(auth_data).decode("ascii").rstrip("=")
     sig_b64 = base64.urlsafe_b64encode(assertion.signature).decode("ascii").rstrip("=")
 
     return WebAuthnAttestation(
         credentialId=cred_id,
+        clientDataJson=client_data_b64,
         clientDataJsonHash=client_data_hash,
         authenticatorData=auth_data_b64,
         signature=sig_b64,
         fmt="none",
     )
+
+
+def verify_webauthn_assertion(
+    attestation: WebAuthnAttestation,
+    *,
+    expected_rp_id: str,
+    expected_challenge_hash: bytes,
+    credential_public_key_cose: bytes,
+) -> bool:
+    """Cryptographically verify a captured WebAuthn assertion. v3 (Flaw A).
+
+    Replaces the previous "field-present" check with real verification:
+
+    1. Decode ``authenticatorData`` → check ``rpIdHash == SHA-256(expected_rp_id)``,
+       ``userPresent`` (UP) flag set, ``userVerified`` (UV) flag set.
+    2. Decode ``clientDataJSON`` → check ``type == "webauthn"``, ``origin`` ends
+       with the RP ID, and ``challenge == base64url(expected_challenge_hash)``.
+    3. Verify the ES256 signature over ``authenticatorData || SHA-256(clientDataJSON)``
+       using the COSE public key.
+
+    Args:
+        attestation: The captured assertion (from the envelope).
+        expected_rp_id: The production RP ID (e.g. ``antiphoria.org``).
+        expected_challenge_hash: The SHA-256 of the canonical body — what the
+            challenge field in clientDataJSON must equal.
+        credential_public_key_cose: The COSE-encoded public key for this
+            credential (from the published registry / enrollment store).
+
+    Returns:
+        True only if every check passes. Any decode/verify failure returns False
+        (never raises — callers treat this as a verdict, not an exception).
+    """
+
+    try:
+        return _verify_webauthn_assertion_inner(
+            attestation=attestation,
+            expected_rp_id=expected_rp_id,
+            expected_challenge_hash=expected_challenge_hash,
+            credential_public_key_cose=credential_public_key_cose,
+        )
+    except Exception:  # noqa: BLE001 — verdict path; never raise
+        return False
+
+
+def _verify_webauthn_assertion_inner(
+    attestation: WebAuthnAttestation,
+    *,
+    expected_rp_id: str,
+    expected_challenge_hash: bytes,
+    credential_public_key_cose: bytes,
+) -> bool:
+    """Inner verifier. Raises on decode/verify failure; outer wraps to False."""
+
+    import json
+
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+    # --- 1. authenticatorData checks ---
+    auth_data = base64.urlsafe_b64decode(attestation.authenticator_data + "=" * (-len(attestation.authenticator_data) % 4))
+    if len(auth_data) < 37:
+        return False
+    rp_id_hash = auth_data[:32]
+    if rp_id_hash != hashlib.sha256(expected_rp_id.encode("ascii")).digest():
+        return False
+    flags = auth_data[32]
+    user_present = bool(flags & 0x01)
+    user_verified = bool(flags & 0x04)
+    if not user_present or not user_verified:
+        return False
+
+    # --- 2. clientDataJSON checks ---
+    client_data_bytes = base64.urlsafe_b64decode(
+        attestation.client_data_json + "=" * (-len(attestation.client_data_json) % 4)
+    )
+    # Confirm the stored hash matches (defence against the two fields disagreeing).
+    if hashlib.sha256(client_data_bytes).digest().hex() != attestation.client_data_json_hash:
+        return False
+    client_data = json.loads(client_data_bytes.decode("utf-8"))
+    if client_data.get("type") != "webauthn":
+        return False
+    origin = client_data.get("origin", "")
+    if not _origin_matches_rp_id(origin, expected_rp_id):
+        return False
+    # The challenge in clientDataJSON is base64url-encoded bytes; the authenticator
+    # receives exactly what the engine passed as the challenge — which is the
+    # SHA-256 of the canonical body.
+    challenge_b64url = client_data.get("challenge", "")
+    challenge_padding = "=" * (-len(challenge_b64url) % 4)
+    challenge_bytes = base64.urlsafe_b64decode(challenge_b64url + challenge_padding)
+    if challenge_bytes != expected_challenge_hash:
+        return False
+
+    # --- 3. ES256 signature verification ---
+    # The signed message is authenticatorData || SHA-256(clientDataJSON).
+    signed_message = auth_data + hashlib.sha256(client_data_bytes).digest()
+    signature_bytes = base64.urlsafe_b64decode(
+        attestation.signature + "=" * (-len(attestation.signature) % 4)
+    )
+
+    # Decode the COSE key to an EC public key (P-256 / secp256r1 for alg -7 / ES256).
+    # COSE_Key for EC2: {1: kty=2, 3: alg=-7, -1: crv=1 (P-256), -2: x, -3: y}.
+    cose_key = json.loads(credential_public_key_cose.decode("utf-8")) if isinstance(
+        credential_public_key_cose, (bytes, bytearray)
+    ) and credential_public_key_cose[:1] in (b"{", b"[") else None
+    if isinstance(credential_public_key_cose, (bytes, bytearray)):
+        # Try CBOR first; fall back to JSON dict.
+        try:
+            import cbor2  # type: ignore
+
+            cose_key = cbor2.loads(credential_public_key_cose)
+        except ImportError:
+            pass
+    if cose_key is None and isinstance(credential_public_key_cose, (bytes, bytearray)):
+        try:
+            cose_key = json.loads(credential_public_key_cose.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return False
+    if not isinstance(cose_key, dict):
+        return False
+    # COSE EC2 key — keys are integers in CBOR, possibly strings in JSON form.
+    x_raw = cose_key.get(-2) or cose_key.get("-2")
+    y_raw = cose_key.get(-3) or cose_key.get("-3")
+    if x_raw is None or y_raw is None:
+        return False
+    x_bytes = x_raw if isinstance(x_raw, (bytes, bytearray)) else bytes(x_raw)
+    y_bytes = y_raw if isinstance(y_raw, (bytes, bytearray)) else bytes(y_raw)
+    pub_numbers = ec.EllipticCurvePublicNumbers(
+        x=int.from_bytes(x_bytes, "big"),
+        y=int.from_bytes(y_bytes, "big"),
+        curve=ec.SECP256R1(),
+    )
+    public_key = pub_numbers.public_key()
+
+    # ES256 signature is a raw R||S pair (64 bytes for P-256); convert to DER.
+    if len(signature_bytes) == 64:
+        r = int.from_bytes(signature_bytes[:32], "big")
+        s = int.from_bytes(signature_bytes[32:], "big")
+        from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+
+        signature_bytes = encode_dss_signature(r, s)
+    # decode_dss_signature import kept for callers that pass DER; unused if raw.
+    _ = decode_dss_signature  # noqa: F841
+
+    public_key.verify(signature_bytes, signed_message, ec.ECDSA(hashes.SHA256()))
+    return True
 
 
 def register_webauthn_credential(

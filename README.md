@@ -60,9 +60,9 @@ Copy [`.env.example`](.env.example) to `.env` and edit. **Never commit `.env`.**
 
 **Summary:**
 
-- **Dummy / local testing:** set `GENERATOR_DUMMY_MODE=true` — no `GOOGLE_API_KEY` required.
-- **Live generation:** set `GOOGLE_API_KEY` and `GENERATOR_DUMMY_MODE=false`.
-- **Transparency log:** if `TRANSPARENCY_LOG_PUBLISH_URL` is set, you must set `SUPABASE_SERVICE_KEY` or `SUPABASE_ANON_KEY`.
+- **Track A (synthetic sealing):** `slop-cli seal --file <body.md> --models <m1>,<m2>` — no API key required (the engine seals operator-supplied LLM output, it does not call a generator).
+- **Track B (human registration):** `slop-cli register --file <body.md>` — operator self-declares human authorship.
+- **Transparency log:** local-only in v3 (Supabase remote publication removed); Bitcoin via OTS is the only remote anchor.
 
 **Production keys:** use BYOV and the secure launchers — [SECURITY.md](SECURITY.md).
 

@@ -12,7 +12,6 @@ dependencies = [
     "cryptography>=46.0.7",
     "rfc8785>=0.1.4",
     "filelock>=3.20.3",
-    "google-genai",
     "pydantic>=2.5.0,<3.0.0",
     "liboqs-python>=0.14.0",
     "c2pa-python>=0.30.0",
@@ -37,7 +36,7 @@ slop-cli = "src.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*", "antiphoria_sdk*"]
+include = ["src*"]
 namespaces = true
 
 [tool.black]

@@ -54,18 +54,19 @@ def sample_synthetic_attestation(**overrides: object) -> AuthorAttestation:
 
 
 def enrich_provenance_for_v2_wire(provenance: Provenance) -> Provenance:
-    """Ensure register/seal artifacts include v2-required metadata."""
+    """Ensure register/seal artifacts include required metadata.
+
+    v3 (Gap 2): registration_ceremony / webauthn_attestation / attestation_strength
+    moved from Provenance to OperatorSeal. This helper now only ensures
+    author_attestation is present (the one piece that still lives on Provenance).
+    """
 
     updates: dict[str, object] = {}
-    if provenance.registration_ceremony is None:
-        updates["registration_ceremony"] = sample_registration_ceremony()
     if provenance.author_attestation is None:
         if provenance.source == "human":
             updates["author_attestation"] = sample_human_attestation()
         elif provenance.source == "synthetic":
             updates["author_attestation"] = sample_synthetic_attestation()
-    if provenance.author_attestation is not None and provenance.attestation_strength is None:
-        updates["attestation_strength"] = "none"
     if not updates:
         return provenance
     return provenance.model_copy(update=updates)

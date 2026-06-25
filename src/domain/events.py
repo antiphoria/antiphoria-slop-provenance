@@ -12,9 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.models import (
     Artifact,
     AuthorAttestation,
-    Curation,
-    EmbeddedWatermark,
     RegistrationCeremony,
+    Revision,
     UsageMetrics,
     WebAuthnAttestation,
 )
@@ -31,7 +30,10 @@ def _utc_now() -> datetime:
 
 
 class StoryRequested(BaseModel):
-    """Event emitted when a new generation request is created."""
+    """DEPRECATED in v3. The `generate` command (Gemini adapter) was removed
+    (pre-release.md §1). Retained as a tombstone so the deletion is auditable;
+    no adapter subscribes. Use StorySyntheticSealed for LLM-sourced work.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -42,7 +44,10 @@ class StoryRequested(BaseModel):
 
 
 class StoryGenerated(BaseModel):
-    """Event emitted when the generation adapter returns text."""
+    """DEPRECATED in v3. The `generate` command (Gemini adapter) was removed
+    (pre-release.md §1). Retained as a tombstone; no adapter subscribes. Use
+    StorySyntheticSealed for LLM-sourced work.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -59,7 +64,7 @@ class StoryGenerated(BaseModel):
     content_type: str = Field(min_length=1)
     license: str = Field(min_length=1)
     usage_metrics: UsageMetrics | None = None
-    embedded_watermark: EmbeddedWatermark | None = None
+    embedded_watermark: object | None = None
     generated_at: datetime = Field(default_factory=_utc_now)
 
 
@@ -137,7 +142,12 @@ class StoryAudited(BaseModel):
 
 
 class StoryCurated(BaseModel):
-    """Event emitted when a human-curated artifact is submitted."""
+    """DEPRECATED in v3. The `curate` command was removed (pre-release.md §1).
+
+    Retained as a tombstone so the deletion is auditable; the type is still
+    importable but emitting it does nothing (no adapter subscribes). Use
+    StoryHumanRegistered / StorySyntheticSealed with a `revision` block (Gap 1).
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -145,7 +155,7 @@ class StoryCurated(BaseModel):
     event_version: str = Field(default="v1")
     curated_body: str = Field(min_length=1)
     prompt: str = Field(min_length=1)
-    curation_metadata: Curation
+    curation_metadata: object
     model_id: str = Field(min_length=1)
     title: str | None = None
 
@@ -160,6 +170,14 @@ class StoryHumanRegistered(BaseModel):
     body: str = Field(min_length=1)
     title: str = Field(min_length=1)
     license: str = Field(min_length=1, default="ARR")
+    rights_holder: str | None = Field(
+        default=None,
+        description="Author pen name or legal name (Flaw F). Required for v3 seals.",
+    )
+    revision: Revision | None = Field(
+        default=None,
+        description="Work-version link (Gap 1). None on first version.",
+    )
     attestation: AuthorAttestation
     webauthn_attestation: WebAuthnAttestation | None = None
     registration_ceremony: RegistrationCeremony | None = None
@@ -175,6 +193,14 @@ class StorySyntheticSealed(BaseModel):
     body: str = Field(min_length=1)
     title: str = Field(min_length=1)
     license: str = Field(min_length=1, default="CC0-1.0")
+    rights_holder: str | None = Field(
+        default=None,
+        description="Author/orchestrator pen name or legal name (Flaw F). Optional for CC0.",
+    )
+    revision: Revision | None = Field(
+        default=None,
+        description="Work-version link (Gap 1). None on first version.",
+    )
     models_used: list[str] = Field(default_factory=list, max_length=64)
     attestation: AuthorAttestation
     webauthn_attestation: WebAuthnAttestation | None = None
